@@ -395,8 +395,25 @@ function AuthScreen() {
 function VerifyEmailScreen({ user, onLogout }) {
   const [sent, setSent] = useState(false);
   const [busy, setBusy] = useState(false);
-  const [checking, setChecking] = useState(false);
   const [error, setError] = useState('');
+  const [dots, setDots] = useState('');
+
+  // Auto-check every 4 seconds — page reloads automatically once verified
+  useEffect(() => {
+    const interval = setInterval(async () => {
+      try {
+        await refreshUser(user);
+        if (user.emailVerified) window.location.reload();
+      } catch (_) {}
+    }, 4000);
+    return () => clearInterval(interval);
+  }, [user]);
+
+  // Animated dots to show it's checking
+  useEffect(() => {
+    const t = setInterval(() => setDots(d => d.length >= 3 ? '' : d + '.'), 600);
+    return () => clearInterval(t);
+  }, []);
 
   async function handleResend() {
     setBusy(true);
@@ -408,23 +425,6 @@ function VerifyEmailScreen({ user, onLogout }) {
       setError('Could not send email. Please wait a minute and try again.');
     } finally {
       setBusy(false);
-    }
-  }
-
-  async function handleCheck() {
-    setChecking(true);
-    setError('');
-    try {
-      await refreshUser(user);
-      if (!user.emailVerified) {
-        setError('Still not verified. Please click the link in the email first.');
-      } else {
-        window.location.reload();
-      }
-    } catch (e) {
-      setError('Could not check status. Try again.');
-    } finally {
-      setChecking(false);
     }
   }
 
@@ -440,14 +440,14 @@ function VerifyEmailScreen({ user, onLogout }) {
         <div style={styles.brandMark}>O</div>
         <div className="serif" style={styles.loginTitle}>Verify your email</div>
         <div style={styles.muted}>
-          We've sent a verification link to <strong>{user.email}</strong>. Click the link, then come back here.
+          We've sent a verification link to <strong>{user.email}</strong>. Open your inbox, click the link — this page will open automatically.
         </div>
-        {sent && <div style={{ ...styles.muted, fontSize: 12.5, marginTop: 10, color: '#3D7A5C' }}>Verification email sent! Check your inbox (and spam folder).</div>}
+        <div style={{ marginTop: 20, fontSize: 13, color: '#888780', textAlign: 'center' }}>
+          Waiting for verification{dots}
+        </div>
+        {sent && <div style={{ ...styles.muted, fontSize: 12.5, marginTop: 10, color: '#3D7A5C' }}>Email sent! Check your inbox and spam folder.</div>}
         {error && <div style={{ ...styles.authError, marginTop: 10 }}>{error}</div>}
-        <button onClick={handleCheck} disabled={checking} style={{ ...styles.primaryBtn, width: '100%', justifyContent: 'center', marginTop: 20, opacity: checking ? 0.6 : 1 }}>
-          {checking ? 'Checking…' : "I've verified, continue"}
-        </button>
-        <button onClick={handleResend} disabled={busy} style={{ ...styles.ghostBtn, width: '100%', justifyContent: 'center', marginTop: 10, opacity: busy ? 0.6 : 1 }}>
+        <button onClick={handleResend} disabled={busy} style={{ ...styles.ghostBtn, width: '100%', justifyContent: 'center', marginTop: 20, opacity: busy ? 0.6 : 1 }}>
           {busy ? 'Sending…' : 'Resend verification email'}
         </button>
         <button onClick={onLogout} style={{ ...styles.ghostBtn, width: '100%', justifyContent: 'center', marginTop: 10 }}>
@@ -1356,11 +1356,34 @@ function Sidebar({ view, setView, setActiveDoc, startNewDoc, syncStatus, user, o
   }
 
   const Brand = () => (
-    <div style={styles.brand}>
-      <div style={styles.brandMark}>O</div>
-      <div>
-        <div className="serif" style={styles.brandName}>Operix</div>
-        <div style={styles.brandSub}>Business Suite</div>
+    <div style={{ borderBottom: '1px solid rgba(255,255,255,0.08)', paddingBottom: 10, marginBottom: 6 }}>
+      {/* Top row: logo + settings + logout */}
+      <div style={{ display: 'flex', alignItems: 'center', padding: '14px 12px 8px 14px' }}>
+        <div style={styles.brandMark}>O</div>
+        <div style={{ flex: 1 }}>
+          <div className="serif" style={styles.brandName}>Operix</div>
+          <div style={styles.brandSub}>Business Suite</div>
+        </div>
+        {/* Settings icon — admin only */}
+        {userRole === 'admin' && (
+          <button
+            title="Business Settings"
+            onClick={() => setView('settings')}
+            style={{ background: view === 'settings' ? 'rgba(201,162,75,0.18)' : 'none', border: 'none', cursor: 'pointer', borderRadius: 6, padding: '5px 6px', color: view === 'settings' ? '#C9A24B' : '#6B7494', display: 'flex', alignItems: 'center' }}>
+            <Settings size={16} strokeWidth={1.8} />
+          </button>
+        )}
+        {/* Logout icon */}
+        <button
+          title="Log out"
+          onClick={onLogout}
+          style={{ background: 'none', border: 'none', cursor: 'pointer', borderRadius: 6, padding: '5px 6px', color: '#6B7494', display: 'flex', alignItems: 'center', marginLeft: 2 }}>
+          <LogOut size={16} strokeWidth={1.8} />
+        </button>
+      </div>
+      {/* Signed in as */}
+      <div style={{ padding: '0 14px', fontSize: 11, color: '#6B7494', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+        {user?.email}
       </div>
     </div>
   );
@@ -1561,7 +1584,7 @@ function Sidebar({ view, setView, setActiveDoc, startNewDoc, syncStatus, user, o
   );
 }
 
-function SidebarFooter({ syncStatus, user, userRole, onLogout, view, setView }) {
+function SidebarFooter({ syncStatus }) {
   return (
     <>
       <div style={{ flex: 1 }} />
@@ -6283,33 +6306,26 @@ export default function InvoiceApp() {
       if (data.enquiries)        setEnquiries(data.enquiries);
     }
 
-    (async () => {
-      try {
-        const data = await loadCompanyData(ownerUid);
-        applyData(data);
-        setSyncStatus('synced');
-        setLoadFailed(false);
-        setLoaded(true);
-      } catch (e) {
-        console.error('Firestore load failed:', e);
-        const isOffline = e?.code === 'unavailable' || (e?.message || '').toLowerCase().includes('offline');
-        if (isOffline) {
-          // Network issue — auto-retry every 4 seconds
-          setTimeout(() => setRetryCount(c => c + 1), 4000);
-        } else {
-          setSyncStatus('error');
-          setLoadFailed(true);
-        }
-      }
-    })();
-
+    // Subscription fires immediately from local cache (persistentLocalCache),
+    // then updates from network. No separate loadCompanyData call needed.
+    let didLoad = false;
     const unsub = subscribeCompanyData(ownerUid, (data) => {
       applyData(data);
       setSyncStatus('synced');
+      setLoadFailed(false);
       setLoaded(true);
+      didLoad = true;
     });
 
-    return () => unsub();
+    // Fallback: if subscription hasn't fired after 8s, mark failed
+    const timeout = setTimeout(() => {
+      if (!didLoad) {
+        setSyncStatus('error');
+        setLoadFailed(true);
+      }
+    }, 8000);
+
+    return () => { unsub(); clearTimeout(timeout); };
   }, [ownerUid, membershipChecked, retryCount]);
 
   // ── Persist (debounced) ──────────────────────────────────────────────────
