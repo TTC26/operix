@@ -1176,15 +1176,67 @@ function DocRow({ doc, customers, vendors, onClick, businessInfo }) {
 
 function StatusBadge({ status }) {
   const map = {
-    draft:     { bg: '#EEEDE6', color: '#5F5E5A', label: 'Draft' },
-    submitted: { bg: '#E6EEF9', color: '#2255A0', label: 'Pending review' },
-    verified:  { bg: '#EDE6F9', color: '#5B2DA0', label: 'Verified' },
+    draft:     { bg: '#EEEDE6', color: '#5F5E5A', label: 'Preparing' },
+    submitted: { bg: '#E6EEF9', color: '#2255A0', label: 'Forwarded' },
+    verified:  { bg: '#E6EEF9', color: '#2255A0', label: 'Forwarded' },  // legacy alias
     approved:  { bg: '#EAF3DE', color: '#3B6D11', label: 'Approved' },
     rejected:  { bg: '#FBEAE7', color: '#B5453A', label: 'Rejected' },
     paid:      { bg: '#D6F0E0', color: '#1A5C35', label: 'Paid' },
   };
   const s = map[status] || map.draft;
   return <span style={{ ...styles.badge, background: s.bg, color: s.color }}>{s.label}</span>;
+}
+
+// ── Shared approval action buttons used across all modules ──────────────────
+// item must have .status and .rejectionNote fields
+// onUpdate(patch) updates just those fields on the item
+function ApprovalActions({ item, onUpdate, userRole, compact = false }) {
+  const [rejectMode, setRejectMode] = React.useState(false);
+  const [note, setNote] = React.useState('');
+  const status = item?.status || 'draft';
+  const isApprover = userRole === 'admin' || userRole === 'manager';
+
+  if (rejectMode) return (
+    <div style={{ display: 'flex', gap: 6, alignItems: 'center', flexWrap: 'wrap' }}>
+      <input value={note} onChange={e => setNote(e.target.value)}
+        placeholder="Reason for rejection…" autoFocus
+        style={{ border: '1px solid #E08A7D', borderRadius: 6, padding: '4px 8px', fontSize: 12, width: 180 }} />
+      <button style={{ ...styles.primaryBtn, background: '#B5453A', fontSize: 12, padding: '4px 10px' }}
+        onClick={() => { onUpdate({ status: 'rejected', rejectionNote: note }); setRejectMode(false); setNote(''); }}>
+        Confirm
+      </button>
+      <button style={styles.iconBtn} onClick={() => { setRejectMode(false); setNote(''); }}><X size={13}/></button>
+    </div>
+  );
+
+  return (
+    <div style={{ display: 'flex', gap: 5, alignItems: 'center', flexWrap: 'wrap' }}>
+      {/* Preparer: draft or rejected → can forward */}
+      {(status === 'draft' || status === 'rejected') && (
+        <button style={{ ...styles.secondaryBtn, fontSize: 12, padding: '3px 9px', color: '#2255A0', borderColor: '#2255A0', background: '#EEF1F8' }}
+          onClick={() => onUpdate({ status: 'submitted', rejectionNote: '' })}>
+          Forward →
+        </button>
+      )}
+      {/* Approver: forwarded → approve or reject */}
+      {status === 'submitted' && isApprover && (
+        <>
+          <button style={{ ...styles.secondaryBtn, fontSize: 12, padding: '3px 9px', color: '#B5453A', borderColor: '#B5453A', background: '#FBEAE7' }}
+            onClick={() => setRejectMode(true)}>
+            Reject
+          </button>
+          <button style={{ ...styles.secondaryBtn, fontSize: 12, padding: '3px 9px', color: '#3B6D11', borderColor: '#3B6D11', background: '#EAF3DE' }}
+            onClick={() => onUpdate({ status: 'approved', rejectionNote: '' })}>
+            ✓ Approve
+          </button>
+        </>
+      )}
+      {/* Rejected note */}
+      {status === 'rejected' && item.rejectionNote && !compact && (
+        <span style={{ fontSize: 11, color: '#B5453A', fontStyle: 'italic' }}>"{item.rejectionNote}"</span>
+      )}
+    </div>
+  );
 }
 
 function DocumentsList({ docs, customers, vendors, search, setSearch, openDoc, deleteDoc, startNewDoc }) {
@@ -1614,11 +1666,12 @@ function DocEditor({ doc, setDoc, customers, vendors, items, businessInfo, userR
 
   // Field editing rules
   const isApproved = doc.status === 'approved';
-  const inReview = doc.status === 'submitted' || doc.status === 'verified';
+  const isForwarded = doc.status === 'submitted' || doc.status === 'verified';
+  const inReview = isForwarded; // alias for layout checks below
+  // Editable if: admin/manager always, or any role when doc is in draft/rejected (preparing stage)
   const isEditable =
-    userRole === 'admin' ||
-    ((userRole === 'sales' || userRole === 'purchase' || userRole === 'manager') &&
-      (doc.status === 'draft' || doc.status === 'rejected'));
+    userRole === 'admin' || userRole === 'manager' ||
+    (doc.status === 'draft' || doc.status === 'rejected');
 
   function handleReject() {
     onSave('rejected', rejectionNote);
@@ -1711,44 +1764,41 @@ function DocEditor({ doc, setDoc, customers, vendors, items, businessInfo, userR
           }} style={styles.ghostBtn}><Download size={15} /> Export CSV</button>
           <button onClick={() => window.print()} style={styles.ghostBtn}><Printer size={15} /> Print / PDF</button>
 
-          {/* STAFF (sales/purchase): draft or rejected → can submit */}
-          {(userRole === 'sales' || userRole === 'purchase') && (doc.status === 'draft' || doc.status === 'rejected') && (
+          {/* ── PREPARER (any non-admin): draft or rejected → Save / Forward ── */}
+          {userRole !== 'admin' && (doc.status === 'draft' || doc.status === 'rejected') && (
             <>
-              <button onClick={() => onSave('draft')} style={styles.ghostBtn}>Save draft</button>
-              <button onClick={() => onSave('submitted')} style={styles.primaryBtn}>Submit for review</button>
+              <button onClick={() => onSave('draft')} style={styles.ghostBtn}>Save</button>
+              <button onClick={() => onSave('submitted')} style={styles.primaryBtn}>Forward for Approval →</button>
             </>
           )}
 
-          {/* MANAGER: submitted → verify or reject */}
-          {userRole === 'manager' && doc.status === 'submitted' && !rejectMode && (
-            <>
-              <button onClick={() => setRejectMode(true)} style={{ ...styles.ghostBtn, color: '#B5453A', borderColor: '#B5453A' }}>Reject</button>
-              <button onClick={() => onSave('verified')} style={styles.primaryBtn}>Verify ✓</button>
-            </>
-          )}
-          {/* Manager own drafts */}
-          {userRole === 'manager' && (doc.status === 'draft' || doc.status === 'rejected') && (
-            <>
-              <button onClick={() => onSave('draft')} style={styles.ghostBtn}>Save draft</button>
-              <button onClick={() => onSave('submitted')} style={styles.primaryBtn}>Submit for review</button>
-            </>
+          {/* ── PREPARER: forwarded — locked, can only view ── */}
+          {userRole !== 'admin' && isForwarded && (
+            <span style={{ fontSize: 13, color: '#2255A0', fontStyle: 'italic' }}>⏳ Forwarded — awaiting approval</span>
           )}
 
-          {/* ADMIN: all statuses — always has reject + approve/save */}
-          {userRole === 'admin' && !rejectMode && (
+          {/* ── ADMIN / MANAGER: forwarded or any editable status ── */}
+          {(userRole === 'admin' || userRole === 'manager') && !rejectMode && (
             <>
-              {doc.status !== 'rejected' && (
+              {/* Can always save as draft */}
+              {!isApproved && <button onClick={() => onSave('draft')} style={styles.ghostBtn}>Save Draft</button>}
+              {/* Reject button — shown when forwarded */}
+              {isForwarded && (
                 <button onClick={() => setRejectMode(true)} style={{ ...styles.ghostBtn, color: '#B5453A', borderColor: '#B5453A' }}>Reject</button>
               )}
-              <button onClick={() => onSave('draft')} style={styles.ghostBtn}>Save draft</button>
-              {doc.status !== 'approved'
-                ? <button onClick={() => onSave('approved')} style={{ ...styles.primaryBtn, background: '#3D7A5C' }}>Approve ✓</button>
+              {/* Approve — shown when forwarded; Save changes when already approved */}
+              {!isApproved
+                ? isForwarded && <button onClick={() => onSave('approved')} style={{ ...styles.primaryBtn, background: '#3D7A5C' }}>Approve ✓</button>
                 : <button onClick={() => onSave('approved')} style={styles.primaryBtn}>Save changes</button>
               }
+              {/* Admin can also forward their own drafts */}
+              {userRole === 'admin' && doc.status === 'draft' && (
+                <button onClick={() => onSave('approved')} style={{ ...styles.primaryBtn, background: '#3D7A5C' }}>Approve ✓</button>
+              )}
             </>
           )}
 
-          {/* Reject reason inline panel */}
+          {/* ── Reject inline panel ── */}
           {rejectMode && (
             <div style={{ display: 'flex', gap: 8, alignItems: 'center', background: '#FBEAE7', padding: '6px 10px', borderRadius: 8 }}>
               <input
@@ -1758,7 +1808,7 @@ function DocEditor({ doc, setDoc, customers, vendors, items, businessInfo, userR
                 style={{ ...styles.input, width: 220, padding: '5px 10px', fontSize: 13 }}
                 autoFocus
               />
-              <button onClick={handleReject} style={{ ...styles.primaryBtn, background: '#B5453A', padding: '6px 14px' }}>Confirm reject</button>
+              <button onClick={handleReject} style={{ ...styles.primaryBtn, background: '#B5453A', padding: '6px 14px' }}>Confirm Reject</button>
               <button onClick={() => { setRejectMode(false); setRejectionNote(''); }} style={styles.iconBtn}><X size={15} /></button>
             </div>
           )}
@@ -1782,9 +1832,8 @@ function DocEditor({ doc, setDoc, customers, vendors, items, businessInfo, userR
       {/* Approval status banner for locked docs */}
       {(inReview || isApproved) && (
         <div style={{ background: isApproved ? '#EAF3DE' : '#E6EEF9', border: `1px solid ${isApproved ? '#B8D9A0' : '#B0C8E9'}`, borderRadius: 8, padding: '10px 16px', marginBottom: 12, fontSize: 13, color: isApproved ? '#3B6D11' : '#2255A0' }} className="no-print">
-          {doc.status === 'submitted' && '⏳ Awaiting manager verification'}
-          {doc.status === 'verified' && '✓ Verified by manager — awaiting admin approval'}
-          {doc.status === 'approved' && (userRole === 'admin' ? '✓ Approved — you can edit this document' : '✓ Approved and locked')}
+          {isForwarded && '⏳ Forwarded for approval — awaiting admin/manager action'}
+          {doc.status === 'approved' && (userRole === 'admin' || userRole === 'manager' ? '✓ Approved — you can edit this document' : '✓ Approved and locked')}
         </div>
       )}
 
@@ -2376,9 +2425,14 @@ function PettyCashList({ pettyCash, setPettyCash, businessInfo, userRole }) {
     const existing = entries.find(e => e.id === entry.id);
     let updated;
     if (existing) { updated = entries.map(e => e.id === entry.id ? entry : e); }
-    else { updated = [...entries, { ...entry, id: Date.now().toString() }]; }
+    else { updated = [...entries, { ...entry, id: Date.now().toString(), status: 'draft', rejectionNote: '' }]; }
     setPettyCash({ openingBalance: pettyCash.openingBalance ?? 0, entries: updated });
     setShowForm(false); setEditing(null);
+  }
+
+  function updateEntryStatus(id, patch) {
+    const updated = entries.map(e => e.id === id ? { ...e, ...patch } : e);
+    setPettyCash({ ...pettyCash, entries: updated });
   }
 
   function deleteEntry(id) {
@@ -2436,14 +2490,14 @@ function PettyCashList({ pettyCash, setPettyCash, businessInfo, userRole }) {
         <table style={styles.table}>
           <thead>
             <tr>
-              {['Date', 'Voucher No', 'Category', 'Description', 'Paid To', 'Debit (₹)', 'Credit (₹)', 'Balance (₹)', ''].map(h => (
+              {['Date', 'Voucher No', 'Category', 'Description', 'Paid To', 'Debit (₹)', 'Credit (₹)', 'Balance (₹)', 'Status', ''].map(h => (
                 <th key={h} style={styles.th}>{h}</th>
               ))}
             </tr>
           </thead>
           <tbody>
             {rows.length === 0 && (
-              <tr><td colSpan={9} style={{ ...styles.td, textAlign: 'center', color: '#888780', padding: 28 }}>No entries yet. Add your first petty cash entry.</td></tr>
+              <tr><td colSpan={10} style={{ ...styles.td, textAlign: 'center', color: '#888780', padding: 28 }}>No entries yet. Add your first petty cash entry.</td></tr>
             )}
             {rows.map(entry => (
               <tr key={entry.id}>
@@ -2456,10 +2510,14 @@ function PettyCashList({ pettyCash, setPettyCash, businessInfo, userRole }) {
                 <td style={{ ...styles.td, color: '#1A7A3E', fontWeight: 500 }}>{entry.credit ? '₹' + entry.credit.toLocaleString('en-IN', { minimumFractionDigits: 2 }) : '—'}</td>
                 <td style={{ ...styles.td, fontWeight: 600, color: entry.__balance >= 0 ? '#1E2A4A' : '#B91C1C' }}>₹{entry.__balance.toLocaleString('en-IN', { minimumFractionDigits: 2 })}</td>
                 <td style={styles.td}>
+                  <StatusBadge status={entry.status || 'draft'} />
+                  <ApprovalActions item={entry} onUpdate={(patch) => updateEntryStatus(entry.id, patch)} userRole={userRole} compact />
+                </td>
+                <td style={styles.td}>
                   <div style={{ display: 'flex', gap: 6 }}>
                     <button style={styles.iconBtn} onClick={() => setPrintVoucher(entry)} title="Print"><Printer size={14} /></button>
-                    {canEdit && <button style={styles.iconBtn} onClick={() => { setEditing(entry); setShowForm(true); }}>✏️</button>}
-                    {canEdit && <button style={{ ...styles.iconBtn, color: '#E08A7D' }} onClick={() => deleteEntry(entry.id)}><Trash2 size={14} /></button>}
+                    {canEdit && entry.status !== 'submitted' && <button style={styles.iconBtn} onClick={() => { setEditing(entry); setShowForm(true); }}>✏️</button>}
+                    {canEdit && entry.status !== 'submitted' && <button style={{ ...styles.iconBtn, color: '#E08A7D' }} onClick={() => deleteEntry(entry.id)}><Trash2 size={14} /></button>}
                   </div>
                 </td>
               </tr>
@@ -2718,9 +2776,13 @@ function VoucherList({ vouchers, setVouchers, businessInfo, customers, vendors, 
     const existing = list.find(x => x.id === v.id);
     let updated;
     if (existing) { updated = list.map(x => x.id === v.id ? v : x); }
-    else { updated = [...list, { ...v, id: Date.now().toString() }]; }
+    else { updated = [...list, { ...v, id: Date.now().toString(), status: 'draft', rejectionNote: '' }]; }
     setVouchers(updated);
     setShowForm(false); setEditing(null);
+  }
+
+  function updateVoucherStatus(id, patch) {
+    setVouchers(list.map(x => x.id === id ? { ...x, ...patch } : x));
   }
 
   function deleteVoucher(id) {
@@ -2793,14 +2855,14 @@ function VoucherList({ vouchers, setVouchers, businessInfo, customers, vendors, 
         <table style={styles.table}>
           <thead>
             <tr>
-              {['Date', 'Voucher No', 'Party', 'Account Head', 'Mode', 'Amount (₹)', 'Narration', ''].map(h => (
+              {['Date', 'Voucher No', 'Party', 'Account Head', 'Mode', 'Amount (₹)', 'Narration', 'Status', ''].map(h => (
                 <th key={h} style={styles.th}>{h}</th>
               ))}
             </tr>
           </thead>
           <tbody>
             {filtered.length === 0 && (
-              <tr><td colSpan={8} style={{ ...styles.td, textAlign: 'center', color: '#888780', padding: 28 }}>No {tab} vouchers yet.</td></tr>
+              <tr><td colSpan={9} style={{ ...styles.td, textAlign: 'center', color: '#888780', padding: 28 }}>No {tab} vouchers yet.</td></tr>
             )}
             {filtered.map(v => (
               <tr key={v.id}>
@@ -2812,10 +2874,14 @@ function VoucherList({ vouchers, setVouchers, businessInfo, customers, vendors, 
                 <td style={{ ...styles.td, fontWeight: 600, color: tab === 'payment' ? '#B91C1C' : '#1A7A3E' }}>₹{parseFloat(v.amount || 0).toLocaleString('en-IN', { minimumFractionDigits: 2 })}</td>
                 <td style={{ ...styles.td, color: '#888780', maxWidth: 180 }}>{v.narration}</td>
                 <td style={styles.td}>
+                  <StatusBadge status={v.status || 'draft'} />
+                  <ApprovalActions item={v} onUpdate={(patch) => updateVoucherStatus(v.id, patch)} userRole={userRole} compact />
+                </td>
+                <td style={styles.td}>
                   <div style={{ display: 'flex', gap: 6 }}>
                     <button style={styles.iconBtn} onClick={() => setPrintVoucher(v)} title="Print"><Printer size={14} /></button>
-                    {canEdit && <button style={styles.iconBtn} onClick={() => { setEditing(v); setShowForm(true); }}>✏️</button>}
-                    {canEdit && <button style={{ ...styles.iconBtn, color: '#E08A7D' }} onClick={() => deleteVoucher(v.id)}><Trash2 size={14} /></button>}
+                    {canEdit && v.status !== 'submitted' && <button style={styles.iconBtn} onClick={() => { setEditing(v); setShowForm(true); }}>✏️</button>}
+                    {canEdit && v.status !== 'submitted' && <button style={{ ...styles.iconBtn, color: '#E08A7D' }} onClick={() => deleteVoucher(v.id)}><Trash2 size={14} /></button>}
                   </div>
                 </td>
               </tr>
@@ -3469,11 +3535,15 @@ function GRNList({ grns, setGrns, documents, vendors, items, setStockLedger, use
     return 'GRN-' + String((nums.length ? Math.max(...nums) : 0) + 1).padStart(4, '0');
   }
 
+  function updateGRNStatus(id, patch) {
+    setGrns((grns || []).map(g => g.id === id ? { ...g, ...patch } : g));
+  }
+
   function saveGRN(grn) {
     const isNew = !(grns || []).find(g => g.id === grn.id);
     let updated;
     if (isNew) {
-      const newGrn = { ...grn, id: crypto.randomUUID(), createdAt: Date.now() };
+      const newGrn = { ...grn, id: crypto.randomUUID(), createdAt: Date.now(), status: 'draft', rejectionNote: '' };
       updated = [newGrn, ...(grns || [])];
       // Only create stock IN entries for QA-accepted lines
       if (setStockLedger) {
@@ -3519,9 +3589,9 @@ function GRNList({ grns, setGrns, documents, vendors, items, setStockLedger, use
 
       <div style={{ overflowX: 'auto' }}>
         <table style={styles.table}>
-          <thead><tr>{['GRN No', 'Date', 'PO Ref', 'Vendor', 'Items Received', ''].map(h => <th key={h} style={styles.th}>{h}</th>)}</tr></thead>
+          <thead><tr>{['GRN No', 'Date', 'PO Ref', 'Vendor', 'Items Received', 'Status', ''].map(h => <th key={h} style={styles.th}>{h}</th>)}</tr></thead>
           <tbody>
-            {(!grns || grns.length === 0) && <tr><td colSpan={6} style={{ ...styles.td, textAlign: 'center', color: '#888780', padding: 28 }}>No GRNs yet. Create one when goods arrive against a PO.</td></tr>}
+            {(!grns || grns.length === 0) && <tr><td colSpan={7} style={{ ...styles.td, textAlign: 'center', color: '#888780', padding: 28 }}>No GRNs yet. Create one when goods arrive against a PO.</td></tr>}
             {(grns || []).map(g => {
               const po = poList.find(p => p.id === g.poId);
               const vendor = vendors.find(v => v.id === (po ? po.customerId : ''));
@@ -3547,9 +3617,13 @@ function GRNList({ grns, setGrns, documents, vendors, items, setStockLedger, use
                     </div>
                   </td>
                   <td style={styles.td}>
+                    <StatusBadge status={g.status || 'draft'} />
+                    <ApprovalActions item={g} onUpdate={(patch) => updateGRNStatus(g.id, patch)} userRole={userRole} compact />
+                  </td>
+                  <td style={styles.td}>
                     <div style={{ display: 'flex', gap: 6 }}>
-                      {canEdit && <button style={styles.iconBtn} onClick={() => { setEditing(g); setShowForm(true); }}>✏️</button>}
-                      {canEdit && <button style={{ ...styles.iconBtn, color: '#E08A7D' }} onClick={() => deleteGRN(g.id)}><Trash2 size={14} /></button>}
+                      {canEdit && g.status !== 'submitted' && <button style={styles.iconBtn} onClick={() => { setEditing(g); setShowForm(true); }}>✏️</button>}
+                      {canEdit && g.status !== 'submitted' && <button style={{ ...styles.iconBtn, color: '#E08A7D' }} onClick={() => deleteGRN(g.id)}><Trash2 size={14} /></button>}
                     </div>
                   </td>
                 </tr>
@@ -3886,8 +3960,10 @@ function PayrollView({ employees, payrollRuns, setPayrollRuns, businessInfo, use
   }
 
   const STATUS_BADGE = {
-    draft:    { bg: '#FFF3CD', color: '#8B6914', label: 'Draft' },
-    approved: { bg: '#E8F4FD', color: '#2255A0', label: 'Approved' },
+    draft:    { bg: '#EEEDE6', color: '#5F5E5A', label: 'Preparing' },
+    submitted:{ bg: '#E6EEF9', color: '#2255A0', label: 'Forwarded' },
+    approved: { bg: '#EAF3DE', color: '#3B6D11', label: 'Approved' },
+    rejected: { bg: '#FBEAE7', color: '#B5453A', label: 'Rejected' },
     paid:     { bg: '#D1FAE5', color: '#065F46', label: 'Paid' },
   };
 
@@ -3935,27 +4011,36 @@ function PayrollView({ employees, payrollRuns, setPayrollRuns, businessInfo, use
                       <span style={{ ...styles.badge, background: sb.bg, color: sb.color }}>{sb.label}</span>
                     </td>
                     <td style={styles.td}>
-                      <div style={{ display: 'flex', gap: 4, alignItems: 'center' }}>
-                        {/* Print: two options */}
-                        <button style={styles.iconBtn} title="Summary Sheet" onClick={() => { setPrintRun(r); setPrintMode('summary'); }}><Printer size={14}/></button>
-                        <button style={{ ...styles.iconBtn, fontSize: 11, padding: '2px 6px' }} title="Individual Pay Slips"
-                          onClick={() => { setPrintRun(r); setPrintMode('individual'); }}>
-                          <Users size={13}/>
-                        </button>
-                        {/* Approval flow: draft → approved → paid */}
-                        {canEdit && r.status === 'draft' && (
-                          <button style={{ ...styles.iconBtn, color: '#2255A0' }} title="Approve"
-                            onClick={() => updateStatus(r.id, 'approved')}>
-                            <CheckCircle size={14}/>
+                      <div style={{ display: 'flex', gap: 6, alignItems: 'center', flexWrap: 'wrap' }}>
+                        {/* Print buttons */}
+                        <button style={styles.iconBtn} title="Payroll Summary Sheet" onClick={() => { setPrintRun(r); setPrintMode('summary'); }}><Printer size={14}/></button>
+                        <button style={styles.iconBtn} title="Individual Pay Slips" onClick={() => { setPrintRun(r); setPrintMode('individual'); }}><Users size={14}/></button>
+                        {/* Approval flow: Preparing → Forward → Approve → Paid */}
+                        {r.status === 'draft' && (
+                          <button style={{ ...styles.secondaryBtn, fontSize: 12, padding: '4px 10px', color: '#2255A0', borderColor: '#2255A0', background: '#EEF1F8' }}
+                            onClick={() => updateStatus(r.id, 'submitted')}>
+                            Forward →
                           </button>
                         )}
-                        {canEdit && r.status === 'approved' && (
-                          <button style={{ ...styles.iconBtn, color: '#065F46' }} title="Mark Paid"
+                        {r.status === 'submitted' && canEdit && (
+                          <>
+                            <button style={{ ...styles.secondaryBtn, fontSize: 12, padding: '4px 10px', color: '#B5453A', borderColor: '#B5453A', background: '#FBEAE7' }}
+                              onClick={() => updateStatus(r.id, 'draft')}>
+                              Reject
+                            </button>
+                            <button style={{ ...styles.secondaryBtn, fontSize: 12, padding: '4px 10px', color: '#3B6D11', borderColor: '#3B6D11', background: '#EAF3DE' }}
+                              onClick={() => updateStatus(r.id, 'approved')}>
+                              ✓ Approve
+                            </button>
+                          </>
+                        )}
+                        {r.status === 'approved' && canEdit && (
+                          <button style={{ ...styles.secondaryBtn, fontSize: 12, padding: '4px 10px', color: '#065F46', borderColor: '#065F46', background: '#D1FAE5' }}
                             onClick={() => updateStatus(r.id, 'paid')}>
-                            <CheckCircle size={14}/>
+                            ✓ Mark Paid
                           </button>
                         )}
-                        {canEdit && r.status !== 'paid' && (
+                        {r.status !== 'paid' && r.status !== 'submitted' && (
                           <button style={{ ...styles.iconBtn, color: '#B5453A' }} onClick={() => deleteRun(r.id)}><Trash2 size={14}/></button>
                         )}
                       </div>
@@ -4344,6 +4429,8 @@ function ServiceOrdersView({ serviceOrders, setServiceOrders, customers, busines
       scheduledDate: '',
       completedDate: '',
       status: 'draft',
+      approvalStatus: 'draft',
+      approvalNote: '',
       notes: '',
     };
   }
@@ -4355,6 +4442,15 @@ function ServiceOrdersView({ serviceOrders, setServiceOrders, customers, busines
       return [...prev, order];
     });
     setView('list');
+  }
+
+  function updateOrderApproval(id, patch) {
+    // patch: { status, rejectionNote } → maps to approvalStatus, approvalNote
+    setServiceOrders(prev => prev.map(o => o.id === id ? {
+      ...o,
+      approvalStatus: patch.status,
+      approvalNote: patch.rejectionNote ?? o.approvalNote,
+    } : o));
   }
 
   function deleteOrder(id) {
@@ -4382,7 +4478,7 @@ function ServiceOrdersView({ serviceOrders, setServiceOrders, customers, busines
           <table style={styles.table}>
             <thead>
               <tr>
-                {['Order No','Date','Customer','Technician','Scheduled','Status','Amount','Actions'].map(h => <th key={h} style={styles.th}>{h}</th>)}
+                {['Order No','Date','Customer','Technician','Scheduled','Status','Amount','Approval','Actions'].map(h => <th key={h} style={styles.th}>{h}</th>)}
               </tr>
             </thead>
             <tbody>
@@ -4401,10 +4497,19 @@ function ServiceOrdersView({ serviceOrders, setServiceOrders, customers, busines
                     </td>
                     <td style={{ ...styles.td, textAlign: 'right', fontWeight: 600 }}>{fmt(total)}</td>
                     <td style={styles.td}>
+                      <StatusBadge status={o.approvalStatus || 'draft'} />
+                      <ApprovalActions
+                        item={{ status: o.approvalStatus || 'draft', rejectionNote: o.approvalNote || '' }}
+                        onUpdate={(patch) => updateOrderApproval(o.id, patch)}
+                        userRole={userRole}
+                        compact
+                      />
+                    </td>
+                    <td style={styles.td}>
                       <div style={{ display: 'flex', gap: 4 }}>
                         <button style={styles.iconBtn} title="Print" onClick={() => setPrintOrder(o)}><Printer size={14} /></button>
-                        {canEdit && <button style={styles.iconBtn} title="Edit" onClick={() => { setActive(o); setView('form'); }}><Pencil size={14} /></button>}
-                        {canEdit && <button style={{ ...styles.iconBtn, color: '#B5453A' }} title="Delete" onClick={() => deleteOrder(o.id)}><Trash2 size={14} /></button>}
+                        {canEdit && o.approvalStatus !== 'submitted' && <button style={styles.iconBtn} title="Edit" onClick={() => { setActive(o); setView('form'); }}><Pencil size={14} /></button>}
+                        {canEdit && o.approvalStatus !== 'submitted' && <button style={{ ...styles.iconBtn, color: '#B5453A' }} title="Delete" onClick={() => deleteOrder(o.id)}><Trash2 size={14} /></button>}
                       </div>
                     </td>
                   </tr>
@@ -6028,12 +6133,34 @@ const PO_STATUS = {
 
 function ProductionOrdersList({ productionOrders, setProductionOrders, boms, rawMaterials, setRawMaterials, userRole, ownerUid, setStockLedger, items = [] }) {
   const [creating, setCreating] = useState(false);
+  const [editing, setEditing] = useState(null);
   const canCreate = userRole === 'admin' || userRole === 'manager' || userRole === 'sales' || userRole === 'purchase';
   const canApprove = userRole === 'admin';
 
   function createOrder(order) {
-    setProductionOrders((p) => [{ ...order, id: crypto.randomUUID(), createdAt: Date.now() }, ...p]);
+    setProductionOrders((p) => [{ ...order, id: crypto.randomUUID(), createdAt: Date.now(), approvalStatus: 'draft', approvalNote: '' }, ...p]);
     setCreating(false);
+  }
+
+  function saveOrder(order) {
+    setProductionOrders(prev => {
+      const idx = prev.findIndex(p => p.id === order.id);
+      if (idx >= 0) { const a = [...prev]; a[idx] = order; return a; }
+      return [{ ...order, id: crypto.randomUUID(), createdAt: Date.now(), approvalStatus: 'draft', approvalNote: '' }, ...prev];
+    });
+  }
+
+  function deleteOrder(id) {
+    if (!window.confirm('Delete this production order?')) return;
+    setProductionOrders(prev => prev.filter(p => p.id !== id));
+  }
+
+  function updateApproval(id, patch) {
+    setProductionOrders(prev => prev.map(p => p.id === id ? {
+      ...p,
+      approvalStatus: patch.status,
+      approvalNote: patch.rejectionNote ?? p.approvalNote,
+    } : p));
   }
 
   function updateStatus(id, status) {
@@ -6123,9 +6250,18 @@ function ProductionOrdersList({ productionOrders, setProductionOrders, boms, raw
                 <div style={{ fontSize: 12, color: '#888', marginTop: 2 }}>{o.quantity} units · {o.startDate || ''}</div>
               </div>
               <span style={{ background: bg, color: col, padding: '3px 10px', borderRadius: 20, fontSize: 12, fontWeight: 600 }}>{o.status?.replace('_',' ')}</span>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 4, alignItems: 'flex-end' }}>
+                <StatusBadge status={o.approvalStatus || 'draft'} />
+                <ApprovalActions
+                  item={{ status: o.approvalStatus || 'draft', rejectionNote: o.approvalNote || '' }}
+                  onUpdate={(patch) => updateApproval(o.id, patch)}
+                  userRole={userRole}
+                  compact
+                />
+              </div>
               <div style={{ display: 'flex', gap: 6 }}>
-                <button onClick={() => setEditing(o)} style={styles.iconBtn}><Pencil size={14} /></button>
-                <button onClick={() => deleteOrder(o.id)} style={{ ...styles.iconBtn, color: '#B5453A' }}><Trash2 size={14} /></button>
+                {o.approvalStatus !== 'submitted' && <button onClick={() => setEditing(o)} style={styles.iconBtn}><Pencil size={14} /></button>}
+                {o.approvalStatus !== 'submitted' && <button onClick={() => deleteOrder(o.id)} style={{ ...styles.iconBtn, color: '#B5453A' }}><Trash2 size={14} /></button>}
               </div>
             </div>
           );
