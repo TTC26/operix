@@ -1,7 +1,3 @@
-https://raw.githubusercontent.com/TTC26/operix/bb7dfb5/src/App.jsx
-→ https://raw.githubusercontent.com/TTC26/operix/bb7dfb5/src/App.jsx
-Content-Type: text/plain; charset=utf-8
-
 import React, { useState, useEffect, useMemo } from 'react';
 import { Plus, Trash2, Download, FileText, Truck, FileSignature, ShoppingCart, FileMinus, Users, Package, LayoutDashboard, Search, X, Printer, LogOut, Cloud, CloudOff, Shield, Factory, FlaskConical, ClipboardList, CheckCircle, Wrench, BookOpen, ChevronDown, ChevronRight, Pencil, Briefcase } from 'lucide-react';
 import { auth, watchAuth, signUp, signIn, logOut, loadCompanyData, saveCompanyData, subscribeCompanyData, resendVerificationEmail, refreshUser, getMembership, createStaffAccount, getStaffList, removeStaff, updateStaffRole, uploadDrawing, deleteDrawing, resetPassword } from './firebase';
