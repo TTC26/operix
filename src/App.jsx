@@ -884,7 +884,7 @@ function SettingsView({ businessInfo, setBusinessInfo }) {
 
 // ─── Staff ─────────────────────────────────────────────────────
 
-function StaffPage({ ownerUid }) {
+function StaffPage({ ownerUid, employees = [] }) {
   const ROLES = ['manager', 'sales', 'purchase', 'inventory', 'accounts'];
   const [staffList, setStaffList] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -986,6 +986,7 @@ function StaffPage({ ownerUid }) {
       {addingStaff && (
         <StaffModal
           ownerUid={ownerUid}
+          employees={employees}
           onSaved={() => { setAddingStaff(false); loadStaff(); }}
           onClose={() => setAddingStaff(false)}
         />
@@ -994,16 +995,27 @@ function StaffPage({ ownerUid }) {
   );
 }
 
-function StaffModal({ ownerUid, onSaved, onClose }) {
-  const [form, setForm] = useState({ name: '', email: '', password: '', role: 'sales' });
+function StaffModal({ ownerUid, onSaved, onClose, employees = [] }) {
+  const [form, setForm] = useState({ empId: '', name: '', email: '', password: '', role: 'sales' });
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
   const ROLES = ['manager', 'sales', 'purchase', 'inventory', 'accounts'];
 
+  function handleEmpSelect(empId) {
+    if (!empId) {
+      setForm((f) => ({ ...f, empId: '', name: '' }));
+      return;
+    }
+    const emp = employees.find((e) => e.id === empId);
+    if (emp) {
+      setForm((f) => ({ ...f, empId: emp.id, name: emp.name || '' }));
+    }
+  }
+
   async function handleSubmit(e) {
     e.preventDefault();
     setError('');
-    const { name, email, password, role } = form;
+    const { name, email, password, role, empId } = form;
     if (!name.trim() || !email.trim() || !password.trim()) {
       setError('Please fill in all fields.');
       return;
@@ -1014,7 +1026,9 @@ function StaffModal({ ownerUid, onSaved, onClose }) {
     }
     setBusy(true);
     try {
-      await createStaffAccount(ownerUid, email.trim(), password, name.trim(), role);
+      const emp = employees.find((e) => e.id === empId);
+      const empNo = emp ? (emp.employeeId || emp.empNo || '') : '';
+      await createStaffAccount(ownerUid, email.trim(), password, name.trim(), role, empId, empNo);
       onSaved();
     } catch (err) {
       const code = (err && err.code) || '';
@@ -1032,6 +1046,19 @@ function StaffModal({ ownerUid, onSaved, onClose }) {
   return (
     <Modal onClose={onClose} title="Add staff member">
       <form onSubmit={handleSubmit} style={{ display: 'flex', flexDirection: 'column', gap: 0 }}>
+        {employees.length > 0 && (
+          <div style={styles.formGroup}>
+            <label style={styles.label}>Link to employee (optional)</label>
+            <select value={form.empId} onChange={(e) => handleEmpSelect(e.target.value)} style={styles.input}>
+              <option value="">— Select employee —</option>
+              {employees.map((emp) => (
+                <option key={emp.id} value={emp.id}>
+                  {emp.employeeId || emp.empNo ? `[${emp.employeeId || emp.empNo}] ` : ''}{emp.name}
+                </option>
+              ))}
+            </select>
+          </div>
+        )}
         <div style={styles.formGroup}>
           <label style={styles.label}>Full name</label>
           <input value={form.name} onChange={(e) => setForm((f) => ({ ...f, name: e.target.value }))} style={styles.input} placeholder="e.g. Ravi Kumar" />
@@ -6616,433 +6643,579 @@ function EnquiryList({ enquiries, setEnquiries, customers, userRole, onConvertTo
   );
 }
 
-// ─── Bin Card ────────────────────────────────────────────────────────────────
+// ─── Root App ─────────────────────────────────────────────────────────────────
 
-// ─── App ──────────────────────────────────────────────
-
-export default function InvoiceApp() {
-  // ── Auth & role ─────────────────────────────────────────────────────────
-  const [user, setUser] = useState(undefined);
-  const [userRole, setUserRole] = useState('admin');
-  const [ownerUid, setOwnerUid] = useState(null);
-  const [membershipChecked, setMembershipChecked] = useState(false);
-
-  // ── Business data ────────────────────────────────────────────────────────
-  const [businessInfo, setBusinessInfo] = useState({
-    name: 'Your business name',
-    address: '123 Business Street, City, State - 600001',
-    gstin: '33AAAAA0000A1Z5',
-    state: 'Tamil Nadu',
-    phone: '+91 00000 00000',
-    email: 'you@business.com',
-    website: '',
-    logo: '',
-    template: 'classic',
-    companyType: 'trading',
-    bankName: '', bankAccount: '', ifsc: '', upi: '',
-    terms: 'Payment due within 30 days. Thank you for your business.',
-    signatory: '',
-    country: 'india',
-  });
-  const [customers, setCustomers] = useState([]);
-  const [vendors, setVendors] = useState([]);
-  const [items, setItems] = useState([]);
-  const [documents, setDocuments] = useState([]);
-  const [counters, setCounters] = useState({});
-  const [boms, setBoms] = useState([]);
-  const [parts, setParts] = useState([]);
-  const [engDocs, setEngDocs] = useState([]);
-  const [rawMaterials, setRawMaterials] = useState([]);
-  const [productionOrders, setProductionOrders] = useState([]);
-  const [pettyCash, setPettyCash] = useState({ openingBalance: 0, entries: [] });
-  const [vouchers, setVouchers] = useState([]);
-  const [stockLedger, setStockLedger] = useState([]);
-  const [grns, setGrns] = useState([]);
-  const [serviceOrders, setServiceOrders] = useState([]);
-  const [employees, setEmployees] = useState([]);
-  const [payrollRuns, setPayrollRuns] = useState([]);
-  const [enquiries, setEnquiries] = useState([]);
-
-  // ── UI state ─────────────────────────────────────────────────────────────
-  const [loaded, setLoaded] = useState(false);
-  const [loadFailed, setLoadFailed] = useState(false);
-  const [loadError, setLoadError] = useState('');
-  const [retryCount, setRetryCount] = useState(0);
-  // loadError shown in error screen for debugging — remove after issue is resolved
+export default function App() {
+  const [authReady, setAuthReady]   = useState(false);
+  const [user, setUser]             = useState(null);
+  const [userRole, setUserRole]     = useState('admin');
+  const [ownerUid, setOwnerUid]     = useState(null);
   const [syncStatus, setSyncStatus] = useState('idle');
-  const [view, setView] = useState('dashboard');
-  const [activeDoc, setActiveDoc] = useState(null);
-  const [editingCustomer, setEditingCustomer] = useState(null);
-  const [editingVendor, setEditingVendor] = useState(null);
-  const [editingItem, setEditingItem] = useState(null);
-  const [search, setSearch] = useState('');
 
-  // ── Auth watch ───────────────────────────────────────────────────────────
+  // ── Navigation ────────────────────────────────────────────────────────────
+  const [view, setView]         = useState('dashboard');
+  const [activeDoc, setActiveDoc] = useState(null);
+  const [docSearch, setDocSearch] = useState('');
+
+  // ── Entity modals (managed here so list components can open them) ─────────
+  const [editingCustomer, setEditingCustomer] = useState(null);
+  const [editingVendor,   setEditingVendor]   = useState(null);
+  const [editingItem,     setEditingItem]     = useState(null);
+
+  // ── All data ──────────────────────────────────────────────────────────────
+  const [businessInfo,      _setBi]  = useState({});
+  const [documents,         _setDocs] = useState([]);
+  const [customers,         _setCusts] = useState([]);
+  const [vendors,           _setVends] = useState([]);
+  const [items,             _setItems] = useState([]);
+  const [employees,         _setEmps]  = useState([]);
+  const [payrollRuns,       _setPR]    = useState([]);
+  const [pettyCash,         _setPC]    = useState({ openingBalance: 0, entries: [] });
+  const [vouchers,          _setVouch] = useState([]);
+  const [grns,              _setGrns]  = useState([]);
+  const [serviceOrders,     _setSO]    = useState([]);
+  const [productionOrders,  _setPO]    = useState([]);
+  const [rawMaterials,      _setRM]    = useState([]);
+  const [boms,              _setBoms]  = useState([]);
+  const [stockLedger,       _setSL]    = useState([]);
+  const [parts,             _setParts] = useState([]);
+  const [engDocs,           _setEngD]  = useState([]);
+  const [enquiries,         _setEnq]   = useState([]);
+
+  // ── Auth ──────────────────────────────────────────────────────────────────
   useEffect(() => {
-    const unsub = watchAuth(async (u) => {
-      setUser(u);
-      if (!u) {
-        setLoaded(false);
-        setMembershipChecked(false);
-        setOwnerUid(null);
-        setUserRole('admin');
-        return;
-      }
-      try {
-        const membership = await getMembership(u.uid);
-        if (membership) {
-          setUserRole(membership.role);
-          setOwnerUid(membership.ownerUid);
-        } else {
-          setUserRole('admin');
-          setOwnerUid(u.uid);
+    return watchAuth(async (firebaseUser) => {
+      if (firebaseUser) {
+        if (!firebaseUser.emailVerified) {
+          setUser(firebaseUser);
+          setAuthReady(true);
+          return;
         }
-      } catch {
-        setUserRole('admin');
-        setOwnerUid(u.uid);
+        try {
+          const membership = await getMembership(firebaseUser.uid);
+          if (membership) {
+            setOwnerUid(membership.ownerUid);
+            setUserRole(membership.role);
+          } else {
+            setOwnerUid(firebaseUser.uid);
+            setUserRole('admin');
+          }
+        } catch {
+          setOwnerUid(firebaseUser.uid);
+          setUserRole('admin');
+        }
+        setUser(firebaseUser);
+      } else {
+        setUser(null);
+        setOwnerUid(null);
       }
-      setMembershipChecked(true);
+      setAuthReady(true);
     });
-    return () => unsub();
   }, []);
 
-  // ── Load + subscribe ─────────────────────────────────────────────────────
+  // ── Firestore subscription ────────────────────────────────────────────────
   useEffect(() => {
-    if (!ownerUid || !membershipChecked) return;
-    setLoaded(false);
-    setLoadFailed(false);
-    setSyncStatus('syncing');
-
-    function applyData(data) {
-      if (!data) return;
-      if (data.businessInfo)     setBusinessInfo((b) => ({ ...b, ...data.businessInfo }));
-      if (data.customers)        setCustomers(data.customers);
-      if (data.vendors)          setVendors(data.vendors);
-      if (data.items)            setItems(data.items);
-      if (data.documents)        setDocuments(data.documents);
-      if (data.counters)         setCounters(data.counters);
-      if (data.boms)             setBoms(data.boms);
-      if (data.rawMaterials)     setRawMaterials(data.rawMaterials);
-      if (data.productionOrders) setProductionOrders(data.productionOrders);
-      if (data.parts)            setParts(data.parts);
-      if (data.engDocs)          setEngDocs(data.engDocs);
-      if (data.pettyCash)        setPettyCash(data.pettyCash);
-      if (data.vouchers)         setVouchers(data.vouchers);
-      if (data.stockLedger)      setStockLedger(data.stockLedger);
-      if (data.grns)             setGrns(data.grns);
-      if (data.serviceOrders)    setServiceOrders(data.serviceOrders);
-      if (data.employees)        setEmployees(data.employees);
-      if (data.payrollRuns)      setPayrollRuns(data.payrollRuns);
-      if (data.enquiries)        setEnquiries(data.enquiries);
-    }
-
-    // Subscription fires immediately from local cache (persistentLocalCache),
-    // then updates from network. No separate loadCompanyData call needed.
-    let didLoad = false;
+    if (!ownerUid) return;
     const unsub = subscribeCompanyData(ownerUid, (data) => {
-      applyData(data);
       setSyncStatus('synced');
-      setLoadFailed(false);
-      setLoaded(true);
-      didLoad = true;
+      _setBi(data.businessInfo || {});
+      _setDocs(data.documents || []);
+      _setCusts(data.customers || []);
+      _setVends(data.vendors || []);
+      _setItems(data.items || []);
+      _setEmps(data.employees || []);
+      _setPR(data.payrollRuns || []);
+      _setPC(data.pettyCash || { openingBalance: 0, entries: [] });
+      _setVouch(data.vouchers || []);
+      _setGrns(data.grns || []);
+      _setSO(data.serviceOrders || []);
+      _setPO(data.productionOrders || []);
+      _setRM(data.rawMaterials || []);
+      _setBoms(data.boms || []);
+      _setSL(data.stockLedger || []);
+      _setParts(data.parts || []);
+      _setEngD(data.engDocs || []);
+      _setEnq(data.enquiries || []);
     });
+    return unsub;
+  }, [ownerUid]);
 
-    // Fallback: if subscription hasn't fired after 8s, mark failed
-    const timeout = setTimeout(() => {
-      if (!didLoad) {
-        setSyncStatus('error');
-        setLoadFailed(true);
+  // ── Persist helper ────────────────────────────────────────────────────────
+  function persist(patch) {
+    if (!ownerUid) return;
+    setSyncStatus('syncing');
+    saveCompanyData(ownerUid, patch)
+      .then(() => setSyncStatus('synced'))
+      .catch(() => setSyncStatus('error'));
+  }
+
+  // ── Wrapped setters (update local state + persist to Firestore) ───────────
+  function mkSet(rawSet, key) {
+    return (v) => {
+      if (typeof v === 'function') {
+        rawSet((prev) => {
+          const next = v(prev);
+          persist({ [key]: next });
+          return next;
+        });
+      } else {
+        rawSet(v);
+        persist({ [key]: v });
       }
-    }, 8000);
-
-    return () => { unsub(); clearTimeout(timeout); };
-  }, [ownerUid, membershipChecked, retryCount]);
-
-  // ── Persist (debounced) ──────────────────────────────────────────────────
-  const allData = { businessInfo, customers, vendors, items, documents, counters, boms, rawMaterials, productionOrders, parts, engDocs, pettyCash, vouchers, stockLedger, grns, serviceOrders, employees, payrollRuns, enquiries };
-
-  useEffect(() => {
-    if (!loaded || !ownerUid || loadFailed) return;
-    const t = setTimeout(() => {
-      setSyncStatus('syncing');
-      saveCompanyData(ownerUid, allData)
-        .then(() => setSyncStatus('synced'))
-        .catch(() => setSyncStatus('error'));
-    }, 1500);
-    return () => clearTimeout(t);
-  }, [businessInfo, customers, vendors, items, documents, counters, boms, rawMaterials, productionOrders, parts, engDocs, pettyCash, vouchers, stockLedger, grns, serviceOrders, employees, payrollRuns, enquiries, loaded, ownerUid]);
-
-  useEffect(() => {
-    // Use sendBeacon so the save fires even as the page unloads.
-    // Firestore doesn't support sendBeacon, so we keep a ref to the latest allData
-    // and do a synchronous-style save in beforeunload.
-    const flush = (e) => {
-      if (!loaded || !ownerUid) return;
-      saveCompanyData(ownerUid, allData).catch(() => {});
     };
-    window.addEventListener('beforeunload', flush);
-    return () => window.removeEventListener('beforeunload', flush);
-  }, [businessInfo, customers, vendors, items, documents, counters, boms, rawMaterials, productionOrders, parts, engDocs, pettyCash, vouchers, stockLedger, grns, serviceOrders, employees, payrollRuns, enquiries, loaded, ownerUid]);
+  }
 
-  // ── Derived state ────────────────────────────────────────────────────────
-  const filteredDocs = useMemo(() => {
-    return documents.filter((d) => {
-      if (!DOC_TYPES[d.type]) return false;
-      const partyList = DOC_TYPES[d.type].party === 'vendor' ? vendors : customers;
-      const party = partyList.find((c) => c.id === d.customerId);
-      const text = `${d.number} ${party ? party.name : ''} ${DOC_TYPES[d.type].label}`.toLowerCase();
-      return text.includes(search.toLowerCase());
+  const setBusinessInfo     = mkSet(_setBi,    'businessInfo');
+  const setDocuments        = mkSet(_setDocs,  'documents');
+  const setCustomers        = mkSet(_setCusts, 'customers');
+  const setVendors          = mkSet(_setVends, 'vendors');
+  const setItems            = mkSet(_setItems, 'items');
+  const setEmployees        = mkSet(_setEmps,  'employees');
+  const setPayrollRuns      = mkSet(_setPR,    'payrollRuns');
+  const setPettyCash        = mkSet(_setPC,    'pettyCash');
+  const setVouchers         = mkSet(_setVouch, 'vouchers');
+  const setGrns             = mkSet(_setGrns,  'grns');
+  const setServiceOrders    = mkSet(_setSO,    'serviceOrders');
+  const setProductionOrders = mkSet(_setPO,    'productionOrders');
+  const setRawMaterials     = mkSet(_setRM,    'rawMaterials');
+  const setBoms             = mkSet(_setBoms,  'boms');
+  const setStockLedger      = mkSet(_setSL,    'stockLedger');
+  const setParts            = mkSet(_setParts, 'parts');
+  const setEngDocs          = mkSet(_setEngD,  'engDocs');
+  const setEnquiries        = mkSet(_setEnq,   'enquiries');
+
+  // ── Document helpers ──────────────────────────────────────────────────────
+  function startNewDoc(type) {
+    setActiveDoc({ ...blankDoc(type) });
+    setView('doceditor');
+  }
+
+  function openDoc(docId) {
+    const d = documents.find((x) => x.id === docId);
+    if (d) { setActiveDoc({ ...d }); setView('doceditor'); }
+  }
+
+  function deleteDoc(docId) {
+    if (!window.confirm('Delete this document?')) return;
+    setDocuments((ds) => ds.filter((d) => d.id !== docId));
+  }
+
+  function saveDoc(doc) {
+    const isNew = !doc.id || !documents.find((d) => d.id === doc.id);
+    const saved = {
+      ...doc,
+      updatedAt: Date.now(),
+      ...(isNew ? { id: doc.id || crypto.randomUUID(), createdAt: Date.now() } : {}),
+    };
+    setDocuments(isNew
+      ? [...documents, saved]
+      : documents.map((d) => d.id === saved.id ? saved : d));
+    setActiveDoc(null);
+    setView('documents');
+  }
+
+  function convertDoc(newType, srcDoc) {
+    setActiveDoc({
+      ...blankDoc(newType),
+      customerId: srcDoc.customerId,
+      customerSnapshot: srcDoc.customerSnapshot,
+      items: (srcDoc.items || []).map((it) => ({ ...it, id: crypto.randomUUID() })),
+      notes: srcDoc.notes || '',
+      linkedFrom: srcDoc.id,
     });
-  }, [documents, customers, vendors, search]);
+    setView('doceditor');
+  }
+
+  async function handleLogout() { await logOut(); }
+
+  const companyType = (businessInfo && businessInfo.companyType) || 'trading';
+  const country     = (businessInfo && businessInfo.country) || 'india';
 
   const stats = useMemo(() => {
-    const invoices = documents.filter((d) => d.type === 'invoice');
-    const totalRevenue = invoices.reduce((sum, d) => sum + computeTotals(d, businessInfo.state, businessInfo.country).grandTotal, 0);
-    const outstanding = invoices.filter((d) => d.status !== 'paid').reduce((sum, d) => sum + computeTotals(d, businessInfo.state, businessInfo.country).grandTotal, 0);
-    const purchaseBills = documents.filter((d) => d.type === 'purchasebill');
-    const totalPurchases = purchaseBills.reduce((sum, d) => sum + computeTotals(d, businessInfo.state, businessInfo.country).grandTotal, 0);
-    const payable = purchaseBills.filter((d) => d.status !== 'paid').reduce((sum, d) => sum + computeTotals(d, businessInfo.state, businessInfo.country).grandTotal, 0);
+    const totalRevenue  = documents.filter((d) => d.type === 'invoice')
+      .reduce((s, d) => s + (computeTotals(d, businessInfo.state, country).grandTotal || 0), 0);
+    const totalPurchases = documents.filter((d) => d.type === 'purchasebill')
+      .reduce((s, d) => s + (computeTotals(d, businessInfo.state, country).grandTotal || 0), 0);
+    const outstanding   = documents.filter((d) => d.type === 'invoice' && d.status !== 'paid')
+      .reduce((s, d) => s + (computeTotals(d, businessInfo.state, country).grandTotal || 0), 0);
+    const payable       = documents.filter((d) => d.type === 'purchasebill' && d.status !== 'paid')
+      .reduce((s, d) => s + (computeTotals(d, businessInfo.state, country).grandTotal || 0), 0);
+    const voucherList   = Array.isArray(vouchers) ? vouchers : [];
+    const totalReceived = voucherList.filter((v) => v.type === 'receipt')
+      .reduce((s, v) => s + (parseFloat(v.amount) || 0), 0);
+    const totalPaid     = voucherList.filter((v) => v.type === 'payment')
+      .reduce((s, v) => s + (parseFloat(v.amount) || 0), 0);
     const counts = {};
-    Object.keys(DOC_TYPES).forEach((t) => (counts[t] = documents.filter((d) => d.type === t).length));
-    const vList = Array.isArray(vouchers) ? vouchers : [];
-    const totalReceived = vList.filter(v => v.type === 'receipt').reduce((s, v) => s + (parseFloat(v.amount) || 0), 0);
-    const totalPaid = vList.filter(v => v.type === 'payment').reduce((s, v) => s + (parseFloat(v.amount) || 0), 0);
-    const pcEntries = Array.isArray(pettyCash.entries) ? pettyCash.entries : [];
-    const pcBalance = pcEntries.reduce((bal, e) => bal + (parseFloat(e.credit) || 0) - (parseFloat(e.debit) || 0), parseFloat(pettyCash.openingBalance) || 0);
-    const poCount = Array.isArray(productionOrders) ? productionOrders.length : 0;
-    const poOpen = Array.isArray(productionOrders) ? productionOrders.filter(o => o.status !== 'completed' && o.status !== 'cancelled').length : 0;
-    const rmCount = Array.isArray(rawMaterials) ? rawMaterials.length : 0;
-    const itemCount = Array.isArray(items) ? items.length : 0;
-    const stockMap = {};
-    (items || []).forEach(it => { stockMap[it.id] = parseFloat(it.openingStock) || 0; });
-    (Array.isArray(stockLedger) ? stockLedger : []).forEach(e => {
-      if (!stockMap[e.itemId]) stockMap[e.itemId] = 0;
-      stockMap[e.itemId] += (e.type === 'in' ? 1 : -1) * (parseFloat(e.qty) || 0);
-    });
-    const lowStockCount = (items || []).filter(it => it.minStock && stockMap[it.id] !== undefined && stockMap[it.id] <= parseFloat(it.minStock)).length;
-    return { totalRevenue, outstanding, totalPurchases, payable, counts, totalDocs: documents.length, totalReceived, totalPaid, pcBalance, poCount, poOpen, rmCount, itemCount, lowStockCount };
-  }, [documents, vouchers, pettyCash, productionOrders, rawMaterials, items, stockLedger, businessInfo.state, businessInfo.country]);
+    documents.forEach((d) => { counts[d.type] = (counts[d.type] || 0) + 1; });
+    return { totalRevenue, totalPurchases, outstanding, payable, totalReceived, totalPaid, counts };
+  }, [documents, vouchers, businessInfo, country]);
 
-  // ── Actions ──────────────────────────────────────────────────────────────
-  async function handleLogout() {
-    await logOut();
-    setCustomers([]); setVendors([]); setItems([]); setDocuments([]); setCounters({});
-    setBoms([]); setRawMaterials([]); setProductionOrders([]); setParts([]); setEngDocs([]);
-    setStockLedger([]); setGrns([]); setPettyCash({ openingBalance: 0, entries: [] }); setVouchers([]);
-    setServiceOrders([]); setEmployees([]); setPayrollRuns([]); setEnquiries([]);
-    setUserRole('admin'); setOwnerUid(null); setMembershipChecked(false);
-    setView('dashboard');
-    setBusinessInfo({ name: 'Your business name', address: '123 Business Street, City, State - 600001', gstin: '33AAAAA0000A1Z5', state: 'Tamil Nadu', phone: '+91 00000 00000', email: 'you@business.com', website: '', logo: '', template: 'classic', companyType: 'trading', bankName: '', bankAccount: '', ifsc: '', upi: '', terms: 'Payment due within 30 days. Thank you for your business.', signatory: '', country: 'india' });
-  }
-
-  function nextNumber(type) {
-    const prefix = DOC_TYPES[type].prefix;
-    const year = new Date().getFullYear();
-    const key = `${prefix}-${year}`;
-    const current = counters[key] || 0;
-    const next = current + 1;
-    return { display: `${prefix}-${year}-${String(next).padStart(4, '0')}`, key, next };
-  }
-
-  function startNewDoc(type) {
-    const doc = blankDoc(type);
-    const { display } = nextNumber(type);
-    doc.number = display;
-    doc.placeOfSupply = businessInfo.state;
-    setActiveDoc(doc);
-    setView('editor');
-  }
-
-  function convertEnquiry(enq) {
-    const doc = blankDoc('quotation');
-    const { display } = nextNumber('quotation');
-    doc.number = display;
-    doc.customerId = enq.customerId || '';
-    doc.placeOfSupply = businessInfo.state;
-    if (!enq.customerId && enq.customerName) doc.customerSnapshot = { name: enq.customerName };
-    doc.notes = [enq.interest, enq.notes].filter(Boolean).join('\n');
-    doc.linkedEnquiry = { enqId: enq.id, enqNumber: enq.number };
-    setEnquiries(prev => prev.map(e => e.id === enq.id ? { ...e, status: 'Quoted' } : e));
-    setActiveDoc(doc);
-    setView('editor');
-  }
-
-  function convertDoc(sourceDoc, targetType) {
-    const doc = blankDoc(targetType);
-    const { display } = nextNumber(targetType);
-    doc.number = display;
-    doc.customerId = sourceDoc.customerId;
-    doc.customerSnapshot = sourceDoc.customerSnapshot;
-    doc.placeOfSupply = sourceDoc.placeOfSupply;
-    doc.notes = sourceDoc.notes;
-    doc.items = sourceDoc.items.map((it) => ({ ...it, id: crypto.randomUUID() }));
-    doc.linkedFrom = { docId: sourceDoc.id, docNumber: sourceDoc.number, docType: sourceDoc.type };
-    setActiveDoc(doc);
-    setView('editor');
-  }
-
-  function openDoc(doc) {
-    setActiveDoc(JSON.parse(JSON.stringify(doc)));
-    setView('editor');
-  }
-
-  function saveDoc(status, rejectionNote = '') {
-    const now = Date.now();
-    const stamps = {};
-    if (status === 'submitted') stamps.submittedAt = now;
-    if (status === 'verified')  stamps.verifiedAt  = now;
-    if (status === 'approved')  stamps.approvedAt  = now;
-    if (status === 'rejected')  { stamps.rejectedAt = now; stamps.rejectionNote = rejectionNote; }
-    if (status === 'rejected' || status === 'draft') {
-      stamps.submittedAt = null; stamps.verifiedAt = null; stamps.approvedAt = null;
-    }
-    const doc = { ...activeDoc, status: status || activeDoc.status, ...stamps };
-    const exists = documents.find((d) => d.id === doc.id);
-    if (!exists) {
-      const { key, next } = nextNumber(doc.type);
-      setCounters((c) => ({ ...c, [key]: next }));
-      setDocuments((docs) => [doc, ...docs]);
-    } else {
-      setDocuments((docs) => docs.map((d) => (d.id === doc.id ? doc : d)));
-    }
-    // Stock ledger auto-entries
-    const isNowApproved = status === 'approved';
-    const stockDocTypes = ['purchasebill', 'invoice', 'delivery'];
-    if (stockDocTypes.includes(doc.type)) {
-      setStockLedger(prev => {
-        const without = prev.filter(e => e.sourceId !== doc.id);
-        if (!isNowApproved) return without;
-        const direction = doc.type === 'purchasebill' ? 'in' : 'out';
-        const newEntries = doc.items
-          .filter(it => it.itemId && (parseFloat(it.qty) || 0) > 0)
-          .map(it => ({ id: crypto.randomUUID(), date: doc.date, itemId: it.itemId, itemName: it.name, type: direction, qty: parseFloat(it.qty) || 0, rate: parseFloat(it.rate) || 0, sourceType: doc.type, sourceId: doc.id, sourceNumber: doc.number, createdAt: Date.now() }));
-        return [...without, ...newEntries];
-      });
-    }
-    setView('documents');
-    setActiveDoc(null);
-  }
-
-  function deleteDoc(id) { setDocuments((docs) => docs.filter((d) => d.id !== id)); }
-
-  function upsertCustomer(c) {
-    if (c.id) { setCustomers((cs) => cs.map((x) => (x.id === c.id ? c : x))); }
-    else { setCustomers((cs) => [...cs, { ...c, id: crypto.randomUUID() }]); }
-    setEditingCustomer(null);
-  }
-
-  function upsertVendor(v) {
-    if (v.id) { setVendors((vs) => vs.map((x) => (x.id === v.id ? v : x))); }
-    else { setVendors((vs) => [...vs, { ...v, id: crypto.randomUUID() }]); }
-    setEditingVendor(null);
-  }
-
-  function upsertItem(it) {
-    if (it.id) { setItems((is) => is.map((x) => (x.id === it.id ? it : x))); }
-    else { setItems((is) => [...is, { ...it, id: crypto.randomUUID() }]); }
-    setEditingItem(null);
-  }
-
-  // ── Auth guards ──────────────────────────────────────────────────────────
-  if (user === undefined || (user && !membershipChecked)) {
-    return <div style={{ ...styles.app, alignItems: 'center', justifyContent: 'center' }}><div className="serif" style={{ fontSize: 20, color: '#1E2A4A' }}>Loading…</div></div>;
-  }
-  if (user === null) return <AuthScreen />;
-  if (!user.emailVerified && userRole === 'admin') return <VerifyEmailScreen user={user} onLogout={handleLogout} />;
-
-  if (!loaded) {
-    if (loadFailed) return (
-      <div style={{ ...styles.app, alignItems: 'center', justifyContent: 'center', flexDirection: 'column', gap: 16 }}>
-        <div className="serif" style={{ fontSize: 20, color: '#B5453A' }}>Could not connect to cloud</div>
-        <div style={{ color: '#888780', fontSize: 13, textAlign: 'center', maxWidth: 320 }}>Check your internet connection and try again.</div>
-        {loadError && <div style={{ fontFamily: 'monospace', fontSize: 11, color: '#B5453A', background: '#FFF0EE', padding: '6px 12px', borderRadius: 6, maxWidth: 400, wordBreak: 'break-all' }}>{loadError}</div>}
-        <button style={styles.primaryBtn} onClick={() => setRetryCount(c => c + 1)}>Retry</button>
-      </div>
-    );
+  // ── Early gates ───────────────────────────────────────────────────────────
+  if (!authReady) {
     return (
-      <div style={{ ...styles.app, alignItems: 'center', justifyContent: 'center', flexDirection: 'column', gap: 12 }}>
-        <div className="serif" style={{ fontSize: 20, color: '#1E2A4A' }}>Loading your workspace…</div>
-        <div style={{ color: '#888780', fontSize: 13 }}>{retryCount > 0 ? `Slow network — retrying… (attempt ${retryCount + 1})` : 'Syncing data from the cloud'}</div>
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', height: '100vh', color: '#888780', fontSize: 14 }}>
+        Loading…
       </div>
     );
   }
+  if (!user) return <AuthScreen />;
+  if (!user.emailVerified) return <VerifyEmailScreen user={user} onLogout={handleLogout} />;
 
-  // ── Render ───────────────────────────────────────────────────────────────
+  // ── Content renderer ──────────────────────────────────────────────────────
+  function renderContent() {
+    if (view === 'doceditor' && activeDoc) {
+      return (
+        <DocEditor
+          doc={activeDoc}
+          setDoc={setActiveDoc}
+          customers={customers}
+          vendors={vendors}
+          items={items}
+          businessInfo={businessInfo}
+          userRole={userRole}
+          onSave={saveDoc}
+          onCancel={() => { setActiveDoc(null); setView('documents'); }}
+          onAddCustomer={() => setEditingCustomer({ name: '', gstin: '', address: '', state: '', phone: '', email: '' })}
+          onAddVendor={() => setEditingVendor({ name: '', gstin: '', address: '', state: '', phone: '', email: '' })}
+          onConvert={(type, doc) => convertDoc(type, doc)}
+          onOpenDoc={openDoc}
+          documents={documents}
+        />
+      );
+    }
+    switch (view) {
+      case 'dashboard':
+        return (
+          <Dashboard
+            stats={stats}
+            documents={documents}
+            customers={customers}
+            vendors={vendors}
+            businessInfo={businessInfo}
+            startNewDoc={startNewDoc}
+            openDoc={openDoc}
+            setView={setView}
+            vouchers={vouchers}
+            pettyCash={pettyCash}
+            productionOrders={productionOrders}
+            rawMaterials={rawMaterials}
+            items={items}
+            companyType={companyType}
+          />
+        );
+      case 'documents':
+        return (
+          <DocumentsList
+            docs={documents}
+            customers={customers}
+            vendors={vendors}
+            search={docSearch}
+            setSearch={setDocSearch}
+            openDoc={openDoc}
+            deleteDoc={deleteDoc}
+            startNewDoc={startNewDoc}
+          />
+        );
+      case 'customers':
+        return (
+          <CustomersList
+            customers={customers}
+            setCustomers={setCustomers}
+            documents={documents}
+            setEditing={setEditingCustomer}
+          />
+        );
+      case 'vendors':
+        return (
+          <VendorsList
+            vendors={vendors}
+            setVendors={setVendors}
+            documents={documents}
+            setEditing={setEditingVendor}
+          />
+        );
+      case 'items':
+        return (
+          <ItemsList
+            items={items}
+            setItems={setItems}
+            setEditing={setEditingItem}
+          />
+        );
+      case 'settings':
+        return <SettingsView businessInfo={businessInfo} setBusinessInfo={setBusinessInfo} />;
+      case 'staff':
+        return <StaffPage ownerUid={ownerUid} employees={employees} />;
+      case 'pettycash':
+        return (
+          <PettyCashList
+            pettyCash={pettyCash}
+            setPettyCash={setPettyCash}
+            businessInfo={businessInfo}
+            userRole={userRole}
+          />
+        );
+      case 'vouchers':
+        return (
+          <VoucherList
+            vouchers={vouchers}
+            setVouchers={setVouchers}
+            businessInfo={businessInfo}
+            customers={customers}
+            vendors={vendors}
+            userRole={userRole}
+          />
+        );
+      case 'grn':
+        return (
+          <GRNList
+            grns={grns}
+            setGrns={setGrns}
+            documents={documents}
+            vendors={vendors}
+            items={items}
+            setStockLedger={setStockLedger}
+            userRole={userRole}
+            businessInfo={businessInfo}
+          />
+        );
+      case 'stock':
+        return (
+          <StockView
+            items={items}
+            stockLedger={stockLedger}
+            setStockLedger={setStockLedger}
+            userRole={userRole}
+            businessInfo={businessInfo}
+          />
+        );
+      case 'stockledger':
+        return (
+          <StockLedgerView
+            items={items}
+            stockLedger={stockLedger}
+            setStockLedger={setStockLedger}
+            businessInfo={businessInfo}
+          />
+        );
+      case 'bincard':
+        return (
+          <BinCard
+            items={items}
+            stockLedger={stockLedger}
+            businessInfo={businessInfo}
+          />
+        );
+      case 'employees':
+        return (
+          <EmployeesView
+            employees={employees}
+            setEmployees={setEmployees}
+            userRole={userRole}
+            businessInfo={businessInfo}
+          />
+        );
+      case 'payroll':
+        return (
+          <PayrollView
+            employees={employees}
+            payrollRuns={payrollRuns}
+            setPayrollRuns={setPayrollRuns}
+            businessInfo={businessInfo}
+            userRole={userRole}
+          />
+        );
+      case 'serviceorders':
+        return (
+          <ServiceOrdersView
+            serviceOrders={serviceOrders}
+            setServiceOrders={setServiceOrders}
+            customers={customers}
+            businessInfo={businessInfo}
+            userRole={userRole}
+          />
+        );
+      case 'rawmaterials':
+        return (
+          <RawMaterialsList
+            rawMaterials={rawMaterials}
+            setRawMaterials={setRawMaterials}
+            userRole={userRole}
+            ownerUid={ownerUid}
+          />
+        );
+      case 'bom':
+        return (
+          <BOMList
+            boms={boms}
+            setBoms={setBoms}
+            rawMaterials={rawMaterials}
+            userRole={userRole}
+            ownerUid={ownerUid}
+            parts={parts}
+          />
+        );
+      case 'productionorders':
+        return (
+          <ProductionOrdersList
+            productionOrders={productionOrders}
+            setProductionOrders={setProductionOrders}
+            boms={boms}
+            rawMaterials={rawMaterials}
+            setRawMaterials={setRawMaterials}
+            userRole={userRole}
+            ownerUid={ownerUid}
+            setStockLedger={setStockLedger}
+            items={items}
+          />
+        );
+      case 'qualitycheck':
+        return (
+          <QualityCheckList
+            productionOrders={productionOrders}
+            setProductionOrders={setProductionOrders}
+            userRole={userRole}
+            boms={boms}
+            parts={parts}
+          />
+        );
+      case 'partsmaster':
+        return (
+          <PartsMasterList
+            parts={parts}
+            setParts={setParts}
+            vendors={vendors}
+            ownerUid={ownerUid}
+            userRole={userRole}
+          />
+        );
+      case 'engdocs':
+        return (
+          <EngineeringDocsList
+            engDocs={engDocs}
+            setEngDocs={setEngDocs}
+            parts={parts}
+            ownerUid={ownerUid}
+            userRole={userRole}
+          />
+        );
+      case 'enquiries':
+        return (
+          <EnquiryList
+            enquiries={enquiries}
+            setEnquiries={setEnquiries}
+            customers={customers}
+            userRole={userRole}
+            onConvertToQuotation={(enq) => {
+              const cust = customers.find((c) => c.id === enq.customerId);
+              setActiveDoc({
+                ...blankDoc('quotation'),
+                customerId: enq.customerId || '',
+                customerSnapshot: cust || null,
+                notes: enq.interest || '',
+                linkedFrom: enq.id,
+              });
+              setView('doceditor');
+            }}
+          />
+        );
+      case 'gstr1':
+        return <GSTR1Report documents={documents} customers={customers} businessInfo={businessInfo} />;
+      case 'vatreport':
+        return <VATReport documents={documents} customers={customers} businessInfo={businessInfo} />;
+      case 'taxreport':
+        return <TaxReport documents={documents} customers={customers} businessInfo={businessInfo} />;
+      default:
+        return (
+          <div style={{ padding: 40, color: '#888780', fontSize: 14 }}>
+            Section coming soon.
+          </div>
+        );
+    }
+  }
+
   return (
-    <div style={styles.app}>
+    <div style={{ display: 'flex', minHeight: '100vh', background: '#FAF8F4' }}>
       <style>{`
-        * { box-sizing: border-box; font-family: 'Inter', -apple-system, sans-serif; }
+        * { box-sizing: border-box; }
+        body { margin: 0; font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif; }
         .serif { font-family: 'Lora', Georgia, serif; }
         button { cursor: pointer; font-family: inherit; }
-        input, select, textarea { font-family: inherit; }
-        ::-webkit-scrollbar { width: 6px; height: 6px; }
-        ::-webkit-scrollbar-thumb { background: #d6d0c4; border-radius: 3px; }
-        @media print {
-          @page { size: A4; margin: 14mm 14mm 18mm 14mm; }
-          * { -webkit-print-color-adjust: exact !important; print-color-adjust: exact !important; }
-          body * { visibility: hidden !important; }
-          .print-area, .print-area * { visibility: visible !important; }
-          body { background: #fff !important; margin: 0 !important; padding: 0 !important; }
-          .print-area { position: absolute !important; top: 0 !important; left: 0 !important; width: 100% !important; margin: 0 !important; padding: 0 !important; border: none !important; border-radius: 0 !important; box-shadow: none !important; background: #fff !important; }
-          .print-area table { page-break-inside: auto; }
-          .print-area tr { page-break-inside: avoid; }
-        }
+        input, textarea, select { font-family: inherit; }
+        @media print { .no-print { display: none !important; } }
+        @page { margin: 12mm; }
       `}</style>
-      <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Lora:wght@500;600;700&family=Inter:wght@400;500;600&display=swap" />
 
       <Sidebar
-        view={view} setView={setView} setActiveDoc={setActiveDoc}
-        startNewDoc={startNewDoc} syncStatus={syncStatus} user={user}
-        onLogout={handleLogout} userRole={userRole}
-        companyType={businessInfo.companyType} country={businessInfo.country || 'india'}
+        view={view}
+        setView={setView}
+        setActiveDoc={setActiveDoc}
+        startNewDoc={startNewDoc}
+        syncStatus={syncStatus}
+        user={user}
+        onLogout={handleLogout}
+        userRole={userRole}
+        companyType={companyType}
+        country={country}
       />
 
-      <div style={styles.main}>
-        {view === 'dashboard' && <Dashboard stats={stats} documents={documents} customers={customers} vendors={vendors} businessInfo={businessInfo} startNewDoc={startNewDoc} openDoc={openDoc} setView={setView} vouchers={vouchers} pettyCash={pettyCash} productionOrders={productionOrders} rawMaterials={rawMaterials} items={items} companyType={businessInfo.companyType} />}
-        {view === 'documents' && <DocumentsList docs={filteredDocs} customers={customers} vendors={vendors} search={search} setSearch={setSearch} openDoc={openDoc} deleteDoc={deleteDoc} startNewDoc={startNewDoc} />}
-        {view === 'editor' && activeDoc && (
-          <DocEditor
-            doc={activeDoc} setDoc={setActiveDoc}
-            customers={customers} vendors={vendors} items={items}
-            businessInfo={businessInfo} userRole={userRole}
-            onSave={saveDoc}
-            onCancel={() => { setActiveDoc(null); setView('documents'); }}
-            onAddCustomer={() => setEditingCustomer({ name: '', gstin: '', address: '', state: businessInfo.state, phone: '', email: '' })}
-            onAddVendor={() => setEditingVendor({ name: '', gstin: '', address: '', state: businessInfo.state, phone: '', email: '' })}
-            onConvert={convertDoc}
-            documents={documents}
-            onOpenDoc={(docId) => { const d = documents.find(x => x.id === docId); if (d) setActiveDoc(JSON.parse(JSON.stringify(d))); }}
-          />
-        )}
-        {view === 'customers'       && <CustomersList customers={customers} setEditing={setEditingCustomer} setCustomers={setCustomers} documents={documents} />}
-        {view === 'vendors'         && <VendorsList vendors={vendors} setEditing={setEditingVendor} setVendors={setVendors} documents={documents} />}
-        {view === 'items'           && <ItemsList items={items} setEditing={setEditingItem} setItems={setItems} />}
-        {view === 'stock'           && <StockView items={items} stockLedger={stockLedger} setStockLedger={setStockLedger} userRole={userRole} businessInfo={businessInfo} />}
-        {view === 'stockledger'     && <StockLedgerView items={items} stockLedger={stockLedger} setStockLedger={setStockLedger} businessInfo={businessInfo} />}
-        {view === 'bincard'         && <BinCard items={items} stockLedger={stockLedger} businessInfo={businessInfo} />}
-        {view === 'employees'       && <EmployeesView employees={employees} setEmployees={setEmployees} userRole={userRole} businessInfo={businessInfo} />}
-        {view === 'payroll'         && <PayrollView employees={employees} payrollRuns={payrollRuns} setPayrollRuns={setPayrollRuns} businessInfo={businessInfo} userRole={userRole} />}
-        {view === 'serviceorders'   && <ServiceOrdersView serviceOrders={serviceOrders} setServiceOrders={setServiceOrders} customers={customers} businessInfo={businessInfo} userRole={userRole} />}
-        {view === 'vatreport'       && <VATReport documents={documents} customers={customers} businessInfo={businessInfo} />}
-        {view === 'taxreport'       && <TaxReport documents={documents} customers={customers} businessInfo={businessInfo} />}
-        {view === 'gstr1'           && <GSTR1Report documents={documents} customers={customers} businessInfo={businessInfo} />}
-        {view === 'grn'             && <GRNList grns={grns} setGrns={setGrns} documents={documents} vendors={vendors} items={items} setStockLedger={setStockLedger} userRole={userRole} businessInfo={businessInfo} />}
-        {view === 'enquiries'       && <EnquiryList enquiries={enquiries} setEnquiries={setEnquiries} customers={customers} userRole={userRole} onConvertToQuotation={convertEnquiry} />}
-        {view === 'pettycash'       && <PettyCashList pettyCash={pettyCash} setPettyCash={setPettyCash} businessInfo={businessInfo} userRole={userRole} />}
-        {view === 'vouchers'        && <VoucherList vouchers={vouchers} setVouchers={setVouchers} businessInfo={businessInfo} customers={customers} vendors={vendors} userRole={userRole} />}
-        {view === 'rawmaterials'    && <RawMaterialsList rawMaterials={rawMaterials} setRawMaterials={setRawMaterials} userRole={userRole} ownerUid={ownerUid} />}
-        {view === 'bom'             && <BOMList boms={boms} setBoms={setBoms} rawMaterials={rawMaterials} userRole={userRole} ownerUid={ownerUid} parts={parts} />}
-        {view === 'productionorders'&& <ProductionOrdersList productionOrders={productionOrders} setProductionOrders={setProductionOrders} boms={boms} rawMaterials={rawMaterials} setRawMaterials={setRawMaterials} userRole={userRole} ownerUid={ownerUid} setStockLedger={setStockLedger} items={items} />}
-        {view === 'qualitycheck'    && <QualityCheckList productionOrders={productionOrders} setProductionOrders={setProductionOrders} userRole={userRole} boms={boms} parts={parts} />}
-        {view === 'partsmaster'     && <PartsMasterList parts={parts} setParts={setParts} vendors={vendors} ownerUid={ownerUid} userRole={userRole} />}
-        {view === 'engdocs'         && <EngineeringDocsList engDocs={engDocs} setEngDocs={setEngDocs} parts={parts} ownerUid={ownerUid} userRole={userRole} />}
-        {view === 'settings'        && userRole === 'admin' && <SettingsView businessInfo={businessInfo} setBusinessInfo={setBusinessInfo} />}
-        {view === 'staff'           && userRole === 'admin' && <StaffPage ownerUid={ownerUid} />}
-      </div>
+      <main style={styles.main}>
+        {renderContent()}
+      </main>
 
-      {editingCustomer && <CustomerModal customer={editingCustomer} onSave={(c) => { upsertCustomer(c); if (view === 'editor' && activeDoc) setActiveDoc((d) => ({ ...d, customerId: c.id || customers[customers.length - 1]?.id })); }} onClose={() => setEditingCustomer(null)} />}
-      {editingVendor   && <VendorModal vendor={editingVendor} onSave={(v) => { upsertVendor(v); if (view === 'editor' && activeDoc) setActiveDoc((d) => ({ ...d, customerId: v.id || vendors[vendors.length - 1]?.id })); }} onClose={() => setEditingVendor(null)} />}
-      {editingItem     && <ItemModal item={editingItem} onSave={upsertItem} onClose={() => setEditingItem(null)} />}
+      {/* Customer modal */}
+      {editingCustomer && (
+        <CustomerModal
+          customer={editingCustomer}
+          onSave={(c) => {
+            const isNew = !c.id;
+            const saved = { ...c, id: c.id || crypto.randomUUID() };
+            setCustomers(isNew
+              ? [...customers, saved]
+              : customers.map((x) => x.id === saved.id ? saved : x));
+            if (isNew && view === 'doceditor' && activeDoc) {
+              setActiveDoc((d) => ({ ...d, customerId: saved.id, customerSnapshot: saved }));
+            }
+            setEditingCustomer(null);
+          }}
+          onClose={() => setEditingCustomer(null)}
+        />
+      )}
+
+      {/* Vendor modal */}
+      {editingVendor && (
+        <VendorModal
+          vendor={editingVendor}
+          onSave={(v) => {
+            const isNew = !v.id;
+            const saved = { ...v, id: v.id || crypto.randomUUID() };
+            setVendors(isNew
+              ? [...vendors, saved]
+              : vendors.map((x) => x.id === saved.id ? saved : x));
+            if (isNew && view === 'doceditor' && activeDoc) {
+              setActiveDoc((d) => ({ ...d, customerId: saved.id, customerSnapshot: saved }));
+            }
+            setEditingVendor(null);
+          }}
+          onClose={() => setEditingVendor(null)}
+        />
+      )}
+
+      {/* Item modal */}
+      {editingItem && (
+        <ItemModal
+          item={editingItem}
+          onSave={(it) => {
+            const isNew = !it.id;
+            const saved = { ...it, id: it.id || crypto.randomUUID() };
+            setItems(isNew
+              ? [...items, saved]
+              : items.map((x) => x.id === saved.id ? saved : x));
+            setEditingItem(null);
+          }}
+          onClose={() => setEditingItem(null)}
+        />
+      )}
     </div>
   );
 }

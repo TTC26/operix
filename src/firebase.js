@@ -107,7 +107,7 @@ export async function getMembership(uid) {
   return null;
 }
 
-export async function createStaffAccount(ownerUid, email, password, name, role) {
+export async function createStaffAccount(ownerUid, email, password, name, role, empId = '', empNo = '') {
   // Timeout wrapper so the UI never hangs forever
   const withTimeout = (promise, ms = 15000) => Promise.race([
     promise,
@@ -126,6 +126,7 @@ export async function createStaffAccount(ownerUid, email, password, name, role) 
 
   await setDoc(doc(db, 'companies', ownerUid, 'staff', staffUid), {
     uid: staffUid, name, email, role, createdAt: Date.now(),
+    ...(empId ? { empId, empNo } : {}),
   });
 
   return staffUid;
