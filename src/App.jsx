@@ -2589,6 +2589,13 @@ function VoucherPrintModal({ entry, businessInfo, onClose }) {
             <div style={{ borderTop: '1px solid #555', paddingTop: 6, fontSize: 11, color: '#888780', marginTop: 32 }}>Received By</div>
           </div>
           <div style={{ textAlign: 'center' }}>
+            <div style={{ borderTop: '1px solid #555', paddingTop: 6, fontSize: 11, color: '#888780', marginTop: 32 }}>Approved By</div>
+          </div>
+        </div>
+      </div>
+    </Modal>
+  );
+}
 
 // ─── Vouchers ──────────────────────────────────────────────────
 
