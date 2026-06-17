@@ -240,7 +240,7 @@ function Modal({ children, onClose, title, wide }) {
           <span className="serif" style={{ fontSize: 17, fontWeight: 600, color: '#fff' }}>{title}</span>
           <button onClick={onClose} style={{ ...styles.iconBtn, color: '#fff', opacity: 0.8 }}><X size={18} /></button>
         </div>
-        <div style={{ padding: '20px 24px 24px
+        <div style={{ padding: '20px 24px 24px' }}>
 
 // ─── Auth ──────────────────────────────────────────────────────
 
