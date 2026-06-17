@@ -1097,7 +1097,7 @@ function Dashboard({ stats, documents, customers, vendors, businessInfo, startNe
   return (
     <div style={styles.page}>
       <div style={styles.pageHeader}>
-        <h1 className="serif" style={styles.h1}>Good day, {businessInfo.name.split(' ')[0]}</h1>
+        <h1 className="serif" style={styles.h1}>Good day, {(businessInfo.name || 'there').split(' ')[0]}</h1>
         <p style={styles.muted}>Here's what's happening across your business.</p>
       </div>
 
