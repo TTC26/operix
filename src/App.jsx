@@ -3874,14 +3874,30 @@ function EmployeeForm({ employee, count, onSave, onClose }) {
 function PayrollView({ employees, payrollRuns, setPayrollRuns, businessInfo, userRole }) {
   const [showModal, setShowModal] = useState(false);
   const [printRun, setPrintRun] = useState(null);
-  const canEdit = userRole === 'admin';
+  const [printMode, setPrintMode] = useState(null); // 'summary' | 'individual'
+  const canEdit = userRole === 'admin' || userRole === 'manager';
 
   function deleteRun(id) {
     if (!window.confirm('Delete this payroll run?')) return;
     setPayrollRuns(prev => prev.filter(r => r.id !== id));
   }
+  function updateStatus(id, status) {
+    setPayrollRuns(prev => prev.map(x => x.id === id ? { ...x, status } : x));
+  }
 
-  if (printRun) return <PaySlipPrint run={printRun} businessInfo={businessInfo} onClose={() => setPrintRun(null)} />;
+  const STATUS_BADGE = {
+    draft:    { bg: '#FFF3CD', color: '#8B6914', label: 'Draft' },
+    approved: { bg: '#E8F4FD', color: '#2255A0', label: 'Approved' },
+    paid:     { bg: '#D1FAE5', color: '#065F46', label: 'Paid' },
+  };
+
+  // Print views
+  if (printRun && printMode === 'summary') {
+    return <PaySlipPrint run={printRun} businessInfo={businessInfo} onClose={() => { setPrintRun(null); setPrintMode(null); }} />;
+  }
+  if (printRun && printMode === 'individual') {
+    return <IndividualPaySlips run={printRun} businessInfo={businessInfo} onClose={() => { setPrintRun(null); setPrintMode(null); }} />;
+  }
 
   const activeEmp = employees.filter(e => e.status === 'active' || !e.status);
 
@@ -3892,7 +3908,9 @@ function PayrollView({ employees, payrollRuns, setPayrollRuns, businessInfo, use
           <h2 className="serif" style={styles.h1}>Payroll</h2>
           <div style={styles.muted}>{payrollRuns.length} payroll run{payrollRuns.length !== 1 ? 's' : ''}</div>
         </div>
-        {canEdit && <button style={styles.primaryBtn} onClick={() => setShowModal(true)}><Plus size={15}/> Process Payroll</button>}
+        {(userRole === 'admin' || userRole === 'accounts') && (
+          <button style={styles.primaryBtn} onClick={() => setShowModal(true)}><Plus size={15}/> Process Payroll</button>
+        )}
       </div>
 
       {payrollRuns.length === 0 ? (
@@ -3904,32 +3922,47 @@ function PayrollView({ employees, payrollRuns, setPayrollRuns, businessInfo, use
               <tr>{['Period','Employees','Gross','Deductions','Net Payable','Status',''].map(h=><th key={h} style={styles.th}>{h}</th>)}</tr>
             </thead>
             <tbody>
-              {[...payrollRuns].sort((a,b)=>a.period<b.period?1:-1).map(r=>(
-                <tr key={r.id}>
-                  <td style={{ ...styles.td, fontWeight: 600 }}>{MONTHS.find(m=>m[0]===r.month)?.[1]} {r.year}</td>
-                  <td style={styles.td}>{r.lines.length}</td>
-                  <td style={{ ...styles.td, textAlign: 'right' }}>{currency(r.lines.reduce((s,l)=>s+(l.gross||0),0))}</td>
-                  <td style={{ ...styles.td, textAlign: 'right', color: '#B5453A' }}>{currency(r.lines.reduce((s,l)=>s+(l.totalDeductions||l.deductions||0),0))}</td>
-                  <td style={{ ...styles.td, textAlign: 'right', fontWeight: 700, color: '#065F46' }}>{currency(r.lines.reduce((s,l)=>s+(l.net||0),0))}</td>
-                  <td style={styles.td}>
-                    <span style={{ ...styles.badge, ...(r.status === 'paid' ? { background: '#D1FAE5', color: '#065F46' } : { background: '#FFF3CD', color: '#8B6914' }) }}>{r.status}</span>
-                  </td>
-                  <td style={styles.td}>
-                    <div style={{ display: 'flex', gap: 4 }}>
-                      <button style={styles.iconBtn} title="Print Pay Slips" onClick={() => setPrintRun(r)}><Printer size={14}/></button>
-                      {canEdit && r.status === 'draft' && (
-                        <button style={{ ...styles.iconBtn, color: '#065F46' }} title="Mark Paid"
-                          onClick={() => setPayrollRuns(prev => prev.map(x => x.id === r.id ? { ...x, status: 'paid' } : x))}>
-                          <CheckCircle size={14}/>
+              {[...payrollRuns].sort((a,b)=>a.period<b.period?1:-1).map(r => {
+                const sb = STATUS_BADGE[r.status] || STATUS_BADGE.draft;
+                return (
+                  <tr key={r.id}>
+                    <td style={{ ...styles.td, fontWeight: 600 }}>{MONTHS.find(m=>m[0]===r.month)?.[1]} {r.year}</td>
+                    <td style={styles.td}>{(r.lines||[]).length}</td>
+                    <td style={{ ...styles.td, textAlign: 'right' }}>{currency((r.lines||[]).reduce((s,l)=>s+(l.gross||0),0))}</td>
+                    <td style={{ ...styles.td, textAlign: 'right', color: '#B5453A' }}>{currency((r.lines||[]).reduce((s,l)=>s+(l.totalDeductions||0),0))}</td>
+                    <td style={{ ...styles.td, textAlign: 'right', fontWeight: 700, color: '#065F46' }}>{currency((r.lines||[]).reduce((s,l)=>s+(l.net||0),0))}</td>
+                    <td style={styles.td}>
+                      <span style={{ ...styles.badge, background: sb.bg, color: sb.color }}>{sb.label}</span>
+                    </td>
+                    <td style={styles.td}>
+                      <div style={{ display: 'flex', gap: 4, alignItems: 'center' }}>
+                        {/* Print: two options */}
+                        <button style={styles.iconBtn} title="Summary Sheet" onClick={() => { setPrintRun(r); setPrintMode('summary'); }}><Printer size={14}/></button>
+                        <button style={{ ...styles.iconBtn, fontSize: 11, padding: '2px 6px' }} title="Individual Pay Slips"
+                          onClick={() => { setPrintRun(r); setPrintMode('individual'); }}>
+                          <Users size={13}/>
                         </button>
-                      )}
-                      {canEdit && r.status === 'draft' && (
-                        <button style={{ ...styles.iconBtn, color: '#B5453A' }} onClick={() => deleteRun(r.id)}><Trash2 size={14}/></button>
-                      )}
-                    </div>
-                  </td>
-                </tr>
-              ))}
+                        {/* Approval flow: draft → approved → paid */}
+                        {canEdit && r.status === 'draft' && (
+                          <button style={{ ...styles.iconBtn, color: '#2255A0' }} title="Approve"
+                            onClick={() => updateStatus(r.id, 'approved')}>
+                            <CheckCircle size={14}/>
+                          </button>
+                        )}
+                        {canEdit && r.status === 'approved' && (
+                          <button style={{ ...styles.iconBtn, color: '#065F46' }} title="Mark Paid"
+                            onClick={() => updateStatus(r.id, 'paid')}>
+                            <CheckCircle size={14}/>
+                          </button>
+                        )}
+                        {canEdit && r.status !== 'paid' && (
+                          <button style={{ ...styles.iconBtn, color: '#B5453A' }} onClick={() => deleteRun(r.id)}><Trash2 size={14}/></button>
+                        )}
+                      </div>
+                    </td>
+                  </tr>
+                );
+              })}
             </tbody>
           </table>
         </div>
@@ -4125,55 +4158,155 @@ function PayrollModal({ employees, payrollRuns, onSave, onClose }) {
 }
 
 // ─── Pay Slip Print ───────────────────────────────────────────────────────────
+// Summary payroll sheet — all employees in one table
 function PaySlipPrint({ run, businessInfo, onClose }) {
   const cc = COUNTRY_CONFIG[businessInfo.country || 'india'];
   const fmt = (n) => currency(n, cc.currency);
+  const lines = run?.lines || [];
+  const period = `${MONTHS.find(m=>m[0]===run?.month)?.[1] || run?.month} ${run?.year}`;
   return (
-    <div style={{ padding: 32, fontFamily: 'Inter, sans-serif', maxWidth: 600, margin: '0 auto' }} className="print-area">
-      <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 24 }}>
-        <div>
-          <div style={{ fontWeight: 700, fontSize: 20 }}>{businessInfo.name}</div>
-          <div style={{ fontSize: 12, color: '#888' }}>{businessInfo.address}</div>
-        </div>
-        <div style={{ textAlign: 'right' }}>
-          <div style={{ fontWeight: 700, fontSize: 16 }}>Pay Slip</div>
-          <div style={{ fontSize: 12, color: '#888' }}>{run?.month} {run?.year}</div>
-        </div>
+    <div>
+      <div className="no-print" onClick={onClose} style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.4)', zIndex: 998 }} />
+      <div className="no-print" style={{ position: 'fixed', top: 16, right: 24, zIndex: 1001, display: 'flex', gap: 8 }}>
+        <button style={styles.ghostBtn} onClick={onClose}><X size={15}/> Close</button>
+        <button style={styles.primaryBtn} onClick={() => window.print()}><Printer size={15}/> Print</button>
       </div>
-      <table style={{ width: '100%', borderCollapse: 'collapse', marginBottom: 16 }}>
-        <thead>
-          <tr style={{ background: '#1E2A4A', color: '#fff' }}>
-            <th style={{ padding: '8px 12px', textAlign: 'left' }}>Employee</th>
-            <th style={{ padding: '8px 12px', textAlign: 'right' }}>Basic</th>
-            <th style={{ padding: '8px 12px', textAlign: 'right' }}>Allowances</th>
-            <th style={{ padding: '8px 12px', textAlign: 'right' }}>Deductions</th>
-            <th style={{ padding: '8px 12px', textAlign: 'right' }}>Net Pay</th>
-          </tr>
-        </thead>
-        <tbody>
-          {(run?.entries || []).map((e, i) => (
-            <tr key={i} style={{ borderBottom: '1px solid #EAE6DB' }}>
-              <td style={{ padding: '8px 12px' }}>{e.name}</td>
-              <td style={{ padding: '8px 12px', textAlign: 'right' }}>{fmt(e.basic)}</td>
-              <td style={{ padding: '8px 12px', textAlign: 'right' }}>{fmt(e.allowances)}</td>
-              <td style={{ padding: '8px 12px', textAlign: 'right' }}>{fmt(e.deductions)}</td>
-              <td style={{ padding: '8px 12px', textAlign: 'right', fontWeight: 600 }}>{fmt(e.net)}</td>
+      <div className="print-area" style={{ position: 'fixed', inset: 0, background: '#fff', zIndex: 999, overflowY: 'auto', padding: '40px 48px' }}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 20, borderBottom: '2px solid #1E2A4A', paddingBottom: 12 }}>
+          <div>
+            <div className="serif" style={{ fontWeight: 700, fontSize: 20, color: '#1E2A4A' }}>{businessInfo.name}</div>
+            <div style={{ fontSize: 11, color: '#888' }}>{businessInfo.address}</div>
+          </div>
+          <div style={{ textAlign: 'right' }}>
+            <div style={{ fontWeight: 700, fontSize: 15, color: '#C9A24B' }}>PAYROLL SUMMARY</div>
+            <div style={{ fontSize: 12, color: '#888', marginTop: 3 }}>{period}</div>
+          </div>
+        </div>
+        <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12 }}>
+          <thead>
+            <tr style={{ background: '#1E2A4A', color: '#fff' }}>
+              {['Emp ID','Name','Designation','Basic','HRA','DA','Other Allow.','Gross','PF','ESI','TDS','LOP','Total Ded.','Net Pay'].map(h => (
+                <th key={h} style={{ padding: '7px 8px', textAlign: h==='Name'||h==='Designation'||h==='Emp ID' ? 'left' : 'right', fontWeight: 600, fontSize: 11 }}>{h}</th>
+              ))}
             </tr>
-          ))}
-        </tbody>
-        <tfoot>
-          <tr style={{ fontWeight: 700, borderTop: '2px solid #1E2A4A' }}>
-            <td style={{ padding: '8px 12px' }}>Total</td>
-            <td style={{ padding: '8px 12px', textAlign: 'right' }}>{fmt((run?.entries||[]).reduce((s,e)=>s+(e.basic||0),0))}</td>
-            <td style={{ padding: '8px 12px', textAlign: 'right' }}>{fmt((run?.entries||[]).reduce((s,e)=>s+(e.allowances||0),0))}</td>
-            <td style={{ padding: '8px 12px', textAlign: 'right' }}>{fmt((run?.entries||[]).reduce((s,e)=>s+(e.deductions||0),0))}</td>
-            <td style={{ padding: '8px 12px', textAlign: 'right' }}>{fmt(run?.totalNet||0)}</td>
-          </tr>
-        </tfoot>
-      </table>
-      <div style={{ display: 'flex', justifyContent: 'space-between', marginTop: 24 }} className="no-print">
-        <button onClick={() => window.print()} style={{ padding: '8px 20px', background: '#1E2A4A', color: '#fff', border: 'none', borderRadius: 6, cursor: 'pointer' }}><Printer size={14} /> Print</button>
-        <button onClick={onClose} style={{ padding: '8px 20px', background: '#eee', border: 'none', borderRadius: 6, cursor: 'pointer' }}>Close</button>
+          </thead>
+          <tbody>
+            {lines.map((l, i) => (
+              <tr key={i} style={{ borderBottom: '1px solid #EAE6DB', background: i%2===0?'#fff':'#FAFAF7' }}>
+                <td style={{ padding: '6px 8px' }}>{l.empId}</td>
+                <td style={{ padding: '6px 8px', fontWeight: 500 }}>{l.name}</td>
+                <td style={{ padding: '6px 8px', color: '#555' }}>{l.designation}</td>
+                <td style={{ padding: '6px 8px', textAlign: 'right' }}>{fmt(l.basic)}</td>
+                <td style={{ padding: '6px 8px', textAlign: 'right' }}>{fmt(l.hra||0)}</td>
+                <td style={{ padding: '6px 8px', textAlign: 'right' }}>{fmt(l.da||0)}</td>
+                <td style={{ padding: '6px 8px', textAlign: 'right' }}>{fmt(l.other||0)}</td>
+                <td style={{ padding: '6px 8px', textAlign: 'right', fontWeight: 600 }}>{fmt(l.gross)}</td>
+                <td style={{ padding: '6px 8px', textAlign: 'right', color: '#B5453A' }}>{fmt(l.pf||0)}</td>
+                <td style={{ padding: '6px 8px', textAlign: 'right', color: '#B5453A' }}>{fmt(l.esi||0)}</td>
+                <td style={{ padding: '6px 8px', textAlign: 'right', color: '#B5453A' }}>{fmt(l.tds||0)}</td>
+                <td style={{ padding: '6px 8px', textAlign: 'right', color: '#B5453A' }}>{fmt(l.lopAmt||0)}</td>
+                <td style={{ padding: '6px 8px', textAlign: 'right', color: '#B5453A', fontWeight: 600 }}>{fmt(l.totalDeductions||0)}</td>
+                <td style={{ padding: '6px 8px', textAlign: 'right', fontWeight: 700, color: '#065F46' }}>{fmt(l.net||0)}</td>
+              </tr>
+            ))}
+          </tbody>
+          <tfoot>
+            <tr style={{ fontWeight: 700, borderTop: '2px solid #1E2A4A', background: '#F8F5EE' }}>
+              <td colSpan={3} style={{ padding: '7px 8px' }}>TOTAL ({lines.length} employees)</td>
+              <td style={{ padding: '7px 8px', textAlign: 'right' }}>{fmt(lines.reduce((s,l)=>s+(l.basic||0),0))}</td>
+              <td style={{ padding: '7px 8px', textAlign: 'right' }}>{fmt(lines.reduce((s,l)=>s+(l.hra||0),0))}</td>
+              <td style={{ padding: '7px 8px', textAlign: 'right' }}>{fmt(lines.reduce((s,l)=>s+(l.da||0),0))}</td>
+              <td style={{ padding: '7px 8px', textAlign: 'right' }}>{fmt(lines.reduce((s,l)=>s+(l.other||0),0))}</td>
+              <td style={{ padding: '7px 8px', textAlign: 'right' }}>{fmt(lines.reduce((s,l)=>s+(l.gross||0),0))}</td>
+              <td style={{ padding: '7px 8px', textAlign: 'right' }}>{fmt(lines.reduce((s,l)=>s+(l.pf||0),0))}</td>
+              <td style={{ padding: '7px 8px', textAlign: 'right' }}>{fmt(lines.reduce((s,l)=>s+(l.esi||0),0))}</td>
+              <td style={{ padding: '7px 8px', textAlign: 'right' }}>{fmt(lines.reduce((s,l)=>s+(l.tds||0),0))}</td>
+              <td style={{ padding: '7px 8px', textAlign: 'right' }}>{fmt(lines.reduce((s,l)=>s+(l.lopAmt||0),0))}</td>
+              <td style={{ padding: '7px 8px', textAlign: 'right' }}>{fmt(lines.reduce((s,l)=>s+(l.totalDeductions||0),0))}</td>
+              <td style={{ padding: '7px 8px', textAlign: 'right', color: '#065F46' }}>{fmt(lines.reduce((s,l)=>s+(l.net||0),0))}</td>
+            </tr>
+          </tfoot>
+        </table>
+      </div>
+    </div>
+  );
+}
+
+// Individual payslips — one per employee, page-break between each
+function IndividualPaySlips({ run, businessInfo, onClose }) {
+  const cc = COUNTRY_CONFIG[businessInfo.country || 'india'];
+  const fmt = (n) => currency(n, cc.currency);
+  const lines = run?.lines || [];
+  const period = `${MONTHS.find(m=>m[0]===run?.month)?.[1] || run?.month} ${run?.year}`;
+
+  return (
+    <div>
+      <div className="no-print" onClick={onClose} style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.4)', zIndex: 998 }} />
+      <div className="no-print" style={{ position: 'fixed', top: 16, right: 24, zIndex: 1001, display: 'flex', gap: 8 }}>
+        <button style={styles.ghostBtn} onClick={onClose}><X size={15}/> Close</button>
+        <button style={styles.primaryBtn} onClick={() => window.print()}><Printer size={15}/> Print All ({lines.length})</button>
+      </div>
+      <div className="print-area" style={{ position: 'fixed', inset: 0, background: '#fff', zIndex: 999, overflowY: 'auto' }}>
+        {lines.map((l, i) => (
+          <div key={i} style={{ padding: '36px 48px', pageBreakAfter: i < lines.length - 1 ? 'always' : 'auto', borderBottom: i < lines.length - 1 ? '3px dashed #EAE6DB' : 'none' }}>
+            {/* Header */}
+            <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 16, borderBottom: '2px solid #1E2A4A', paddingBottom: 10 }}>
+              <div>
+                <div className="serif" style={{ fontWeight: 700, fontSize: 18, color: '#1E2A4A' }}>{businessInfo.name}</div>
+                <div style={{ fontSize: 11, color: '#888' }}>{businessInfo.address}</div>
+              </div>
+              <div style={{ textAlign: 'right' }}>
+                <div style={{ fontWeight: 700, fontSize: 14, color: '#C9A24B' }}>PAY SLIP</div>
+                <div style={{ fontSize: 12, color: '#555' }}>{period}</div>
+              </div>
+            </div>
+            {/* Employee info */}
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '4px 24px', marginBottom: 16, fontSize: 12 }}>
+              {[['Employee Name', l.name], ['Employee ID', l.empId], ['Designation', l.designation], ['Department', l.department||'—'],
+                ['Working Days', l.workingDays||26], ['Paid Days', (l.workingDays||26)-(l.lopDays||0)], ['LOP Days', l.lopDays||0], ['Bank', l.bankName ? `${l.bankName} · ${l.bankAccount||''}` : '—']
+              ].map(([k,v]) => (
+                <div key={k} style={{ display: 'flex', gap: 8 }}>
+                  <span style={{ color: '#888', minWidth: 110 }}>{k}:</span>
+                  <span style={{ fontWeight: 500, color: '#1E2A4A' }}>{v}</span>
+                </div>
+              ))}
+            </div>
+            {/* Earnings vs Deductions */}
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 16 }}>
+              <div>
+                <div style={{ fontWeight: 700, fontSize: 12, color: '#1E2A4A', borderBottom: '1px solid #EAE6DB', paddingBottom: 4, marginBottom: 6 }}>EARNINGS</div>
+                {[['Basic Salary', l.basic], ['HRA', l.hra||0], ['DA', l.da||0], ['Other Allowances', l.other||0]].map(([k,v]) => (
+                  <div key={k} style={{ display: 'flex', justifyContent: 'space-between', fontSize: 12, padding: '3px 0', borderBottom: '1px solid #F5F3EE' }}>
+                    <span style={{ color: '#555' }}>{k}</span><span>{fmt(v)}</span>
+                  </div>
+                ))}
+                <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 13, fontWeight: 700, marginTop: 6, color: '#1E2A4A' }}>
+                  <span>Gross</span><span>{fmt(l.gross||0)}</span>
+                </div>
+              </div>
+              <div>
+                <div style={{ fontWeight: 700, fontSize: 12, color: '#B5453A', borderBottom: '1px solid #EAE6DB', paddingBottom: 4, marginBottom: 6 }}>DEDUCTIONS</div>
+                {[['PF (Employee)', l.pf||0], ['ESI', l.esi||0], ['TDS', l.tds||0], ['LOP', l.lopAmt||0], [l.otherDeductNote||'Other', l.otherDeductAmt||0]].map(([k,v]) => v > 0 ? (
+                  <div key={k} style={{ display: 'flex', justifyContent: 'space-between', fontSize: 12, padding: '3px 0', borderBottom: '1px solid #F5F3EE' }}>
+                    <span style={{ color: '#555' }}>{k}</span><span style={{ color: '#B5453A' }}>{fmt(v)}</span>
+                  </div>
+                ) : null)}
+                <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 13, fontWeight: 700, marginTop: 6, color: '#B5453A' }}>
+                  <span>Total Deductions</span><span>{fmt(l.totalDeductions||0)}</span>
+                </div>
+              </div>
+            </div>
+            {/* Net pay */}
+            <div style={{ background: '#1E2A4A', color: '#fff', borderRadius: 8, padding: '12px 20px', display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: 16 }}>
+              <span style={{ fontWeight: 600 }}>NET PAY</span>
+              <span style={{ fontSize: 22, fontWeight: 700, color: '#C9A24B' }}>{fmt(l.net||0)}</span>
+            </div>
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 24, marginTop: 32, fontSize: 11, color: '#888' }}>
+              <div style={{ textAlign: 'center' }}><div style={{ borderTop: '1px solid #555', paddingTop: 4, marginTop: 24 }}>Employee Signature</div></div>
+              <div style={{ textAlign: 'center' }}><div style={{ borderTop: '1px solid #555', paddingTop: 4, marginTop: 24 }}>Authorised Signatory</div></div>
+            </div>
+          </div>
+        ))}
       </div>
     </div>
   );
