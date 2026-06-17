@@ -1018,9 +1018,12 @@ function StaffModal({ ownerUid, onSaved, onClose }) {
       onSaved();
     } catch (err) {
       const code = (err && err.code) || '';
+      const msg = (err && err.message) || '';
       if (code.includes('email-already-in-use')) setError('An account with this email already exists.');
       else if (code.includes('invalid-email')) setError('Invalid email address.');
-      else setError('Could not create account. Please try again.');
+      else if (code.includes('weak-password')) setError('Password is too weak. Use at least 6 characters.');
+      else if (msg === 'timeout') setError('Request timed out. Check your internet connection and try again.');
+      else setError('Could not create account (' + (code || msg || 'unknown') + '). Please try again.');
     } finally {
       setBusy(false);
     }

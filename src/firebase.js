@@ -1,4 +1,4 @@
-import { initializeApp } from 'firebase/app';
+import { initializeApp, getApps, getApp } from 'firebase/app';
 import { initializeFirestore, persistentLocalCache, persistentMultipleTabManager, doc, getDoc, getDocFromCache, setDoc, onSnapshot, collection, getDocs, deleteDoc } from 'firebase/firestore';
 import { getStorage, ref, uploadBytes, getDownloadURL, deleteObject } from 'firebase/storage';
 import {
@@ -33,7 +33,7 @@ export const db = initializeFirestore(app, {
 export const auth = getAuth(app);
 export const storage = getStorage(app);
 
-const secondaryApp = initializeApp(firebaseConfig, 'secondary');
+const secondaryApp = getApps().find(a => a.name === 'secondary') || initializeApp(firebaseConfig, 'secondary');
 const secondaryAuth = getAuth(secondaryApp);
 
 export async function signUp(email, password, companyName) {
@@ -108,10 +108,17 @@ export async function getMembership(uid) {
 }
 
 export async function createStaffAccount(ownerUid, email, password, name, role) {
-  const cred = await createUserWithEmailAndPassword(secondaryAuth, email, password);
+  // Timeout wrapper so the UI never hangs forever
+  const withTimeout = (promise, ms = 15000) => Promise.race([
+    promise,
+    new Promise((_, reject) => setTimeout(() => reject(new Error('timeout')), ms)),
+  ]);
+
+  const cred = await withTimeout(createUserWithEmailAndPassword(secondaryAuth, email, password));
   const staffUid = cred.user.uid;
   await updateProfile(cred.user, { displayName: name });
-  await signOut(secondaryAuth);
+  // Sign the secondary auth out so it doesn't interfere with the owner session
+  try { await signOut(secondaryAuth); } catch (_) {}
 
   await setDoc(doc(db, 'staff_memberships', staffUid), {
     ownerUid, role, name, email,
