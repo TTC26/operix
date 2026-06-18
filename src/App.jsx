@@ -66,6 +66,29 @@ const EMPTY_ITEM_ROW = () => ({
   packages: 1, netWeight: 0, grossWeight: 0, dimensions: '',
 });
 
+// ─── Number to words (Indian system) ─────────────────────────────────────────
+function numToWords(n) {
+  const ones = ['','One','Two','Three','Four','Five','Six','Seven','Eight','Nine',
+    'Ten','Eleven','Twelve','Thirteen','Fourteen','Fifteen','Sixteen','Seventeen','Eighteen','Nineteen'];
+  const tens = ['','','Twenty','Thirty','Forty','Fifty','Sixty','Seventy','Eighty','Ninety'];
+  function seg(x) {
+    if (x < 20) return ones[x];
+    if (x < 100) return tens[Math.floor(x/10)] + (x%10 ? ' '+ones[x%10] : '');
+    return ones[Math.floor(x/100)] + ' Hundred' + (x%100 ? ' '+seg(x%100) : '');
+  }
+  n = Math.round(n);
+  if (!n) return 'Zero';
+  let r = '';
+  const cr = Math.floor(n/10000000); n %= 10000000;
+  const lk = Math.floor(n/100000);   n %= 100000;
+  const th = Math.floor(n/1000);     n %= 1000;
+  if (cr) r += seg(cr) + ' Crore ';
+  if (lk) r += seg(lk) + ' Lakh ';
+  if (th) r += seg(th) + ' Thousand ';
+  if (n)  r += seg(n);
+  return r.trim();
+}
+
 // ─── Blank document factory ───────────────────────────────────────────────────
 const blankDoc = (type) => ({
   id: crypto.randomUUID(),
@@ -76,6 +99,7 @@ const blankDoc = (type) => ({
   customerSnapshot: null,
   items: [EMPTY_ITEM_ROW()],
   notes: '',
+  dueDate: '',
   placeOfSupply: '',
   refNumber: '',
   status: 'draft',
@@ -762,6 +786,8 @@ function SettingsView({ businessInfo, setBusinessInfo }) {
     { id: 'executive', label: 'Executive', desc: 'Dark navy header, gold badge',     swatch: 'linear-gradient(135deg,#1E2A4A,#3B4F7A)' },
     { id: 'elegant',   label: 'Elegant',   desc: 'Side accent bar, serif type',      swatch: 'linear-gradient(135deg,#C9A24B 8px,#FAF8F4 8px)' },
     { id: 'fresh',     label: 'Fresh',     desc: 'Soft teal header, airy feel',      swatch: 'linear-gradient(135deg,#E8F5EE,#1A7A3E 200%)' },
+    { id: 'formal',    label: 'Formal',    desc: 'Bordered Indian invoice, T&C',     swatch: 'linear-gradient(135deg,#fff 50%,#eee 50%)' },
+    { id: 'prestige',  label: 'Prestige',  desc: 'Formal with navy band & gold',     swatch: 'linear-gradient(135deg,#1E2A4A 60%,#C9A24B 100%)' },
   ];
 
   return (
@@ -1879,6 +1905,10 @@ function DocEditor({ doc, setDoc, customers, vendors, items, businessInfo, userR
               <input type="date" value={doc.date} onChange={(e) => update('date', e.target.value)} style={{ ...styles.input, ...(isEditable ? {} : styles.inputReadOnly) }} readOnly={!isEditable} />
             </div>
             <div style={{ ...styles.formGroup, flex: 1 }}>
+              <label style={styles.label}>Due date</label>
+              <input type="date" value={doc.dueDate || ''} onChange={(e) => update('dueDate', e.target.value)} style={{ ...styles.input, ...(isEditable ? {} : styles.inputReadOnly) }} readOnly={!isEditable} />
+            </div>
+            <div style={{ ...styles.formGroup, flex: 1 }}>
               <label style={styles.label}>{cc.splitTax ? 'Place of supply (state)' : 'Country / Emirate'}</label>
               <input value={doc.placeOfSupply} onChange={(e) => update('placeOfSupply', e.target.value)} style={{ ...styles.input, ...(isEditable ? {} : styles.inputReadOnly) }} readOnly={!isEditable} />
             </div>
@@ -2068,8 +2098,8 @@ function DocEditor({ doc, setDoc, customers, vendors, items, businessInfo, userR
             if (!template || template === 'classic') return (
               <>
                 <div style={styles.previewHeader}>
-                  <div style={styles.previewBrandRow}>{logo}{brandInfo}</div>
-                  <div style={{ textAlign: 'right' }}>
+                  <div style={{ ...styles.previewBrandRow, flex: 1, minWidth: 0 }}>{logo}{brandInfo}</div>
+                  <div style={{ textAlign: 'right', flexShrink: 0, whiteSpace: 'nowrap', paddingLeft: 16 }}>
                     <div className="serif" style={{ ...styles.previewDocType, color: t.color }}>{t.label}</div>
                     <div style={styles.previewSmall}>No: {doc.number}</div>
                     <div style={styles.previewSmall}>Date: {doc.date}</div>
@@ -2085,7 +2115,7 @@ function DocEditor({ doc, setDoc, customers, vendors, items, businessInfo, userR
               <>
                 <div style={{ background: t.color, borderRadius: 10, padding: '20px 24px', marginBottom: 20 }}>
                   <div style={styles.previewHeader}>
-                    <div style={styles.previewBrandRow}>
+                    <div style={{ ...styles.previewBrandRow, flex: 1, minWidth: 0 }}>
                       {logoDark}
                       <div>
                         <div className="serif" style={{ ...styles.previewBrand, color: '#fff' }}>{businessInfo.name}</div>
@@ -2094,7 +2124,7 @@ function DocEditor({ doc, setDoc, customers, vendors, items, businessInfo, userR
                         <div style={{ ...styles.previewSmall, color: 'rgba(255,255,255,0.8)' }}>{businessInfo.phone} · {businessInfo.email}{businessInfo.website ? ' · ' + businessInfo.website : ''}</div>
                       </div>
                     </div>
-                    <div style={{ textAlign: 'right' }}>
+                    <div style={{ textAlign: 'right', flexShrink: 0, whiteSpace: 'nowrap', paddingLeft: 16 }}>
                       <div className="serif" style={{ ...styles.previewDocType, color: '#fff' }}>{t.label}</div>
                       <div style={{ ...styles.previewSmall, color: 'rgba(255,255,255,0.8)' }}>No: {doc.number}</div>
                       <div style={{ ...styles.previewSmall, color: 'rgba(255,255,255,0.8)' }}>Date: {doc.date}</div>
@@ -2110,8 +2140,8 @@ function DocEditor({ doc, setDoc, customers, vendors, items, businessInfo, userR
               <>
                 <div style={{ borderTop: '3px solid #1E2A4A', paddingTop: 16, marginBottom: 4 }}>
                   <div style={styles.previewHeader}>
-                    <div style={styles.previewBrandRow}>{logo}{brandInfo}</div>
-                    <div style={{ textAlign: 'right' }}>
+                    <div style={{ ...styles.previewBrandRow, flex: 1, minWidth: 0 }}>{logo}{brandInfo}</div>
+                    <div style={{ textAlign: 'right', flexShrink: 0, whiteSpace: 'nowrap', paddingLeft: 16 }}>
                       <div className="serif" style={{ ...styles.previewDocType, color: '#1E2A4A' }}>{t.label}</div>
                       <div style={styles.previewSmall}>No: {doc.number}</div>
                       <div style={styles.previewSmall}>Date: {doc.date}</div>
@@ -2137,7 +2167,7 @@ function DocEditor({ doc, setDoc, customers, vendors, items, businessInfo, userR
                         <div style={{ ...styles.previewSmall, color: '#A9B8D4' }}>{businessInfo.phone} · {businessInfo.email}{businessInfo.website ? ' · ' + businessInfo.website : ''}</div>
                       </div>
                     </div>
-                    <div style={{ textAlign: 'right' }}>
+                    <div style={{ textAlign: 'right', flexShrink: 0, whiteSpace: 'nowrap', paddingLeft: 16 }}>
                       <div style={{ background: t.color, borderRadius: 6, padding: '4px 14px', display: 'inline-block', marginBottom: 8 }}>
                         <div className="serif" style={{ ...styles.previewDocType, color: '#fff' }}>{t.label}</div>
                       </div>
@@ -2157,8 +2187,8 @@ function DocEditor({ doc, setDoc, customers, vendors, items, businessInfo, userR
                   <div style={{ width: 5, borderRadius: 4, background: t.color, marginRight: 18, flexShrink: 0, minHeight: 70 }} />
                   <div style={{ flex: 1 }}>
                     <div style={styles.previewHeader}>
-                      <div style={styles.previewBrandRow}>{logo}{brandInfo}</div>
-                      <div style={{ textAlign: 'right' }}>
+                      <div style={{ ...styles.previewBrandRow, flex: 1, minWidth: 0 }}>{logo}{brandInfo}</div>
+                      <div style={{ textAlign: 'right', flexShrink: 0, whiteSpace: 'nowrap', paddingLeft: 16 }}>
                         <div className="serif" style={{ ...styles.previewDocType, color: t.color }}>{t.label}</div>
                         <div style={styles.previewSmall}>No: {doc.number}</div>
                         <div style={styles.previewSmall}>Date: {doc.date}</div>
@@ -2185,7 +2215,7 @@ function DocEditor({ doc, setDoc, customers, vendors, items, businessInfo, userR
                         <div style={{ ...styles.previewSmall, color: '#3A7A5A' }}>{businessInfo.phone} · {businessInfo.email}{businessInfo.website ? ' · ' + businessInfo.website : ''}</div>
                       </div>
                     </div>
-                    <div style={{ textAlign: 'right' }}>
+                    <div style={{ textAlign: 'right', flexShrink: 0, whiteSpace: 'nowrap', paddingLeft: 16 }}>
                       <div className="serif" style={{ ...styles.previewDocType, color: '#1A7A3E' }}>{t.label}</div>
                       <div style={{ ...styles.previewSmall, color: '#3A7A5A' }}>No: {doc.number}</div>
                       <div style={{ ...styles.previewSmall, color: '#3A7A5A' }}>Date: {doc.date}</div>
@@ -2196,8 +2226,147 @@ function DocEditor({ doc, setDoc, customers, vendors, items, businessInfo, userR
               </>
             );
 
+            // ── Formal / Prestige ──
+            if (template === 'formal' || template === 'prestige') {
+              const isPrestige = template === 'prestige';
+              const bdr = '1px solid #000';
+              const taxRows = cc.splitTax
+                ? (totals.sameState ? [['CGST', totals.cgst], ['SGST', totals.sgst]] : [['IGST', totals.igst]])
+                : [[cc.taxLabel, totals.vat]];
+              return (
+                <div style={{ margin: '-40px -48px', border: bdr, fontSize: 12, fontFamily: 'Arial, sans-serif', color: '#222', lineHeight: 1.5 }}>
+                  {/* Header band */}
+                  <div style={{ background: isPrestige ? '#1E2A4A' : '#fff', color: isPrestige ? '#fff' : '#000', textAlign: 'center', padding: '8px 16px', fontWeight: 700, fontSize: 15, letterSpacing: 1, borderBottom: bdr }}>
+                    {doc.type === 'invoice' ? 'TAX INVOICE' : t.label.toUpperCase()}
+                  </div>
+                  {/* Seller + Logo */}
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', padding: '14px 18px', borderBottom: bdr }}>
+                    <div>
+                      <div style={{ fontWeight: 700, fontSize: 15 }}>{businessInfo.name}</div>
+                      <div style={{ color: '#333' }}>{cc.taxIdLabel}: {businessInfo.gstin}</div>
+                      <div style={{ color: '#333' }}>{businessInfo.address}</div>
+                      {businessInfo.phone && <div style={{ color: '#333' }}>{businessInfo.phone}</div>}
+                      {businessInfo.email && <div style={{ color: '#1A56DB', textDecoration: 'underline' }}>{businessInfo.email}</div>}
+                      {businessInfo.website && <div style={{ color: '#1A56DB' }}>{businessInfo.website}</div>}
+                    </div>
+                    {businessInfo.logo && (
+                      <div style={{ textAlign: 'center', flexShrink: 0, marginLeft: 20 }}>
+                        <img src={businessInfo.logo} alt="logo" style={{ width: 84, height: 84, objectFit: 'contain', display: 'block' }} />
+                        <div style={{ fontSize: 11, fontWeight: 600, marginTop: 4, maxWidth: 100 }}>{businessInfo.name}</div>
+                      </div>
+                    )}
+                  </div>
+                  {/* Buyer + Invoice details */}
+                  <div style={{ display: 'flex', borderBottom: bdr }}>
+                    <div style={{ flex: 1, padding: '10px 18px', borderRight: bdr }}>
+                      {[['Customer', customer?.name],['GSTIN', customer?.gstin || customer?.taxId],['Address', customer?.address],['Mob', customer?.phone],['Email', customer?.email]].map(([k,v]) => (
+                        <div key={k} style={{ display: 'flex', gap: 8, marginBottom: 3 }}>
+                          <span style={{ fontWeight: 700, minWidth: 72 }}>{k}:</span>
+                          <span style={{ color: k === 'Email' && v ? '#1A56DB' : '#222' }}>{v || '—'}</span>
+                        </div>
+                      ))}
+                    </div>
+                    <div style={{ width: 270, padding: '10px 18px' }}>
+                      {[['Invoice No', doc.number],['Date', doc.date],['Due Date', doc.dueDate],['Place of Supply', doc.placeOfSupply]].filter(([,v])=>v).map(([k,v])=>(
+                        <div key={k} style={{ display: 'flex', justifyContent: 'space-between', gap: 12, marginBottom: 5 }}>
+                          <span style={{ fontWeight: 700, whiteSpace: 'nowrap' }}>{k}:</span>
+                          <span style={{ fontWeight: 600, whiteSpace: 'nowrap' }}>{v}</span>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                  {/* Items table */}
+                  <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12 }}>
+                    <thead>
+                      <tr style={{ background: isPrestige ? '#1E2A4A' : '#f0f0f0' }}>
+                        {['Sl No','HSN/SAC','Item Description','Tax %','Qty','Rate','Amount'].map((h,i)=>(
+                          <th key={h} style={{ padding:'7px 8px', fontWeight:700, color: isPrestige?'#fff':'#222', textAlign: h==='Item Description'?'left':['Qty','Rate','Amount'].includes(h)?'right':'center', borderBottom: bdr, borderRight: i<6?'1px solid #ccc':'none', whiteSpace:'nowrap' }}>{h}</th>
+                        ))}
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {(doc.items||[]).map((it,i)=>{
+                        const amt = (Number(it.qty)||0)*(Number(it.rate)||0);
+                        return (
+                          <tr key={it.id||i} style={{ borderBottom:'1px solid #ddd', background: i%2===0?'#fff':'#fafafa' }}>
+                            <td style={{ padding:'6px 8px', textAlign:'center', borderRight:'1px solid #ddd' }}>{i+1}</td>
+                            <td style={{ padding:'6px 8px', textAlign:'center', borderRight:'1px solid #ddd' }}>{it.hsn||''}</td>
+                            <td style={{ padding:'6px 8px', borderRight:'1px solid #ddd', fontWeight:500 }}>{it.name||<span style={{color:'#bbb'}}>Item description</span>}</td>
+                            <td style={{ padding:'6px 8px', textAlign:'center', borderRight:'1px solid #ddd' }}>{it.gst||0}</td>
+                            <td style={{ padding:'6px 8px', textAlign:'right', borderRight:'1px solid #ddd' }}>{it.qty||0}</td>
+                            <td style={{ padding:'6px 8px', textAlign:'right', borderRight:'1px solid #ddd' }}>{fmt(it.rate||0)}</td>
+                            <td style={{ padding:'6px 8px', textAlign:'right', fontWeight:600 }}>{fmt(amt)}</td>
+                          </tr>
+                        );
+                      })}
+                      {(doc.items||[]).length < 3 && [...Array(Math.max(0,3-(doc.items||[]).length))].map((_,i)=>(
+                        <tr key={'pad'+i} style={{ borderBottom:'1px solid #eee', height:26 }}>
+                          {[...Array(7)].map((_,j)=><td key={j} style={{ borderRight:j<6?'1px solid #eee':'none' }}>&nbsp;</td>)}
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                  {/* Footer */}
+                  <div style={{ display:'flex', borderTop: bdr }}>
+                    <div style={{ flex:1, padding:'10px 18px', borderRight: bdr }}>
+                      <div style={{ color:'#555', fontStyle:'italic', marginBottom:8 }}>Thank you for your valuable business!</div>
+                      <div style={{ marginBottom:8 }}>
+                        <div style={{ fontWeight:700, textDecoration:'underline', marginBottom:3 }}>Amount in words:</div>
+                        <div style={{ fontStyle:'italic' }}>{numToWords(Math.round(totals.grandTotal))} Rupees Only.</div>
+                      </div>
+                      {doc.notes && <div style={{ marginBottom:6 }}><div style={{ fontWeight:700 }}>Notes:</div><div style={{ color:'#444' }}>{doc.notes}</div></div>}
+                      {(businessInfo.bankName||businessInfo.bankAccount) && (
+                        <div style={{ marginTop:6 }}>
+                          <div style={{ fontWeight:700 }}>Bank Details:</div>
+                          {businessInfo.bankName && <div>Bank: {businessInfo.bankName}</div>}
+                          {businessInfo.bankAccount && <div>A/C: {businessInfo.bankAccount}</div>}
+                          {businessInfo.ifsc && <div>IFSC: {businessInfo.ifsc}</div>}
+                          {businessInfo.upi && <div>UPI: {businessInfo.upi}</div>}
+                        </div>
+                      )}
+                    </div>
+                    <div style={{ width:270, display:'flex', flexDirection:'column' }}>
+                      <div>
+                        <div style={{ display:'flex', justifyContent:'space-between', padding:'5px 16px', borderBottom:'1px solid #ddd' }}>
+                          <span>Taxable</span><span style={{ fontWeight:600 }}>{fmt(totals.subtotal)}</span>
+                        </div>
+                        {taxRows.map(([label,val])=>(
+                          <div key={label} style={{ display:'flex', justifyContent:'space-between', padding:'5px 16px', borderBottom:'1px solid #ddd' }}>
+                            <span>{label}</span><span style={{ fontWeight:600 }}>{fmt(val||0)}</span>
+                          </div>
+                        ))}
+                        <div style={{ display:'flex', justifyContent:'space-between', padding:'7px 16px', borderTop:'2px solid #000', fontWeight:700, fontSize:13 }}>
+                          <span>Total (Round off)</span><span>{fmt(Math.round(totals.grandTotal))}</span>
+                        </div>
+                      </div>
+                      <div style={{ textAlign:'right', padding:'10px 18px', borderTop: bdr, marginTop:'auto' }}>
+                        <div style={{ fontWeight:600, marginBottom:32, fontSize:12 }}>{businessInfo.name}</div>
+                        <div style={{ borderTop:'1px solid #555', paddingTop:5, fontSize:11, color:'#555' }}>
+                          {businessInfo.signatory || 'Authorized Signatory'}
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                  {/* Terms & Conditions */}
+                  {businessInfo.terms && (
+                    <div style={{ borderTop: bdr, padding:'8px 18px' }}>
+                      <div style={{ fontWeight:700, marginBottom:4 }}>Terms &amp; Conditions:</div>
+                      <div style={{ fontSize:11, color:'#555', lineHeight:1.7 }}>
+                        {businessInfo.terms.split('\n').filter(Boolean).map((line,i)=>(
+                          <div key={i}>{i+1}. {line}</div>
+                        ))}
+                        {!businessInfo.terms.includes('\n') && <div>{businessInfo.terms}</div>}
+                      </div>
+                    </div>
+                  )}
+                </div>
+              );
+            }
+
             return null;
           })()}
+
+          {(template !== 'formal' && template !== 'prestige') && (<>
 
           {doc.type === 'packing_list' ? (
             <>
@@ -2429,6 +2598,7 @@ function DocEditor({ doc, setDoc, customers, vendors, items, businessInfo, userR
               </div>
             </div>
           </div>
+          </>)}
         </div>
       </div>
     </div>
