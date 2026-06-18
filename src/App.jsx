@@ -6686,11 +6686,11 @@ export default function App() {
   useEffect(() => {
     return watchAuth(async (firebaseUser) => {
       if (firebaseUser) {
-        if (!firebaseUser.emailVerified) {
-          setUser(firebaseUser);
-          setAuthReady(true);
-          return;
-        }
+        // Set user immediately so login screen disappears right away
+        setUser(firebaseUser);
+        setAuthReady(true);
+        if (!firebaseUser.emailVerified) return;
+        // Resolve ownerUid (admin = own uid, staff = owner's uid)
         try {
           const membership = await getMembership(firebaseUser.uid);
           if (membership) {
@@ -6704,8 +6704,6 @@ export default function App() {
           setOwnerUid(firebaseUser.uid);
           setUserRole('admin');
         }
-        setUser(firebaseUser);
-        setAuthReady(true);
       } else {
         setUser(null);
         setOwnerUid(null);
@@ -6785,9 +6783,33 @@ export default function App() {
   const setEngDocs          = mkSet(_setEngD,  'engDocs');
   const setEnquiries        = mkSet(_setEnq,   'enquiries');
 
+  // ── Document number helpers ───────────────────────────────────────────────
+  // Indian financial year: April–March. Returns "25-26", "26-27", etc.
+  function getFY(dateStr) {
+    const d = dateStr ? new Date(dateStr) : new Date();
+    const y = d.getFullYear();
+    const m = d.getMonth() + 1; // 1-based
+    const fyStart = m >= 4 ? y : y - 1;
+    return `${String(fyStart).slice(-2)}-${String(fyStart + 1).slice(-2)}`;
+  }
+
+  // Auto-generate next sequential number for a doc type + financial year.
+  // Format: INV/25-26/001  (user can still override in the number field)
+  function nextDocNumber(type, dateStr) {
+    const fy = getFY(dateStr);
+    const prefix = (DOC_TYPES[type]?.prefix || type.toUpperCase());
+    const pattern = `${prefix}/${fy}/`;
+    const nums = (documents || [])
+      .filter((d) => d.type === type && (d.number || '').startsWith(pattern))
+      .map((d) => parseInt((d.number || '').split('/').pop(), 10) || 0);
+    const next = nums.length ? Math.max(...nums) + 1 : 1;
+    return `${pattern}${String(next).padStart(3, '0')}`;
+  }
+
   // ── Document helpers ──────────────────────────────────────────────────────
   function startNewDoc(type) {
-    setActiveDoc({ ...blankDoc(type) });
+    const today = new Date().toISOString().slice(0, 10);
+    setActiveDoc({ ...blankDoc(type), number: nextDocNumber(type, today) });
     setView('doceditor');
   }
 
@@ -6805,30 +6827,32 @@ export default function App() {
   function saveDoc(status, rejectionNote = '') {
     if (!activeDoc) return;
     const id = activeDoc.id || crypto.randomUUID();
-    const isNew = !documents.find((d) => d.id === id);
-    const saved = {
+    const patch = {
       ...activeDoc,
       id,
       status,
       rejectionNote: rejectionNote || activeDoc.rejectionNote || '',
       updatedAt: Date.now(),
-      ...(isNew ? { createdAt: Date.now() } : {}),
     };
-    setDocuments(isNew
-      ? [...documents, saved]
-      : documents.map((d) => d.id === saved.id ? saved : d));
+    // Use functional update so we NEVER read stale documents closure
+    setDocuments((prev) => {
+      const existing = prev.find((d) => d.id === id);
+      const saved = { ...patch, createdAt: existing?.createdAt || Date.now() };
+      return existing ? prev.map((d) => d.id === id ? saved : d) : [...prev, saved];
+    });
     setActiveDoc(null);
     setView('documents');
   }
 
   function convertDoc(newType, srcDoc) {
+    const today = new Date().toISOString().slice(0, 10);
     setActiveDoc({
       ...blankDoc(newType),
+      number: nextDocNumber(newType, today),
       customerId: srcDoc.customerId,
       customerSnapshot: srcDoc.customerSnapshot,
       items: (srcDoc.items || []).map((it) => ({ ...it, id: crypto.randomUUID() })),
       notes: srcDoc.notes || '',
-      // Store as object so DocEditor can display "Based on Invoice INV-001"
       linkedFrom: { id: srcDoc.id, docType: srcDoc.type, docNumber: srcDoc.number },
     });
     setView('doceditor');
@@ -6859,15 +6883,16 @@ export default function App() {
   }, [documents, vouchers, businessInfo, country]);
 
   // ── Early gates ───────────────────────────────────────────────────────────
-  if (!authReady) {
-    return (
-      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', height: '100vh', color: '#888780', fontSize: 14 }}>
-        Loading…
-      </div>
-    );
-  }
+  const spinner = (
+    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', height: '100vh', color: '#888780', fontSize: 14 }}>
+      Loading…
+    </div>
+  );
+  if (!authReady) return spinner;
   if (!user) return <AuthScreen />;
   if (!user.emailVerified) return <VerifyEmailScreen user={user} onLogout={handleLogout} />;
+  // Still resolving ownerUid (membership lookup in progress)
+  if (!ownerUid) return spinner;
 
   // ── Content renderer ──────────────────────────────────────────────────────
   function renderContent() {
@@ -7116,12 +7141,14 @@ export default function App() {
             userRole={userRole}
             onConvertToQuotation={(enq) => {
               const cust = customers.find((c) => c.id === enq.customerId);
+              const today = new Date().toISOString().slice(0, 10);
               setActiveDoc({
                 ...blankDoc('quotation'),
+                number: nextDocNumber('quotation', today),
                 customerId: enq.customerId || '',
                 customerSnapshot: cust || null,
                 notes: enq.interest || '',
-                linkedFrom: enq.id,
+                linkedFrom: { id: enq.id, docType: 'enquiry', docNumber: enq.number },
               });
               setView('doceditor');
             }}
@@ -7176,11 +7203,9 @@ export default function App() {
         <CustomerModal
           customer={editingCustomer}
           onSave={(c) => {
-            const isNew = !c.id;
             const saved = { ...c, id: c.id || crypto.randomUUID() };
-            setCustomers(isNew
-              ? [...customers, saved]
-              : customers.map((x) => x.id === saved.id ? saved : x));
+            const isNew = !c.id;
+            setCustomers((prev) => isNew ? [...prev, saved] : prev.map((x) => x.id === saved.id ? saved : x));
             if (isNew && view === 'doceditor' && activeDoc) {
               setActiveDoc((d) => ({ ...d, customerId: saved.id, customerSnapshot: saved }));
             }
@@ -7195,11 +7220,9 @@ export default function App() {
         <VendorModal
           vendor={editingVendor}
           onSave={(v) => {
-            const isNew = !v.id;
             const saved = { ...v, id: v.id || crypto.randomUUID() };
-            setVendors(isNew
-              ? [...vendors, saved]
-              : vendors.map((x) => x.id === saved.id ? saved : x));
+            const isNew = !v.id;
+            setVendors((prev) => isNew ? [...prev, saved] : prev.map((x) => x.id === saved.id ? saved : x));
             if (isNew && view === 'doceditor' && activeDoc) {
               setActiveDoc((d) => ({ ...d, customerId: saved.id, customerSnapshot: saved }));
             }
@@ -7214,11 +7237,9 @@ export default function App() {
         <ItemModal
           item={editingItem}
           onSave={(it) => {
-            const isNew = !it.id;
             const saved = { ...it, id: it.id || crypto.randomUUID() };
-            setItems(isNew
-              ? [...items, saved]
-              : items.map((x) => x.id === saved.id ? saved : x));
+            const isNew = !it.id;
+            setItems((prev) => isNew ? [...prev, saved] : prev.map((x) => x.id === saved.id ? saved : x));
             setEditingItem(null);
           }}
           onClose={() => setEditingItem(null)}
