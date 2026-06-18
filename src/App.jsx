@@ -183,7 +183,7 @@ const styles = {
   secondaryBtn: { display: 'flex', alignItems: 'center', gap: 6, background: '#F5F3EE', color: '#1E2A4A', border: '1px solid #DDD8CC', borderRadius: 8, padding: '9px 16px', fontSize: 13.5, fontWeight: 500, cursor: 'pointer' },
   ghostBtn: { display: 'flex', alignItems: 'center', gap: 6, background: '#fff', color: '#1E2A4A', border: '1px solid #DDD8CC', borderRadius: 8, padding: '9px 14px', fontSize: 13.5, fontWeight: 500, cursor: 'pointer' },
   iconBtn: { background: 'none', border: 'none', padding: 6, borderRadius: 6, display: 'flex', alignItems: 'center', cursor: 'pointer' },
-  preview: { background: '#fff', border: '1px solid #EAE6DB', borderRadius: 12, padding: '40px 48px', boxShadow: '0 2px 12px rgba(30,42,74,0.07)', minHeight: 680, fontSize: 13 },
+  preview: { background: '#fff', border: '1px solid #EAE6DB', borderRadius: 12, padding: '40px 48px', boxShadow: '0 2px 12px rgba(30,42,74,0.07)', minHeight: 680, fontSize: 13, position: 'relative', overflow: 'hidden' },
   previewHeader: { display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' },
   previewBrand: { fontSize: 19, fontWeight: 600, color: '#1E2A4A' },
   previewSmall: { fontSize: 12, color: '#888780', marginTop: 2, lineHeight: 1.5 },
@@ -2031,6 +2031,21 @@ function DocEditor({ doc, setDoc, customers, vendors, items, businessInfo, userR
         </div>
 
         <div style={styles.preview} className="print-area">
+          {/* ── DRAFT watermark — visible on screen + print when not approved ── */}
+          {doc.status !== 'approved' && (
+            <div style={{
+              position: 'absolute', top: 0, left: 0, right: 0, bottom: 0,
+              pointerEvents: 'none', zIndex: 9, display: 'flex',
+              alignItems: 'center', justifyContent: 'center', overflow: 'hidden',
+            }}>
+              <span className="draft-watermark" style={{
+                fontSize: 110, fontWeight: 900, letterSpacing: 12,
+                color: 'rgba(185, 28, 28, 0.10)',
+                transform: 'rotate(-35deg)', userSelect: 'none',
+                whiteSpace: 'nowrap', fontFamily: 'Arial, sans-serif',
+              }}>DRAFT</span>
+            </div>
+          )}
           {(() => {
             const logoStyle = { width: 64, height: 64, objectFit: 'contain', borderRadius: 8, display: 'block' };
             const logoWrap = (dark) => businessInfo.logo ? (
@@ -7177,7 +7192,14 @@ export default function App() {
         .serif { font-family: 'Lora', Georgia, serif; }
         button { cursor: pointer; font-family: inherit; }
         input, textarea, select { font-family: inherit; }
-        @media print { .no-print { display: none !important; } }
+        @media print {
+          .no-print { display: none !important; }
+          .draft-watermark {
+            -webkit-print-color-adjust: exact !important;
+            print-color-adjust: exact !important;
+            color: rgba(185, 28, 28, 0.13) !important;
+          }
+        }
         @page { margin: 12mm; }
       `}</style>
 
