@@ -4132,6 +4132,7 @@ function PayrollModal({ employees, payrollRuns, onSave, onClose }) {
       workingDays: 26, paidDays: 26,
       pf: parseFloat(pf.toFixed(2)), esi: parseFloat(esi.toFixed(2)), tds,
       lopDays: 0, lopAmt: 0,
+      advance: 0,
       otherDeductAmt: 0, otherDeductNote: '',
       totalDeductions: parseFloat(totalDeductions.toFixed(2)),
       net: parseFloat((gross - totalDeductions).toFixed(2)),
@@ -4143,7 +4144,7 @@ function PayrollModal({ employees, payrollRuns, onSave, onClose }) {
   function recalcLine(line) {
     const dailyRate = line.gross / (line.workingDays || 26);
     const lopAmt    = parseFloat((dailyRate * (line.lopDays || 0)).toFixed(2));
-    const totalDeductions = parseFloat((line.pf + line.esi + line.tds + lopAmt + (line.otherDeductAmt || 0)).toFixed(2));
+    const totalDeductions = parseFloat((line.pf + line.esi + line.tds + lopAmt + (line.advance || 0) + (line.otherDeductAmt || 0)).toFixed(2));
     const net = Math.max(0, parseFloat((line.gross - totalDeductions).toFixed(2)));
     return { ...line, lopAmt, totalDeductions, net };
   }
@@ -4215,7 +4216,7 @@ function PayrollModal({ employees, payrollRuns, onSave, onClose }) {
               <table style={{ ...styles.table, fontSize: 12 }}>
                 <thead>
                   <tr style={{ background: '#F7F4EE' }}>
-                    {['Employee','Gross (₹)','Working Days','Paid Days','PF (₹)','ESI (₹)','TDS (₹)','LOP Days','LOP (₹)','Other Deduct','Note','Net Pay (₹)'].map(h=>(
+                    {['Employee','Gross (₹)','Working Days','Paid Days','PF (₹)','ESI (₹)','TDS (₹)','LOP Days','LOP (₹)','Advance (₹)','Other Deduct','Note','Net Pay (₹)'].map(h=>(
                       <th key={h} style={{ ...styles.th, whiteSpace: 'nowrap', padding: '8px 8px' }}>{h}</th>
                     ))}
                   </tr>
@@ -4248,6 +4249,14 @@ function PayrollModal({ employees, payrollRuns, onSave, onClose }) {
                       {/* LOP amount — auto-calculated */}
                       <td style={{ ...styles.td, textAlign: 'right', color: l.lopAmt > 0 ? '#B5453A' : '#ccc' }}>
                         {l.lopAmt > 0 ? `-${currency(l.lopAmt)}` : '—'}
+                      </td>
+                      {/* Advance deduction */}
+                      <td style={{ ...styles.td, textAlign: 'right' }}>
+                        <input type="number" min={0}
+                          style={{ ...styles.input, width: 70, margin: 0, textAlign: 'right', padding: '4px 6px', borderColor: l.advance > 0 ? '#C9A24B' : undefined }}
+                          value={l.advance || ''}
+                          placeholder="0"
+                          onChange={e => updateLine(i, { advance: parseFloat(e.target.value)||0 })} />
                       </td>
                       {/* Other deduction amount */}
                       <td style={{ ...styles.td, textAlign: 'right' }}>
@@ -4315,7 +4324,7 @@ function PaySlipPrint({ run, businessInfo, onClose }) {
         <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12 }}>
           <thead>
             <tr style={{ background: '#1E2A4A', color: '#fff' }}>
-              {['Emp ID','Name','Designation','Basic','HRA','DA','Other Allow.','Gross','PF','ESI','TDS','LOP','Total Ded.','Net Pay'].map(h => (
+              {['Emp ID','Name','Designation','Basic','HRA','DA','Other Allow.','Gross','PF','ESI','TDS','LOP','Advance','Other Ded.','Total Ded.','Net Pay'].map(h => (
                 <th key={h} style={{ padding: '7px 8px', textAlign: h==='Name'||h==='Designation'||h==='Emp ID' ? 'left' : 'right', fontWeight: 600, fontSize: 11 }}>{h}</th>
               ))}
             </tr>
@@ -4335,6 +4344,8 @@ function PaySlipPrint({ run, businessInfo, onClose }) {
                 <td style={{ padding: '6px 8px', textAlign: 'right', color: '#B5453A' }}>{fmt(l.esi||0)}</td>
                 <td style={{ padding: '6px 8px', textAlign: 'right', color: '#B5453A' }}>{fmt(l.tds||0)}</td>
                 <td style={{ padding: '6px 8px', textAlign: 'right', color: '#B5453A' }}>{fmt(l.lopAmt||0)}</td>
+                <td style={{ padding: '6px 8px', textAlign: 'right', color: '#B5453A' }}>{fmt(l.advance||0)}</td>
+                <td style={{ padding: '6px 8px', textAlign: 'right', color: '#B5453A' }}>{fmt(l.otherDeductAmt||0)}</td>
                 <td style={{ padding: '6px 8px', textAlign: 'right', color: '#B5453A', fontWeight: 600 }}>{fmt(l.totalDeductions||0)}</td>
                 <td style={{ padding: '6px 8px', textAlign: 'right', fontWeight: 700, color: '#065F46' }}>{fmt(l.net||0)}</td>
               </tr>
@@ -4352,6 +4363,8 @@ function PaySlipPrint({ run, businessInfo, onClose }) {
               <td style={{ padding: '7px 8px', textAlign: 'right' }}>{fmt(lines.reduce((s,l)=>s+(l.esi||0),0))}</td>
               <td style={{ padding: '7px 8px', textAlign: 'right' }}>{fmt(lines.reduce((s,l)=>s+(l.tds||0),0))}</td>
               <td style={{ padding: '7px 8px', textAlign: 'right' }}>{fmt(lines.reduce((s,l)=>s+(l.lopAmt||0),0))}</td>
+              <td style={{ padding: '7px 8px', textAlign: 'right' }}>{fmt(lines.reduce((s,l)=>s+(l.advance||0),0))}</td>
+              <td style={{ padding: '7px 8px', textAlign: 'right' }}>{fmt(lines.reduce((s,l)=>s+(l.otherDeductAmt||0),0))}</td>
               <td style={{ padding: '7px 8px', textAlign: 'right' }}>{fmt(lines.reduce((s,l)=>s+(l.totalDeductions||0),0))}</td>
               <td style={{ padding: '7px 8px', textAlign: 'right', color: '#065F46' }}>{fmt(lines.reduce((s,l)=>s+(l.net||0),0))}</td>
             </tr>
@@ -4386,8 +4399,8 @@ function IndividualPaySlips({ run, businessInfo, onClose }) {
                 <div style={{ fontSize: 11, color: '#888' }}>{businessInfo.address}</div>
               </div>
               <div style={{ textAlign: 'right' }}>
-                <div style={{ fontWeight: 700, fontSize: 14, color: '#C9A24B' }}>PAY SLIP</div>
-                <div style={{ fontSize: 12, color: '#555' }}>{period}</div>
+                <div style={{ fontWeight: 900, fontSize: 18, color: '#1E2A4A', letterSpacing: 2, textTransform: 'uppercase' }}>PAY SLIP</div>
+                <div style={{ fontSize: 12, color: '#555', marginTop: 2 }}>{period}</div>
               </div>
             </div>
             {/* Employee info */}
@@ -4416,11 +4429,11 @@ function IndividualPaySlips({ run, businessInfo, onClose }) {
               </div>
               <div>
                 <div style={{ fontWeight: 700, fontSize: 12, color: '#B5453A', borderBottom: '1px solid #EAE6DB', paddingBottom: 4, marginBottom: 6 }}>DEDUCTIONS</div>
-                {[['PF (Employee)', l.pf||0], ['ESI', l.esi||0], ['TDS', l.tds||0], ['LOP', l.lopAmt||0], [l.otherDeductNote||'Other', l.otherDeductAmt||0]].map(([k,v]) => v > 0 ? (
+                {[['PF (Employee)', l.pf||0], ['ESI', l.esi||0], ['TDS', l.tds||0], ['LOP', l.lopAmt||0], ['Advance', l.advance||0], [l.otherDeductNote||'Other Deductions', l.otherDeductAmt||0]].map(([k,v]) => (
                   <div key={k} style={{ display: 'flex', justifyContent: 'space-between', fontSize: 12, padding: '3px 0', borderBottom: '1px solid #F5F3EE' }}>
-                    <span style={{ color: '#555' }}>{k}</span><span style={{ color: '#B5453A' }}>{fmt(v)}</span>
+                    <span style={{ color: '#555' }}>{k}</span><span style={{ color: v > 0 ? '#B5453A' : '#aaa' }}>{fmt(v)}</span>
                   </div>
-                ) : null)}
+                ))}
                 <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 13, fontWeight: 700, marginTop: 6, color: '#B5453A' }}>
                   <span>Total Deductions</span><span>{fmt(l.totalDeductions||0)}</span>
                 </div>
@@ -7194,6 +7207,19 @@ export default function App() {
         input, textarea, select { font-family: inherit; }
         @media print {
           .no-print { display: none !important; }
+          body > * { visibility: hidden !important; }
+          .print-area, .print-area * { visibility: visible !important; }
+          .print-area {
+            position: absolute !important;
+            top: 0 !important; left: 0 !important;
+            right: auto !important; bottom: auto !important;
+            width: 100% !important; height: auto !important;
+            overflow: visible !important;
+            border: none !important;
+            box-shadow: none !important;
+            border-radius: 0 !important;
+            z-index: 9999 !important;
+          }
           .draft-watermark {
             -webkit-print-color-adjust: exact !important;
             print-color-adjust: exact !important;
