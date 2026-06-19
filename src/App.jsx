@@ -59,12 +59,17 @@ const CONVERT_TO = {
 };
 
 // ─── Default item row ─────────────────────────────────────────────────────────
-const EMPTY_ITEM_ROW = () => ({
-  id: crypto.randomUUID(),
-  itemId: '', name: '', hsn: '',
-  qty: 1, rate: 0, gst: 18,
-  packages: 1, netWeight: 0, grossWeight: 0, dimensions: '',
-});
+// Pass businessInfo to pick up the user's configured tax rate; falls back to country default
+const EMPTY_ITEM_ROW = (businessInfo) => {
+  const cc = COUNTRY_CONFIG[(businessInfo && businessInfo.country)] || COUNTRY_CONFIG.india;
+  const defaultGst = (businessInfo && businessInfo.taxRate !== undefined) ? businessInfo.taxRate : cc.defaultTaxRate;
+  return {
+    id: crypto.randomUUID(),
+    itemId: '', name: '', hsn: '',
+    qty: 1, rate: 0, gst: defaultGst,
+    packages: 1, netWeight: 0, grossWeight: 0, dimensions: '',
+  };
+};
 
 // ─── Number to words (Indian system) ─────────────────────────────────────────
 function numToWords(n) {
@@ -90,14 +95,14 @@ function numToWords(n) {
 }
 
 // ─── Blank document factory ───────────────────────────────────────────────────
-const blankDoc = (type) => ({
+const blankDoc = (type, businessInfo) => ({
   id: crypto.randomUUID(),
   type,
   number: '',
   date: new Date().toISOString().slice(0, 10),
   customerId: '',
   customerSnapshot: null,
-  items: [EMPTY_ITEM_ROW()],
+  items: [EMPTY_ITEM_ROW(businessInfo)],
   notes: '',
   dueDate: '',
   placeOfSupply: '',
@@ -674,7 +679,7 @@ function ItemsList({ items, setEditing, setItems, businessInfo }) {
         <h1 className="serif" style={styles.h1}>Items & services</h1>
         <p style={styles.muted}>Saved items auto-fill price, HSN/SAC code and tax rate on documents.</p>
       </div>
-      <button onClick={() => { const cc = COUNTRY_CONFIG[(businessInfo && businessInfo.country)] || COUNTRY_CONFIG.india; setEditing({ name: '', hsn: '', purchaseRate: 0, saleRate: 0, gst: cc.defaultTaxRate }); }} style={styles.primaryBtn}><Plus size={15} /> Add item</button>
+      <button onClick={() => { const cc = COUNTRY_CONFIG[(businessInfo && businessInfo.country)] || COUNTRY_CONFIG.india; setEditing({ name: '', hsn: '', purchaseRate: 0, saleRate: 0, gst: businessInfo.taxRate ?? cc.defaultTaxRate }); }} style={styles.primaryBtn}><Plus size={15} /> Add item</button>
       <div style={{ ...styles.list, marginTop: 16 }}>
         {items.length === 0 && <div style={styles.emptyBox}>No items yet. Add products or services to reuse across documents.</div>}
         {items.map((it) => (
@@ -729,8 +734,8 @@ function ItemModal({ item, onSave, onClose, businessInfo = {} }) {
       {cc.hasTax && (
         <div style={{ display: 'flex', gap: 12 }}>
           <div style={{ ...styles.formGroup, flex: 1 }}>
-            <label style={styles.label}>{cc.taxLabel} % {cc.defaultTaxRate > 0 ? `(default ${cc.defaultTaxRate}%)` : ''}</label>
-            <input type="number" value={form.gst ?? cc.defaultTaxRate} onChange={e => set('gst', Number(e.target.value))} style={styles.input} />
+            <label style={styles.label}>{cc.taxLabel} %</label>
+            <input type="number" value={form.gst ?? (businessInfo.taxRate ?? cc.defaultTaxRate)} onChange={e => set('gst', Number(e.target.value))} style={styles.input} />
           </div>
           <div style={{ ...styles.formGroup, flex: 1 }} />
         </div>
@@ -924,18 +929,23 @@ function SettingsView({ businessInfo, setBusinessInfo }) {
           <label style={styles.label}>Country / Region</label>
           <select
             value={form.country || 'india'}
-            onChange={(e) => setForm((p) => ({ ...p, country: e.target.value }))}
+            onChange={(e) => {
+              const newCountry = e.target.value;
+              const newCc = COUNTRY_CONFIG[newCountry] || COUNTRY_CONFIG.other;
+              setForm((p) => ({ ...p, country: newCountry, taxRate: newCc.defaultTaxRate }));
+            }}
             style={{ ...styles.input, cursor: 'pointer' }}
           >
             {Object.entries(COUNTRY_CONFIG).map(([id, cfg]) => (
               <option key={id} value={id}>
-                {cfg.flag} {cfg.label} — {cfg.currency.trim()}{cfg.hasTax ? ` · ${cfg.taxLabel} ${cfg.defaultTaxRate}%` : ' · No tax'}
+                {cfg.flag} {cfg.label} — {cfg.currency.trim()}{cfg.hasTax ? ` · ${cfg.taxLabel}` : ' · No tax'}
               </option>
             ))}
           </select>
-          {/* Country info pill */}
+          {/* Country info pills */}
           {(() => {
             const sel = COUNTRY_CONFIG[form.country || 'india'] || COUNTRY_CONFIG.other;
+            const rate = form.taxRate !== undefined ? form.taxRate : sel.defaultTaxRate;
             return (
               <div style={{ display: 'flex', gap: 8, marginTop: 8, flexWrap: 'wrap' }}>
                 <span style={{ background: '#EEF5F0', color: '#1A7A3E', borderRadius: 12, padding: '3px 10px', fontSize: 12, fontWeight: 600 }}>
@@ -946,7 +956,7 @@ function SettingsView({ businessInfo, setBusinessInfo }) {
                 </span>
                 {sel.hasTax ? (
                   <span style={{ background: '#FEF3CD', color: '#92400E', borderRadius: 12, padding: '3px 10px', fontSize: 12, fontWeight: 600 }}>
-                    {sel.taxLabel} {sel.defaultTaxRate}%
+                    {sel.taxLabel} {rate}%
                   </span>
                 ) : (
                   <span style={{ background: '#E5F4ED', color: '#1A7A3E', borderRadius: 12, padding: '3px 10px', fontSize: 12, fontWeight: 600 }}>
@@ -957,6 +967,48 @@ function SettingsView({ businessInfo, setBusinessInfo }) {
             );
           })()}
         </div>
+
+        {/* Tax rate field — only shown for tax-enabled countries */}
+        {(() => {
+          const sel = COUNTRY_CONFIG[form.country || 'india'] || COUNTRY_CONFIG.other;
+          if (!sel.hasTax) return null;
+          const rate = form.taxRate !== undefined ? form.taxRate : sel.defaultTaxRate;
+          return (
+            <div style={styles.formGroup}>
+              <label style={styles.label}>
+                {sel.taxLabel} Rate (%)
+                <span style={{ marginLeft: 8, fontSize: 11, color: '#888780', fontWeight: 400 }}>
+                  — applies to new documents only; past documents keep their saved rates
+                </span>
+              </label>
+              <div style={{ display: 'flex', gap: 10, alignItems: 'center' }}>
+                <div style={{ position: 'relative', flex: 1, maxWidth: 160 }}>
+                  <input
+                    type="number"
+                    min={0}
+                    max={100}
+                    step={0.5}
+                    value={rate}
+                    onChange={(e) => setForm((p) => ({ ...p, taxRate: parseFloat(e.target.value) || 0 }))}
+                    style={{ ...styles.input, paddingRight: 36 }}
+                  />
+                  <span style={{ position: 'absolute', right: 12, top: '50%', transform: 'translateY(-50%)', color: '#888780', fontSize: 14, fontWeight: 600 }}>%</span>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setForm((p) => ({ ...p, taxRate: sel.defaultTaxRate }))}
+                  style={{ ...styles.ghostBtn, fontSize: 12, padding: '6px 12px', color: '#888780' }}
+                  title={`Reset to ${sel.taxLabel} standard rate (${sel.defaultTaxRate}%)`}
+                >
+                  Reset to {sel.defaultTaxRate}%
+                </button>
+              </div>
+              <div style={{ fontSize: 11, color: '#888780', marginTop: 4 }}>
+                Standard {sel.taxLabel} rate for {sel.label}: <strong>{sel.defaultTaxRate}%</strong>. Edit only if your business uses a different rate (e.g. zero-rated, reduced rate).
+              </div>
+            </div>
+          );
+        })()}
 
         <div style={styles.formGroup}>
           <label style={styles.label}>Company type</label>
@@ -1978,7 +2030,7 @@ function DocEditor({ doc, setDoc, customers, vendors, items, businessInfo, userR
   }
 
   function addRow() {
-    setDoc((d) => ({ ...d, items: [...d.items, EMPTY_ITEM_ROW()] }));
+    setDoc((d) => ({ ...d, items: [...d.items, EMPTY_ITEM_ROW(businessInfo)] }));
   }
 
   function removeRow(rowId) {
@@ -7251,7 +7303,7 @@ export default function App() {
   // ── Document helpers ──────────────────────────────────────────────────────
   function startNewDoc(type) {
     const today = new Date().toISOString().slice(0, 10);
-    setActiveDoc({ ...blankDoc(type), number: nextDocNumber(type, today) });
+    setActiveDoc({ ...blankDoc(type, businessInfo), number: nextDocNumber(type, today) });
     setView('doceditor');
   }
 
@@ -7289,7 +7341,7 @@ export default function App() {
   function convertDoc(newType, srcDoc) {
     const today = new Date().toISOString().slice(0, 10);
     setActiveDoc({
-      ...blankDoc(newType),
+      ...blankDoc(newType, businessInfo),
       number: nextDocNumber(newType, today),
       customerId: srcDoc.customerId,
       customerSnapshot: srcDoc.customerSnapshot,
@@ -7597,7 +7649,7 @@ export default function App() {
               const cust = customers.find((c) => c.id === enq.customerId);
               const today = new Date().toISOString().slice(0, 10);
               setActiveDoc({
-                ...blankDoc('quotation'),
+                ...blankDoc('quotation', businessInfo),
                 number: nextDocNumber('quotation', today),
                 customerId: enq.customerId || '',
                 customerSnapshot: cust || null,
