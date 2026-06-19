@@ -232,7 +232,7 @@ const styles = {
   secondaryBtn: { display: 'flex', alignItems: 'center', gap: 6, background: '#F5F3EE', color: '#1E2A4A', border: '1px solid #DDD8CC', borderRadius: 8, padding: '9px 16px', fontSize: 13.5, fontWeight: 500, cursor: 'pointer' },
   ghostBtn: { display: 'flex', alignItems: 'center', gap: 6, background: '#fff', color: '#1E2A4A', border: '1px solid #DDD8CC', borderRadius: 8, padding: '9px 14px', fontSize: 13.5, fontWeight: 500, cursor: 'pointer' },
   iconBtn: { background: 'none', border: 'none', padding: 6, borderRadius: 6, display: 'flex', alignItems: 'center', cursor: 'pointer' },
-  preview: { background: '#fff', border: '1px solid #EAE6DB', borderRadius: 12, padding: '40px 48px', boxShadow: '0 2px 12px rgba(30,42,74,0.07)', minHeight: 680, fontSize: 13, position: 'relative', overflow: 'hidden' },
+  preview: { background: '#fff', border: '1px solid #EAE6DB', borderRadius: 12, padding: '40px 48px', boxShadow: '0 2px 12px rgba(30,42,74,0.07)', minHeight: 680, fontSize: 13, position: 'relative', overflow: 'visible' },
   previewHeader: { display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' },
   previewBrand: { fontSize: 19, fontWeight: 600, color: '#1E2A4A' },
   previewSmall: { fontSize: 12, color: '#888780', marginTop: 2, lineHeight: 1.5 },
@@ -2313,9 +2313,82 @@ function DocEditor({ doc, setDoc, customers, vendors, items, businessInfo, userR
           })()}
 
           <div style={styles.formGroup}>
-            <label style={styles.label}>Notes / terms</label>
-            <textarea value={doc.notes} onChange={(e) => update('notes', e.target.value)} style={{ ...styles.input, minHeight: 70, resize: 'vertical', ...(isEditable ? {} : styles.inputReadOnly) }} readOnly={!isEditable} />
+            <label style={styles.label}>Notes</label>
+            <textarea value={doc.notes} onChange={(e) => update('notes', e.target.value)} style={{ ...styles.input, minHeight: 60, resize: 'vertical', ...(isEditable ? {} : styles.inputReadOnly) }} readOnly={!isEditable} placeholder="Additional notes for this document…" />
           </div>
+
+          <div style={styles.formGroup}>
+            <label style={styles.label}>
+              Terms &amp; Conditions
+              <span style={{ marginLeft: 8, fontSize: 11, color: '#B0AC9F', fontWeight: 400 }}>per document</span>
+            </label>
+            <textarea
+              value={doc.terms || ''}
+              onChange={(e) => update('terms', e.target.value)}
+              style={{ ...styles.input, minHeight: 70, resize: 'vertical', ...(isEditable ? {} : styles.inputReadOnly) }}
+              readOnly={!isEditable}
+              placeholder={businessInfo.terms || 'e.g. Payment due within 30 days. Goods once sold cannot be returned.'}
+            />
+            {isEditable && businessInfo.terms && !doc.terms && (
+              <button
+                type="button"
+                onClick={() => update('terms', businessInfo.terms)}
+                style={{ ...styles.ghostBtn, fontSize: 11.5, marginTop: 4, padding: '3px 10px', color: '#888780' }}
+              >
+                ↓ Copy from profile defaults
+              </button>
+            )}
+          </div>
+
+          {/* Items shortcut — Add line button in left panel */}
+          {doc.type !== 'packing_list' && (
+            <div style={{ borderTop: '1px solid #EAE6DB', paddingTop: 12, marginTop: 4 }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
+                <label style={{ ...styles.label, marginBottom: 0 }}>
+                  Line items <span style={{ background: '#EAE6DB', borderRadius: 10, padding: '1px 8px', fontSize: 11, fontWeight: 600, marginLeft: 6 }}>{doc.items.length}</span>
+                </label>
+                {isEditable && (
+                  <button onClick={addRow} style={{ ...styles.primaryBtn, fontSize: 12, padding: '5px 12px' }}>
+                    <Plus size={13} /> Add item
+                  </button>
+                )}
+              </div>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 4, maxHeight: 180, overflowY: 'auto' }}>
+                {doc.items.map((it, i) => (
+                  <div key={it.id} style={{ display: 'flex', alignItems: 'center', gap: 6, background: '#FAFAF8', borderRadius: 6, padding: '5px 8px', fontSize: 12 }}>
+                    <span style={{ color: '#B0AC9F', minWidth: 18, fontSize: 11 }}>{i + 1}</span>
+                    <input
+                      value={it.name}
+                      onChange={(e) => updateItem(it.id, 'name', e.target.value)}
+                      placeholder="Item description"
+                      readOnly={!isEditable}
+                      style={{ flex: 1, border: 'none', background: 'transparent', fontSize: 12, color: '#1E2A4A', outline: 'none', cursor: isEditable ? 'text' : 'default' }}
+                    />
+                    <input
+                      type="number"
+                      value={it.qty}
+                      onChange={(e) => updateItem(it.id, 'qty', parseFloat(e.target.value) || 0)}
+                      readOnly={!isEditable}
+                      style={{ width: 36, border: 'none', background: 'transparent', fontSize: 11, color: '#888780', textAlign: 'right', outline: 'none' }}
+                      title="Qty"
+                    />
+                    <span style={{ color: '#ccc', fontSize: 10 }}>×</span>
+                    <input
+                      type="number"
+                      value={it.rate}
+                      onChange={(e) => updateItem(it.id, 'rate', parseFloat(e.target.value) || 0)}
+                      readOnly={!isEditable}
+                      style={{ width: 64, border: 'none', background: 'transparent', fontSize: 11, color: '#888780', textAlign: 'right', outline: 'none' }}
+                      title="Rate"
+                    />
+                    {isEditable && (
+                      <button onClick={() => removeRow(it.id)} style={{ ...styles.iconBtn, padding: 2 }}><Trash2 size={12} color="#B5453A" /></button>
+                    )}
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
 
           {/* Mark as paid — admin only, after approval */}
           {userRole === 'admin' && doc.status === 'approved' && doc.type === 'invoice' && (
@@ -2536,7 +2609,7 @@ function DocEditor({ doc, setDoc, customers, vendors, items, businessInfo, userR
                       ))}
                     </div>
                     <div style={{ width: 270, padding: '10px 18px' }}>
-                      {[['Invoice No', doc.number],['Date', doc.date],['Due Date', doc.dueDate],['Place of Supply', doc.placeOfSupply]].filter(([,v])=>v).map(([k,v])=>(
+                      {[[`${t.label} No`, doc.number],['Date', doc.date],['Due Date', doc.dueDate],['Place of Supply', doc.placeOfSupply]].filter(([,v])=>v).map(([k,v])=>(
                         <div key={k} style={{ display: 'flex', justifyContent: 'space-between', gap: 12, marginBottom: 5 }}>
                           <span style={{ fontWeight: 700, whiteSpace: 'nowrap' }}>{k}:</span>
                           <span style={{ fontWeight: 600, whiteSpace: 'nowrap' }}>{v}</span>
@@ -2616,15 +2689,15 @@ function DocEditor({ doc, setDoc, customers, vendors, items, businessInfo, userR
                       </div>
                     </div>
                   </div>
-                  {/* Terms & Conditions */}
-                  {businessInfo.terms && (
+                  {/* Terms & Conditions — doc-level first, fall back to profile default */}
+                  {(doc.terms || businessInfo.terms) && (
                     <div style={{ borderTop: bdr, padding:'8px 18px' }}>
                       <div style={{ fontWeight:700, marginBottom:4 }}>Terms &amp; Conditions:</div>
                       <div style={{ fontSize:11, color:'#555', lineHeight:1.7 }}>
-                        {businessInfo.terms.split('\n').filter(Boolean).map((line,i)=>(
+                        {(doc.terms || businessInfo.terms).split('\n').filter(Boolean).map((line,i)=>(
                           <div key={i}>{i+1}. {line}</div>
                         ))}
-                        {!businessInfo.terms.includes('\n') && <div>{businessInfo.terms}</div>}
+                        {!(doc.terms || businessInfo.terms).includes('\n') && <div>{doc.terms || businessInfo.terms}</div>}
                       </div>
                     </div>
                   )}
@@ -2827,11 +2900,18 @@ function DocEditor({ doc, setDoc, customers, vendors, items, businessInfo, userR
 
               {/* Notes / Terms */}
               <div>
-                {(doc.notes || businessInfo.terms) && (
+                {(doc.notes || doc.terms || businessInfo.terms) && (
                   <>
                     <div style={styles.billToLabel}>Notes &amp; Terms</div>
                     {doc.notes && <div style={{ fontSize: 12, color: '#555', lineHeight: 1.6, marginBottom: 4 }}>{doc.notes}</div>}
-                    {businessInfo.terms && <div style={{ fontSize: 11.5, color: '#888780', lineHeight: 1.6, fontStyle: 'italic' }}>{businessInfo.terms}</div>}
+                    {(doc.terms || businessInfo.terms) && (
+                      <div style={{ fontSize: 11.5, color: '#888780', lineHeight: 1.6, fontStyle: 'italic' }}>
+                        {(doc.terms || businessInfo.terms).split('\n').filter(Boolean).map((line, i) => (
+                          <div key={i}>{i + 1}. {line}</div>
+                        ))}
+                        {!(doc.terms || businessInfo.terms).includes('\n') && <div>{doc.terms || businessInfo.terms}</div>}
+                      </div>
+                    )}
                   </>
                 )}
               </div>
