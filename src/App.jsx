@@ -2353,37 +2353,49 @@ function DocEditor({ doc, setDoc, customers, vendors, items, businessInfo, userR
                   </button>
                 )}
               </div>
-              <div style={{ display: 'flex', flexDirection: 'column', gap: 4, maxHeight: 180, overflowY: 'auto' }}>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 6, maxHeight: 260, overflowY: 'auto' }}>
                 {doc.items.map((it, i) => (
-                  <div key={it.id} style={{ display: 'flex', alignItems: 'center', gap: 6, background: '#FAFAF8', borderRadius: 6, padding: '5px 8px', fontSize: 12 }}>
-                    <span style={{ color: '#B0AC9F', minWidth: 18, fontSize: 11 }}>{i + 1}</span>
-                    <input
-                      value={it.name}
-                      onChange={(e) => updateItem(it.id, 'name', e.target.value)}
-                      placeholder="Item description"
-                      readOnly={!isEditable}
-                      style={{ flex: 1, border: 'none', background: 'transparent', fontSize: 12, color: '#1E2A4A', outline: 'none', cursor: isEditable ? 'text' : 'default' }}
-                    />
-                    <input
-                      type="number"
-                      value={it.qty}
-                      onChange={(e) => updateItem(it.id, 'qty', parseFloat(e.target.value) || 0)}
-                      readOnly={!isEditable}
-                      style={{ width: 36, border: 'none', background: 'transparent', fontSize: 11, color: '#888780', textAlign: 'right', outline: 'none' }}
-                      title="Qty"
-                    />
-                    <span style={{ color: '#ccc', fontSize: 10 }}>×</span>
-                    <input
-                      type="number"
-                      value={it.rate}
-                      onChange={(e) => updateItem(it.id, 'rate', parseFloat(e.target.value) || 0)}
-                      readOnly={!isEditable}
-                      style={{ width: 64, border: 'none', background: 'transparent', fontSize: 11, color: '#888780', textAlign: 'right', outline: 'none' }}
-                      title="Rate"
-                    />
-                    {isEditable && (
-                      <button onClick={() => removeRow(it.id)} style={{ ...styles.iconBtn, padding: 2 }}><Trash2 size={12} color="#B5453A" /></button>
+                  <div key={it.id} style={{ background: '#FAFAF8', borderRadius: 6, padding: '6px 8px', fontSize: 12 }}>
+                    {isEditable && items.length > 0 && (
+                      <select
+                        value={it.itemId || ''}
+                        onChange={(e) => selectItem(it.id, e.target.value)}
+                        style={{ width: '100%', border: '1px solid #DDD8CE', borderRadius: 4, fontSize: 11, padding: '3px 6px', marginBottom: 5, background: '#fff', color: '#1E2A4A' }}
+                      >
+                        <option value="">— Select from items master —</option>
+                        {items.map((m) => <option key={m.id} value={m.id}>{m.name}</option>)}
+                      </select>
                     )}
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                      <span style={{ color: '#B0AC9F', minWidth: 18, fontSize: 11 }}>{i + 1}</span>
+                      <input
+                        value={it.name}
+                        onChange={(e) => updateItem(it.id, 'name', e.target.value)}
+                        placeholder="Item description"
+                        readOnly={!isEditable}
+                        style={{ flex: 1, border: 'none', background: 'transparent', fontSize: 12, color: '#1E2A4A', outline: 'none', cursor: isEditable ? 'text' : 'default' }}
+                      />
+                      <input
+                        type="number"
+                        value={it.qty}
+                        onChange={(e) => updateItem(it.id, 'qty', parseFloat(e.target.value) || 0)}
+                        readOnly={!isEditable}
+                        style={{ width: 36, border: 'none', background: 'transparent', fontSize: 11, color: '#888780', textAlign: 'right', outline: 'none' }}
+                        title="Qty"
+                      />
+                      <span style={{ color: '#ccc', fontSize: 10 }}>×</span>
+                      <input
+                        type="number"
+                        value={it.rate}
+                        onChange={(e) => updateItem(it.id, 'rate', parseFloat(e.target.value) || 0)}
+                        readOnly={!isEditable}
+                        style={{ width: 64, border: 'none', background: 'transparent', fontSize: 11, color: '#888780', textAlign: 'right', outline: 'none' }}
+                        title="Rate"
+                      />
+                      {isEditable && (
+                        <button onClick={() => removeRow(it.id)} style={{ ...styles.iconBtn, padding: 2 }}><Trash2 size={12} color="#B5453A" /></button>
+                      )}
+                    </div>
                   </div>
                 ))}
               </div>
@@ -2697,7 +2709,6 @@ function DocEditor({ doc, setDoc, customers, vendors, items, businessInfo, userR
                         {(doc.terms || businessInfo.terms).split('\n').filter(Boolean).map((line,i)=>(
                           <div key={i}>{i+1}. {line}</div>
                         ))}
-                        {!(doc.terms || businessInfo.terms).includes('\n') && <div>{doc.terms || businessInfo.terms}</div>}
                       </div>
                     </div>
                   )}
@@ -2909,7 +2920,6 @@ function DocEditor({ doc, setDoc, customers, vendors, items, businessInfo, userR
                         {(doc.terms || businessInfo.terms).split('\n').filter(Boolean).map((line, i) => (
                           <div key={i}>{i + 1}. {line}</div>
                         ))}
-                        {!(doc.terms || businessInfo.terms).includes('\n') && <div>{doc.terms || businessInfo.terms}</div>}
                       </div>
                     )}
                   </>
@@ -7427,6 +7437,9 @@ export default function App() {
       customerSnapshot: srcDoc.customerSnapshot,
       items: (srcDoc.items || []).map((it) => ({ ...it, id: crypto.randomUUID() })),
       notes: srcDoc.notes || '',
+      terms: srcDoc.terms || '',
+      discount: srcDoc.discount || 0,
+      placeOfSupply: srcDoc.placeOfSupply || '',
       linkedFrom: { id: srcDoc.id, docType: srcDoc.type, docNumber: srcDoc.number },
     });
     setView('doceditor');
