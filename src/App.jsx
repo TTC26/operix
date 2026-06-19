@@ -8709,7 +8709,7 @@ export default function App() {
             const isNew = !v.id;
             setVendors((prev) => isNew ? [...prev, saved] : prev.map((x) => x.id === saved.id ? saved : x));
             if (isNew && view === 'doceditor' && activeDoc) {
-              setActiv              setActiveDoc((d) => ({ ...d, customerId: saved.id, customerSnapshot: saved }));
+              setActiveDoc((d) => ({ ...d, customerId: saved.id, customerSnapshot: saved }));
             }
             setEditingVendor(null);
           }}
