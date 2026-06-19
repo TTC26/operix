@@ -117,10 +117,22 @@ const blankDoc = (type) => ({
 });
 
 // ─── Country config ───────────────────────────────────────────────────────────
+// hasTax: false → hides all tax columns, totals, GSTR/VAT reports, tax ID fields
 const COUNTRY_CONFIG = {
-  india: { label: 'India 🇮🇳', currency: '₹',    taxLabel: 'GST', taxIdLabel: 'GSTIN', taxIdPlaceholder: '33AAAAA0000A1Z5',  locale: 'en-IN', splitTax: true  },
-  uae:   { label: 'UAE 🇦🇪',   currency: 'AED ',  taxLabel: 'VAT', taxIdLabel: 'TRN',   taxIdPlaceholder: '100123456700003',   locale: 'en-AE', splitTax: false },
-  other: { label: 'Other 🌍',  currency: '$',     taxLabel: 'Tax', taxIdLabel: 'Tax ID', taxIdPlaceholder: '',                  locale: 'en-US', splitTax: false },
+  india:       { label: 'India',          flag: '🇮🇳', currency: '₹',     taxLabel: 'GST',  taxIdLabel: 'GSTIN',       taxIdPlaceholder: '22AAAAA0000A1Z5',  locale: 'en-IN', hasTax: true,  splitTax: true,  defaultTaxRate: 18, stateLabel: 'State'   },
+  uae:         { label: 'UAE',            flag: '🇦🇪', currency: 'AED ',  taxLabel: 'VAT',  taxIdLabel: 'TRN',         taxIdPlaceholder: '100123456700003',  locale: 'en-AE', hasTax: true,  splitTax: false, defaultTaxRate: 5,  stateLabel: 'Emirate' },
+  saudi:       { label: 'Saudi Arabia',   flag: '🇸🇦', currency: 'SAR ',  taxLabel: 'VAT',  taxIdLabel: 'VAT No.',     taxIdPlaceholder: '300000000000003',  locale: 'ar-SA', hasTax: true,  splitTax: false, defaultTaxRate: 15, stateLabel: 'Region'  },
+  bahrain:     { label: 'Bahrain',        flag: '🇧🇭', currency: 'BHD ',  taxLabel: 'VAT',  taxIdLabel: 'VAT No.',     taxIdPlaceholder: '',                 locale: 'ar-BH', hasTax: true,  splitTax: false, defaultTaxRate: 10, stateLabel: 'Governorate' },
+  oman:        { label: 'Oman',           flag: '🇴🇲', currency: 'OMR ',  taxLabel: 'VAT',  taxIdLabel: 'VAT No.',     taxIdPlaceholder: '',                 locale: 'ar-OM', hasTax: true,  splitTax: false, defaultTaxRate: 5,  stateLabel: 'Governorate' },
+  kuwait:      { label: 'Kuwait',         flag: '🇰🇼', currency: 'KWD ',  taxLabel: '',     taxIdLabel: 'CR No.',      taxIdPlaceholder: '',                 locale: 'ar-KW', hasTax: false, splitTax: false, defaultTaxRate: 0,  stateLabel: 'Governorate' },
+  qatar:       { label: 'Qatar',          flag: '🇶🇦', currency: 'QAR ',  taxLabel: '',     taxIdLabel: 'CR No.',      taxIdPlaceholder: '',                 locale: 'ar-QA', hasTax: false, splitTax: false, defaultTaxRate: 0,  stateLabel: 'Municipality' },
+  uk:          { label: 'United Kingdom', flag: '🇬🇧', currency: '£',     taxLabel: 'VAT',  taxIdLabel: 'VAT No.',     taxIdPlaceholder: 'GB000000000',      locale: 'en-GB', hasTax: true,  splitTax: false, defaultTaxRate: 20, stateLabel: 'County'  },
+  usa:         { label: 'United States',  flag: '🇺🇸', currency: '$',     taxLabel: 'Tax',  taxIdLabel: 'EIN',         taxIdPlaceholder: '00-0000000',       locale: 'en-US', hasTax: false, splitTax: false, defaultTaxRate: 0,  stateLabel: 'State'   },
+  singapore:   { label: 'Singapore',      flag: '🇸🇬', currency: 'S$',    taxLabel: 'GST',  taxIdLabel: 'GST Reg No.', taxIdPlaceholder: 'M90000001A',       locale: 'en-SG', hasTax: true,  splitTax: false, defaultTaxRate: 9,  stateLabel: 'Region'  },
+  australia:   { label: 'Australia',      flag: '🇦🇺', currency: 'A$',    taxLabel: 'GST',  taxIdLabel: 'ABN',         taxIdPlaceholder: '51 824 753 556',   locale: 'en-AU', hasTax: true,  splitTax: false, defaultTaxRate: 10, stateLabel: 'State'   },
+  malaysia:    { label: 'Malaysia',       flag: '🇲🇾', currency: 'RM ',   taxLabel: 'SST',  taxIdLabel: 'SST No.',     taxIdPlaceholder: '',                 locale: 'ms-MY', hasTax: true,  splitTax: false, defaultTaxRate: 6,  stateLabel: 'State'   },
+  canada:      { label: 'Canada',         flag: '🇨🇦', currency: 'CA$',   taxLabel: 'GST',  taxIdLabel: 'Business No.',taxIdPlaceholder: '123456789RT0001',  locale: 'en-CA', hasTax: true,  splitTax: false, defaultTaxRate: 5,  stateLabel: 'Province'},
+  other:       { label: 'Other',          flag: '🌍',  currency: '$',     taxLabel: 'Tax',  taxIdLabel: 'Tax ID',      taxIdPlaceholder: '',                 locale: 'en-US', hasTax: false, splitTax: false, defaultTaxRate: 0,  stateLabel: 'State'   },
 };
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
@@ -132,18 +144,20 @@ function currency(n, sym) {
 
 function computeTotals(doc, sellerState, country) {
   let subtotal = 0, cgst = 0, sgst = 0, igst = 0, vat = 0;
-  const cc = COUNTRY_CONFIG[country || 'india'];
+  const cc = COUNTRY_CONFIG[country] || COUNTRY_CONFIG.other;
   const sameState = cc.splitTax && sellerState && doc.placeOfSupply &&
     sellerState.trim().toLowerCase() === doc.placeOfSupply.trim().toLowerCase();
-  doc.items.forEach((it) => {
+  (doc.items || []).forEach((it) => {
     const amt = (Number(it.qty) || 0) * (Number(it.rate) || 0);
     subtotal += amt;
-    const taxAmt = amt * (Number(it.gst) || 0) / 100;
-    if (cc.splitTax) {
-      if (sameState) { cgst += taxAmt / 2; sgst += taxAmt / 2; }
-      else { igst += taxAmt; }
-    } else {
-      vat += taxAmt;
+    if (cc.hasTax) {
+      const taxAmt = amt * (Number(it.gst) || 0) / 100;
+      if (cc.splitTax) {
+        if (sameState) { cgst += taxAmt / 2; sgst += taxAmt / 2; }
+        else { igst += taxAmt; }
+      } else {
+        vat += taxAmt;
+      }
     }
   });
   const totalTax = cgst + sgst + igst + vat;
@@ -500,7 +514,7 @@ function CustomersList({ customers, setEditing, setCustomers, documents }) {
             <div key={c.id} style={styles.recordRow}>
               <div style={{ flex: 1 }}>
                 <div style={styles.docRowTitle}>{c.name}</div>
-                <div style={styles.docRowSub}>{c.address} · GSTIN {c.gstin || '—'} · {c.state}</div>
+                <div style={styles.docRowSub}>{c.address}{c.gstin ? ` · ${c.gstin}` : ''} · {c.state}</div>
               </div>
               <div style={styles.muted}>{count} docs</div>
               <button onClick={() => setEditing(c)} style={styles.ghostBtn}>Edit</button>
@@ -513,14 +527,67 @@ function CustomersList({ customers, setEditing, setCustomers, documents }) {
   );
 }
 
-function CustomerModal({ customer, onSave, onClose }) {
+function TaxIdVerifyButton({ taxId, country }) {
+  const [status, setStatus] = useState(null); // null | 'valid' | 'invalid' | 'checking'
+  function verifyFormat() {
+    if (!taxId) { setStatus('invalid'); return; }
+    let ok = false;
+    if (country === 'india') {
+      // GSTIN: 15 chars, format: 2 digits + 5 letters + 4 digits + 1 letter + 1 alphanumeric + Z + 1 alphanumeric
+      ok = /^[0-3][0-9][A-Z]{5}[0-9]{4}[A-Z][1-9A-Z]Z[0-9A-Z]$/.test(taxId.toUpperCase());
+    } else if (country === 'uae') {
+      // TRN: exactly 15 digits
+      ok = /^[0-9]{15}$/.test(taxId.replace(/\s/g, ''));
+    } else {
+      ok = taxId.length > 3;
+    }
+    setStatus(ok ? 'valid' : 'invalid');
+  }
+  function openPortal() {
+    if (country === 'india') window.open('https://services.gst.gov.in/services/searchtp', '_blank');
+    else if (country === 'uae') window.open('https://www.tax.gov.ae/en/services/vat.verification.aspx', '_blank');
+  }
+  return (
+    <div style={{ display: 'flex', gap: 6, alignItems: 'center', marginTop: 4 }}>
+      <button type="button" onClick={verifyFormat} style={{ ...styles.ghostBtn, padding: '4px 10px', fontSize: 12 }}>
+        ✓ Validate format
+      </button>
+      {(country === 'india' || country === 'uae') && (
+        <button type="button" onClick={openPortal} style={{ ...styles.ghostBtn, padding: '4px 10px', fontSize: 12, color: '#1A56DB' }}>
+          🔗 Verify on portal
+        </button>
+      )}
+      {status === 'valid' && <span style={{ color: '#1A7A3E', fontSize: 12, fontWeight: 600 }}>✓ Format valid</span>}
+      {status === 'invalid' && <span style={{ color: '#B5453A', fontSize: 12, fontWeight: 600 }}>✗ Invalid format</span>}
+    </div>
+  );
+}
+
+function CustomerModal({ customer, onSave, onClose, businessInfo = {} }) {
   const [form, setForm] = useState(customer);
+  const country = businessInfo.country || 'india';
+  const cc = COUNTRY_CONFIG[country] || COUNTRY_CONFIG.india;
+  const stateLabel = cc.stateLabel || 'State';
+  const fields = [
+    { key: 'name',    label: 'Name' },
+    ...(cc.hasTax ? [{ key: 'gstin', label: cc.taxIdLabel, isTax: true }] : []),
+    { key: 'address', label: 'Address' },
+    { key: 'state',   label: stateLabel },
+    { key: 'phone',   label: 'Phone' },
+    { key: 'email',   label: 'Email' },
+  ];
   return (
     <Modal onClose={onClose} title={customer.id ? 'Edit customer' : 'Add customer'}>
-      {['name', 'address', 'gstin', 'state', 'phone', 'email'].map((f) => (
-        <div key={f} style={styles.formGroup}>
-          <label style={styles.label}>{f === 'gstin' ? 'Tax ID (GSTIN / TRN)' : f.charAt(0).toUpperCase() + f.slice(1)}</label>
-          <input value={form[f] || ''} onChange={(e) => setForm((p) => ({ ...p, [f]: e.target.value }))} style={styles.input} />
+      {fields.map(({ key, label, isTax }) => (
+        <div key={key} style={styles.formGroup}>
+          <label style={styles.label}>{label}</label>
+          <input
+            value={form[key] || ''}
+            onChange={(e) => setForm((p) => ({ ...p, [key]: e.target.value }))}
+            style={styles.input}
+            placeholder={isTax ? cc.taxIdPlaceholder : ''}
+          />
+          {isTax && <TaxIdVerifyButton taxId={form[key]} country={country} />}
         </div>
       ))}
       <button onClick={() => onSave(form)} style={styles.primaryBtn}>Save customer</button>
@@ -546,7 +613,7 @@ function VendorsList({ vendors, setEditing, setVendors, documents }) {
             <div key={v.id} style={styles.recordRow}>
               <div style={{ flex: 1 }}>
                 <div style={styles.docRowTitle}>{v.name}</div>
-                <div style={styles.docRowSub}>{v.address} · GSTIN {v.gstin || '—'} · {v.state}</div>
+                <div style={styles.docRowSub}>{v.address}{v.gstin ? ` · ${v.gstin}` : ''} · {v.state}</div>
               </div>
               <div style={styles.muted}>{count} docs</div>
               <button onClick={() => setEditing(v)} style={styles.ghostBtn}>Edit</button>
@@ -564,14 +631,26 @@ function VendorsList({ vendors, setEditing, setVendors, documents }) {
 // STOCK TRACKING COMPONENTS
 // ─────────────────────────────────────────────
 
-function VendorModal({ vendor, onSave, onClose }) {
+function VendorModal({ vendor, onSave, onClose, businessInfo = {} }) {
   const [form, setForm] = useState(vendor);
+  const country = businessInfo.country || 'india';
+  const cc = COUNTRY_CONFIG[country] || COUNTRY_CONFIG.india;
+  const stateLabel = cc.stateLabel || 'State';
+  const fields = [
+    { key: 'name',    label: 'Name' },
+    ...(cc.hasTax ? [{ key: 'gstin', label: cc.taxIdLabel, isTax: true }] : []),
+    { key: 'address', label: 'Address' },
+    { key: 'state',   label: stateLabel },
+    { key: 'phone',   label: 'Phone' },
+    { key: 'email',   label: 'Email' },
+  ];
   return (
     <Modal onClose={onClose} title={vendor.id ? 'Edit vendor' : 'Add vendor'}>
-      {['name', 'address', 'gstin', 'state', 'phone', 'email'].map((f) => (
-        <div key={f} style={styles.formGroup}>
-          <label style={styles.label}>{f === 'gstin' ? 'Tax ID (GSTIN / TRN)' : f.charAt(0).toUpperCase() + f.slice(1)}</label>
-          <input value={form[f]} onChange={(e) => setForm((p) => ({ ...p, [f]: e.target.value }))} style={styles.input} />
+      {fields.map(({ key, label, isTax }) => (
+        <div key={key} style={styles.formGroup}>
+          <label style={styles.label}>{label}</label>
+          <input value={form[key] || ''} onChange={(e) => setForm((p) => ({ ...p, [key]: e.target.value }))} style={styles.input} placeholder={isTax ? cc.taxIdPlaceholder : ''} />
+          {isTax && <TaxIdVerifyButton taxId={form[key]} country={country} />}
         </div>
       ))}
       <button onClick={() => onSave(form)} style={styles.primaryBtn}>Save vendor</button>
@@ -610,9 +689,10 @@ function ItemsList({ items, setEditing, setItems }) {
   );
 }
 
-function ItemModal({ item, onSave, onClose }) {
+function ItemModal({ item, onSave, onClose, businessInfo = {} }) {
   const [form, setForm] = useState({ openingStock: 0, minStock: 0, unit: '', ...item });
   const set = (k, v) => setForm(p => ({ ...p, [k]: v }));
+  const cc = COUNTRY_CONFIG[businessInfo.country || 'india'] || COUNTRY_CONFIG.other;
   return (
     <Modal onClose={onClose} title={item.id ? 'Edit item' : 'Add item'}>
       <div style={styles.formGroup}>
@@ -639,13 +719,15 @@ function ItemModal({ item, onSave, onClose }) {
           <input type="number" value={form.saleRate ?? form.rate ?? 0} onChange={e => set('saleRate', Number(e.target.value))} style={styles.input} placeholder="0.00" />
         </div>
       </div>
-      <div style={{ display: 'flex', gap: 12 }}>
-        <div style={{ ...styles.formGroup, flex: 1 }}>
-          <label style={styles.label}>GST %</label>
-          <input type="number" value={form.gst} onChange={e => set('gst', Number(e.target.value))} style={styles.input} />
+      {cc.hasTax && (
+        <div style={{ display: 'flex', gap: 12 }}>
+          <div style={{ ...styles.formGroup, flex: 1 }}>
+            <label style={styles.label}>{cc.taxLabel} % {cc.defaultTaxRate > 0 ? `(default ${cc.defaultTaxRate}%)` : ''}</label>
+            <input type="number" value={form.gst ?? cc.defaultTaxRate} onChange={e => set('gst', Number(e.target.value))} style={styles.input} />
+          </div>
+          <div style={{ ...styles.formGroup, flex: 1 }} />
         </div>
-        <div style={{ ...styles.formGroup, flex: 1 }} />
-      </div>
+      )}
       <div style={{ borderTop: '1px solid #EAE6DB', paddingTop: 14, marginTop: 4 }}>
         <div style={{ fontSize: 11, fontWeight: 700, color: '#C9A24B', textTransform: 'uppercase', letterSpacing: '0.07em', marginBottom: 10 }}>Stock Settings</div>
         <div style={{ display: 'flex', gap: 12 }}>
@@ -797,17 +879,25 @@ function SettingsView({ businessInfo, setBusinessInfo }) {
         <p style={styles.muted}>This appears on every document you create.</p>
       </div>
       <div style={{ maxWidth: 480 }}>
-        {['name', 'address', 'gstin', 'state', 'phone', 'email', 'website'].map((f) => {
-          const cc2 = COUNTRY_CONFIG[form.country || 'india'];
-          const lbl = f === 'gstin' ? cc2.taxIdLabel : f === 'state' ? (form.country === 'uae' ? 'Emirate' : 'State') : f === 'website' ? 'Website' : f.charAt(0).toUpperCase() + f.slice(1);
-          return (
-            <div key={f} style={styles.formGroup}>
-              <label style={styles.label}>{lbl}</label>
-              <input value={form[f] || ''} onChange={(e) => setForm((p) => ({ ...p, [f]: e.target.value }))}
-                placeholder={f === 'gstin' ? cc2.taxIdPlaceholder : f === 'website' ? 'https://www.yourcompany.com' : ''} style={styles.input} />
+        {(() => {
+          const cc2 = COUNTRY_CONFIG[form.country || 'india'] || COUNTRY_CONFIG.other;
+          const fields = [
+            { key: 'name',    label: 'Business Name' },
+            { key: 'address', label: 'Address' },
+            ...(cc2.hasTax ? [{ key: 'gstin', label: cc2.taxIdLabel, placeholder: cc2.taxIdPlaceholder }] : []),
+            { key: 'state',   label: cc2.stateLabel || 'State' },
+            { key: 'phone',   label: 'Phone' },
+            { key: 'email',   label: 'Email' },
+            { key: 'website', label: 'Website', placeholder: 'https://www.yourcompany.com' },
+          ];
+          return fields.map(({ key, label, placeholder }) => (
+            <div key={key} style={styles.formGroup}>
+              <label style={styles.label}>{label}</label>
+              <input value={form[key] || ''} onChange={(e) => setForm((p) => ({ ...p, [key]: e.target.value }))}
+                placeholder={placeholder || ''} style={styles.input} />
             </div>
-          );
-        })}
+          ));
+        })()}
 
         <div style={styles.formGroup}>
           <label style={styles.label}>Company logo</label>
@@ -825,15 +915,40 @@ function SettingsView({ businessInfo, setBusinessInfo }) {
 
         <div style={styles.formGroup}>
           <label style={styles.label}>Country / Region</label>
-          <div style={{ display: 'flex', gap: 10, marginTop: 4 }}>
+          <select
+            value={form.country || 'india'}
+            onChange={(e) => setForm((p) => ({ ...p, country: e.target.value }))}
+            style={{ ...styles.input, cursor: 'pointer' }}
+          >
             {Object.entries(COUNTRY_CONFIG).map(([id, cfg]) => (
-              <button key={id} onClick={() => setForm((p) => ({ ...p, country: id }))}
-                style={{ ...styles.templateCard, flex: 1, ...(form.country === id ? styles.templateCardActive : {}) }}>
-                <div style={{ fontWeight: 600, fontSize: 13, color: '#1E2A4A', marginBottom: 2 }}>{cfg.label}</div>
-                <div style={{ fontSize: 11, color: '#888780' }}>{cfg.taxLabel} · {cfg.currency.trim()}</div>
-              </button>
+              <option key={id} value={id}>
+                {cfg.flag} {cfg.label} — {cfg.currency.trim()}{cfg.hasTax ? ` · ${cfg.taxLabel} ${cfg.defaultTaxRate}%` : ' · No tax'}
+              </option>
             ))}
-          </div>
+          </select>
+          {/* Country info pill */}
+          {(() => {
+            const sel = COUNTRY_CONFIG[form.country || 'india'] || COUNTRY_CONFIG.other;
+            return (
+              <div style={{ display: 'flex', gap: 8, marginTop: 8, flexWrap: 'wrap' }}>
+                <span style={{ background: '#EEF5F0', color: '#1A7A3E', borderRadius: 12, padding: '3px 10px', fontSize: 12, fontWeight: 600 }}>
+                  {sel.flag} {sel.label}
+                </span>
+                <span style={{ background: '#F0EEF9', color: '#4A3F8A', borderRadius: 12, padding: '3px 10px', fontSize: 12, fontWeight: 600 }}>
+                  {sel.currency.trim()}
+                </span>
+                {sel.hasTax ? (
+                  <span style={{ background: '#FEF3CD', color: '#92400E', borderRadius: 12, padding: '3px 10px', fontSize: 12, fontWeight: 600 }}>
+                    {sel.taxLabel} {sel.defaultTaxRate}%
+                  </span>
+                ) : (
+                  <span style={{ background: '#E5F4ED', color: '#1A7A3E', borderRadius: 12, padding: '3px 10px', fontSize: 12, fontWeight: 600 }}>
+                    ✓ No tax
+                  </span>
+                )}
+              </div>
+            );
+          })()}
         </div>
 
         <div style={styles.formGroup}>
@@ -1120,6 +1235,8 @@ function StaffModal({ ownerUid, onSaved, onClose, employees = [] }) {
 function Dashboard({ stats, documents, customers, vendors, businessInfo, startNewDoc, openDoc, setView, vouchers = [], pettyCash = {}, productionOrders = [], rawMaterials = [], items = [], companyType = 'trading' }) {
   const recent = [...documents].sort((a, b) => b.createdAt - a.createdAt).slice(0, 5);
   const showProduction = companyType === 'manufacturing' || companyType === 'both';
+  const cc = COUNTRY_CONFIG[businessInfo?.country || 'india'];
+  const cur = (n) => currency(n, cc.currency);
   return (
     <div style={styles.page}>
       <div style={styles.pageHeader}>
@@ -1129,25 +1246,25 @@ function Dashboard({ stats, documents, customers, vendors, businessInfo, startNe
 
       <div style={styles.dashSection}>Sales</div>
       <div style={styles.statGrid}>
-        <StatCard label="Total invoiced" value={currency(stats.totalRevenue)} accent="#1E2A4A" />
-        <StatCard label="Outstanding (receivable)" value={currency(stats.outstanding)} accent="#B5453A" />
+        <StatCard label="Total invoiced" value={cur(stats.totalRevenue)} accent="#1E2A4A" />
+        <StatCard label="Outstanding (receivable)" value={cur(stats.outstanding)} accent="#B5453A" />
         <StatCard label="Quotations" value={stats.counts.quotation || 0} accent="#C9A24B" sub="created" />
         <StatCard label="Delivery notes" value={stats.counts.delivery || 0} accent="#3D7A5C" sub="created" />
       </div>
 
       <div style={styles.dashSection}>Purchase</div>
       <div style={styles.statGrid}>
-        <StatCard label="Total purchases" value={currency(stats.totalPurchases)} accent="#6B5BAE" />
-        <StatCard label="Payable to vendors" value={currency(stats.payable)} accent="#8A6FD6" />
+        <StatCard label="Total purchases" value={cur(stats.totalPurchases)} accent="#6B5BAE" />
+        <StatCard label="Payable to vendors" value={cur(stats.payable)} accent="#8A6FD6" />
         <StatCard label="Purchase orders" value={stats.counts.purchase || 0} accent="#6B5BAE" sub="raised" />
         <StatCard label="Vendors" value={vendors.length} accent="#555" sub="registered" />
       </div>
 
       <div style={styles.dashSection}>Accounts</div>
       <div style={styles.statGrid}>
-        <StatCard label="Cash received" value={currency(stats.totalReceived)} accent="#1A7A3E" sub="receipt vouchers" />
-        <StatCard label="Cash paid" value={currency(stats.totalPaid)} accent="#B91C1C" sub="payment vouchers" />
-        <StatCard label="Petty cash balance" value={currency(stats.pcBalance)} accent="#C9A24B" />
+        <StatCard label="Cash received" value={cur(stats.totalReceived)} accent="#1A7A3E" sub="receipt vouchers" />
+        <StatCard label="Cash paid" value={cur(stats.totalPaid)} accent="#B91C1C" sub="payment vouchers" />
+        <StatCard label="Petty cash balance" value={cur(stats.pcBalance)} accent="#C9A24B" />
         <StatCard label="Customers" value={customers.length} accent="#1E2A4A" sub="registered" />
       </div>
 
@@ -1520,9 +1637,9 @@ function Sidebar({ view, setView, setActiveDoc, startNewDoc, syncStatus, user, o
         <CreateBtn docKey="creditnote" />
         <NavBtn id="pettycash" label="Petty Cash"  icon={FileMinus} />
         <NavBtn id="vouchers"  label="Vouchers"    icon={FileSignature} />
-        {(!country || country === 'india') && <NavBtn id="gstr1"     label="GSTR-1 Report" icon={FileText} />}
-        {country === 'uae'   && <NavBtn id="vatreport"  label="VAT Return"    icon={FileText} />}
-        {country === 'other' && <NavBtn id="taxreport"  label="Tax Report"    icon={FileText} />}
+        {country === 'india'  && <NavBtn id="gstr1"     label="GSTR-1 Report" icon={FileText} />}
+        {(country === 'uae' || country === 'saudi' || country === 'bahrain' || country === 'oman') && <NavBtn id="vatreport" label="VAT Return" icon={FileText} />}
+        {COUNTRY_CONFIG[country]?.hasTax && !['india','uae','saudi','bahrain','oman'].includes(country) && <NavBtn id="taxreport" label="Tax Report" icon={FileText} />}
       </Section>
 
       {/* Purchase — hidden for service companies */}
@@ -1706,6 +1823,96 @@ function SidebarFooter({ syncStatus }) {
   );
 }
 
+// ─── HSN Search ────────────────────────────────────────────────
+
+const COMMON_HSN = [
+  { code: '1001', desc: 'Wheat and meslin' },
+  { code: '1006', desc: 'Rice' },
+  { code: '2201', desc: 'Water (including natural / artificial mineral water)' },
+  { code: '2710', desc: 'Petroleum oils and oils from bituminous minerals' },
+  { code: '3004', desc: 'Medicaments (medicines)' },
+  { code: '3401', desc: 'Soap and organic surface-active products' },
+  { code: '3923', desc: 'Plastic articles for the conveyance or packing of goods' },
+  { code: '4016', desc: 'Other articles of vulcanised rubber' },
+  { code: '4901', desc: 'Printed books, brochures, leaflets' },
+  { code: '6101', desc: 'Men\'s overcoats, car-coats, cloaks' },
+  { code: '6109', desc: 'T-shirts, singlets and other vests' },
+  { code: '6403', desc: 'Footwear with outer soles of rubber/plastics, leather uppers' },
+  { code: '7108', desc: 'Gold (unwrought or semi-manufactured)' },
+  { code: '7113', desc: 'Jewellery and parts thereof, of precious metal' },
+  { code: '7323', desc: 'Table, kitchen or other household articles of iron / steel' },
+  { code: '8414', desc: 'Air or vacuum pumps, fans, ventilating hoods' },
+  { code: '8415', desc: 'Air conditioning machines' },
+  { code: '8418', desc: 'Refrigerators, freezers and other refrigerating equipment' },
+  { code: '8443', desc: 'Printing machinery; inkjet printing machines' },
+  { code: '8450', desc: 'Household or laundry type washing machines' },
+  { code: '8471', desc: 'Automatic data processing machines (computers)' },
+  { code: '8517', desc: 'Telephone sets; smartphones' },
+  { code: '8518', desc: 'Microphones, loudspeakers, headphones' },
+  { code: '8528', desc: 'Monitors and projectors; TV reception apparatus' },
+  { code: '8703', desc: 'Motor cars and vehicles for transport of persons' },
+  { code: '8704', desc: 'Motor vehicles for transport of goods' },
+  { code: '9403', desc: 'Other furniture and parts thereof' },
+  { code: '9503', desc: 'Tricycles, scooters, toy cars and similar wheeled toys' },
+  // SAC codes (services)
+  { code: '9954', desc: 'Construction services' },
+  { code: '9961', desc: 'Services in wholesale trade' },
+  { code: '9962', desc: 'Services in retail trade' },
+  { code: '9971', desc: 'Financial and related services' },
+  { code: '9972', desc: 'Real estate services' },
+  { code: '9973', desc: 'Leasing or rental services' },
+  { code: '9981', desc: 'Research and development services' },
+  { code: '9982', desc: 'Legal and accounting services' },
+  { code: '9983', desc: 'Other professional/technical/business services' },
+  { code: '9984', desc: 'Telecommunications and IT services' },
+  { code: '9985', desc: 'Support services' },
+  { code: '9986', desc: 'Agricultural support services' },
+  { code: '9987', desc: 'Maintenance, repair and installation services' },
+  { code: '9988', desc: 'Manufacturing services on physical inputs owned by others' },
+  { code: '9989', desc: 'Other manufacturing services' },
+  { code: '9991', desc: 'Public administration and other services' },
+  { code: '9992', desc: 'Education services' },
+  { code: '9993', desc: 'Human health and social care services' },
+  { code: '9994', desc: 'Sewage and waste collection, treatment and disposal' },
+  { code: '9995', desc: 'Services of membership organisations' },
+  { code: '9996', desc: 'Recreational, cultural and sporting services' },
+  { code: '9997', desc: 'Other services' },
+];
+
+function HsnSearchModal({ onSelect, onClose }) {
+  const [q, setQ] = useState('');
+  const results = q.length < 2 ? COMMON_HSN.slice(0, 20) : COMMON_HSN.filter(h =>
+    h.code.startsWith(q) || h.desc.toLowerCase().includes(q.toLowerCase())
+  );
+  return (
+    <Modal onClose={onClose} title="HSN / SAC Code Lookup">
+      <div style={{ marginBottom: 10 }}>
+        <input
+          autoFocus
+          value={q}
+          onChange={e => setQ(e.target.value)}
+          placeholder="Search by code or description…"
+          style={{ ...styles.input, width: '100%' }}
+        />
+      </div>
+      <div style={{ maxHeight: 320, overflowY: 'auto', fontSize: 13 }}>
+        {results.length === 0 && <div style={styles.emptyBox}>No results. <a href="https://www.cbic-gst.gov.in/gst-goods-services-rates.html" target="_blank" rel="noreferrer" style={{ color: '#1A56DB' }}>Search on CBIC portal →</a></div>}
+        {results.map(h => (
+          <div key={h.code} onClick={() => onSelect(h.code)} style={{ display: 'flex', gap: 12, padding: '8px 10px', borderRadius: 6, cursor: 'pointer', borderBottom: '1px solid #F0EDE6' }}
+            onMouseEnter={e => e.currentTarget.style.background = '#F5F3EE'}
+            onMouseLeave={e => e.currentTarget.style.background = ''}>
+            <span style={{ fontWeight: 700, color: '#1E2A4A', minWidth: 52, flexShrink: 0 }}>{h.code}</span>
+            <span style={{ color: '#555' }}>{h.desc}</span>
+          </div>
+        ))}
+      </div>
+      <div style={{ marginTop: 10, fontSize: 12, color: '#888780' }}>
+        Can't find your code? <a href="https://www.cbic-gst.gov.in/gst-goods-services-rates.html" target="_blank" rel="noreferrer" style={{ color: '#1A56DB' }}>Search full CBIC database →</a>
+      </div>
+    </Modal>
+  );
+}
+
 // ─── DocEditor ─────────────────────────────────────────────────
 
 function DocEditor({ doc, setDoc, customers, vendors, items, businessInfo, userRole, onSave, onCancel, onAddCustomer, onAddVendor, onConvert, onOpenDoc, documents = [] }) {
@@ -1719,6 +1926,7 @@ function DocEditor({ doc, setDoc, customers, vendors, items, businessInfo, userR
   const fmt = (n) => currency(n, cc.currency);
   const [rejectMode, setRejectMode] = useState(false);
   const [rejectionNote, setRejectionNote] = useState('');
+  const [hsnSearchRow, setHsnSearchRow] = useState(null); // rowId being searched
 
   // Field editing rules
   const isApproved = doc.status === 'approved';
@@ -1908,10 +2116,12 @@ function DocEditor({ doc, setDoc, customers, vendors, items, businessInfo, userR
               <label style={styles.label}>Due date</label>
               <input type="date" value={doc.dueDate || ''} onChange={(e) => update('dueDate', e.target.value)} style={{ ...styles.input, ...(isEditable ? {} : styles.inputReadOnly) }} readOnly={!isEditable} />
             </div>
-            <div style={{ ...styles.formGroup, flex: 1 }}>
-              <label style={styles.label}>{cc.splitTax ? 'Place of supply (state)' : 'Country / Emirate'}</label>
-              <input value={doc.placeOfSupply} onChange={(e) => update('placeOfSupply', e.target.value)} style={{ ...styles.input, ...(isEditable ? {} : styles.inputReadOnly) }} readOnly={!isEditable} />
-            </div>
+            {cc.hasTax && (
+              <div style={{ ...styles.formGroup, flex: 1 }}>
+                <label style={styles.label}>{cc.splitTax ? 'Place of supply (state)' : 'Place of supply'}</label>
+                <input value={doc.placeOfSupply} onChange={(e) => update('placeOfSupply', e.target.value)} style={{ ...styles.input, ...(isEditable ? {} : styles.inputReadOnly) }} readOnly={!isEditable} />
+              </div>
+            )}
           </div>
 
           <div style={styles.formGroup}>
@@ -2441,7 +2651,7 @@ function DocEditor({ doc, setDoc, customers, vendors, items, businessInfo, userR
                   <th style={styles.th}>Dimensions</th>
                 </>) : (<>
                   <th style={{ ...styles.th, textAlign: 'right' }}>Rate</th>
-                  <th style={{ ...styles.th, textAlign: 'right' }}>{cc.taxLabel} %</th>
+                  {cc.hasTax && <th style={{ ...styles.th, textAlign: 'right' }}>{cc.taxLabel} %</th>}
                   <th style={{ ...styles.th, textAlign: 'right' }}>Amount</th>
                 </>)}
                 <th className="no-print" style={styles.th}></th>
@@ -2459,7 +2669,19 @@ function DocEditor({ doc, setDoc, customers, vendors, items, businessInfo, userR
                       </select>}
                       <input value={it.name} onChange={(e) => updateItem(it.id, 'name', e.target.value)} style={{ ...styles.inlineInput, ...(isEditable ? styles.inlineInputEditable : {}) }} placeholder="Item description" readOnly={!isEditable} />
                     </td>
-                    {doc.type !== 'packing_list' && <td style={styles.td}><input value={it.hsn} onChange={(e) => updateItem(it.id, 'hsn', e.target.value)} style={{ ...styles.inlineInput, width: 70, ...(isEditable ? styles.inlineInputEditable : {}) }} readOnly={!isEditable} /></td>}
+                    {doc.type !== 'packing_list' && (
+                      <td style={styles.td}>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: 2 }}>
+                          <input value={it.hsn} onChange={(e) => updateItem(it.id, 'hsn', e.target.value)} style={{ ...styles.inlineInput, width: 60, ...(isEditable ? styles.inlineInputEditable : {}) }} readOnly={!isEditable} />
+                          {isEditable && cc.splitTax && (
+                            <button type="button" title="Search HSN/SAC code" onClick={() => setHsnSearchRow(it.id)}
+                              style={{ background: 'none', border: 'none', cursor: 'pointer', padding: '2px 3px', color: '#888780', flexShrink: 0 }}>
+                              🔍
+                            </button>
+                          )}
+                        </div>
+                      </td>
+                    )}
                     <td style={styles.td}><input type="number" value={it.qty} onChange={(e) => updateItem(it.id, 'qty', parseFloat(e.target.value) || 0)} onFocus={(e) => e.target.select()} style={{ ...styles.inlineInput, width: 60, textAlign: 'right', ...(isEditable ? styles.inlineInputEditable : {}) }} readOnly={!isEditable} /></td>
                     {doc.type === 'packing_list' ? (<>
                       <td style={styles.td}><input type="number" value={it.packages ?? 1} onChange={(e) => updateItem(it.id, 'packages', parseFloat(e.target.value) || 0)} onFocus={(e) => e.target.select()} style={{ ...styles.inlineInput, width: 55, textAlign: 'right', ...(isEditable ? styles.inlineInputEditable : {}) }} readOnly={!isEditable} /></td>
@@ -2468,7 +2690,7 @@ function DocEditor({ doc, setDoc, customers, vendors, items, businessInfo, userR
                       <td style={styles.td}><input value={it.dimensions || ''} onChange={(e) => updateItem(it.id, 'dimensions', e.target.value)} style={{ ...styles.inlineInput, width: 110, ...(isEditable ? styles.inlineInputEditable : {}) }} placeholder="L×W×H cm" readOnly={!isEditable} /></td>
                     </>) : (<>
                       <td style={styles.td}><input type="number" value={it.rate} onChange={(e) => updateItem(it.id, 'rate', parseFloat(e.target.value) || 0)} onFocus={(e) => e.target.select()} style={{ ...styles.inlineInput, width: 90, textAlign: 'right', ...(isEditable ? styles.inlineInputEditable : {}) }} readOnly={!isEditable} /></td>
-                      <td style={styles.td}><input type="number" value={it.gst} onChange={(e) => updateItem(it.id, 'gst', parseFloat(e.target.value) || 0)} onFocus={(e) => e.target.select()} style={{ ...styles.inlineInput, width: 55, textAlign: 'right', ...(isEditable ? styles.inlineInputEditable : {}) }} readOnly={!isEditable} /></td>
+                      {cc.hasTax && <td style={styles.td}><input type="number" value={it.gst} onChange={(e) => updateItem(it.id, 'gst', parseFloat(e.target.value) || 0)} onFocus={(e) => e.target.select()} style={{ ...styles.inlineInput, width: 55, textAlign: 'right', ...(isEditable ? styles.inlineInputEditable : {}) }} readOnly={!isEditable} /></td>}
                       <td style={{ ...styles.td, textAlign: 'right', fontWeight: 500 }}>{fmt(amount)}</td>
                     </>)}
                     {isEditable && <td className="no-print" style={styles.td}>
@@ -2514,7 +2736,7 @@ function DocEditor({ doc, setDoc, customers, vendors, items, businessInfo, userR
               <div style={{ display: 'flex', justifyContent: 'space-between', padding: '5px 0', fontSize: 13, color: '#555', borderBottom: '1px solid #F2EFE6' }}>
                 <span>Subtotal</span><span>{fmt(totals.subtotal)}</span>
               </div>
-              {cc.splitTax ? (
+              {cc.hasTax && (cc.splitTax ? (
                 totals.sameState ? (
                   <>
                     <div style={{ display: 'flex', justifyContent: 'space-between', padding: '5px 0', fontSize: 13, color: '#555', borderBottom: '1px solid #F2EFE6' }}>
@@ -2533,7 +2755,7 @@ function DocEditor({ doc, setDoc, customers, vendors, items, businessInfo, userR
                 <div style={{ display: 'flex', justifyContent: 'space-between', padding: '5px 0', fontSize: 13, color: '#555', borderBottom: '1px solid #F2EFE6' }}>
                   <span>{cc.taxLabel}</span><span>{fmt(totals.vat)}</span>
                 </div>
-              )}
+              ))}
               <div style={{ display: 'flex', justifyContent: 'space-between', padding: '10px 0 6px', fontSize: 16, fontWeight: 700, color: '#1E2A4A', borderTop: '2px solid #1E2A4A', marginTop: 2 }}>
                 <span>Grand Total</span><span className="serif">{fmt(totals.grandTotal)}</span>
               </div>
@@ -2601,6 +2823,12 @@ function DocEditor({ doc, setDoc, customers, vendors, items, businessInfo, userR
           </>)}
         </div>
       </div>
+      {hsnSearchRow && (
+        <HsnSearchModal
+          onSelect={(code) => { updateItem(hsnSearchRow, 'hsn', code); setHsnSearchRow(null); }}
+          onClose={() => setHsnSearchRow(null)}
+        />
+      )}
     </div>
   );
 }
@@ -7077,8 +7305,18 @@ export default function App() {
       .reduce((s, v) => s + (parseFloat(v.amount) || 0), 0);
     const counts = {};
     documents.forEach((d) => { counts[d.type] = (counts[d.type] || 0) + 1; });
-    return { totalRevenue, totalPurchases, outstanding, payable, totalReceived, totalPaid, counts };
-  }, [documents, vouchers, businessInfo, country]);
+    // Petty cash balance
+    const pcEntries = Array.isArray(pettyCash?.entries) ? pettyCash.entries : [];
+    const pcBalance = pcEntries.reduce((s, e) => s + (e.credit || 0) - (e.debit || 0), pettyCash?.openingBalance ?? 0);
+    // Inventory
+    const itemCount = items.length;
+    const lowStockCount = items.filter(it => (it.minStock ?? 0) > 0 && (it.stock ?? 0) <= (it.minStock ?? 0)).length;
+    // Production
+    const rmCount = rawMaterials.length;
+    const poCount = productionOrders.length;
+    const poOpen  = productionOrders.filter(po => po.status !== 'completed' && po.status !== 'cancelled').length;
+    return { totalRevenue, totalPurchases, outstanding, payable, totalReceived, totalPaid, counts, pcBalance, itemCount, lowStockCount, rmCount, poCount, poOpen };
+  }, [documents, vouchers, businessInfo, country, pettyCash, items, rawMaterials, productionOrders]);
 
   // ── Early gates ───────────────────────────────────────────────────────────
   const spinner = (
@@ -7420,6 +7658,7 @@ export default function App() {
       {editingCustomer && (
         <CustomerModal
           customer={editingCustomer}
+          businessInfo={businessInfo}
           onSave={(c) => {
             const saved = { ...c, id: c.id || crypto.randomUUID() };
             const isNew = !c.id;
@@ -7437,6 +7676,7 @@ export default function App() {
       {editingVendor && (
         <VendorModal
           vendor={editingVendor}
+          businessInfo={businessInfo}
           onSave={(v) => {
             const saved = { ...v, id: v.id || crypto.randomUUID() };
             const isNew = !v.id;
@@ -7454,6 +7694,7 @@ export default function App() {
       {editingItem && (
         <ItemModal
           item={editingItem}
+          businessInfo={businessInfo}
           onSave={(it) => {
             const saved = { ...it, id: it.id || crypto.randomUUID() };
             const isNew = !it.id;
