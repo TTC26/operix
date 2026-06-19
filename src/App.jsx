@@ -1983,6 +1983,7 @@ function DocEditor({ doc, setDoc, customers, vendors, items, businessInfo, userR
   const partyList = isVendorDoc ? vendors : customers;
   const totals = computeTotals(doc, businessInfo.state, businessInfo.country);
   const customer = partyList.find((c) => c.id === doc.customerId);
+  const displayParty = customer || doc.customerSnapshot; // fallback to snapshot when live record unavailable
   const template = businessInfo.template || 'classic';
   const cc = COUNTRY_CONFIG[businessInfo.country || 'india'];
   const fmt = (n) => currency(n, cc.currency);
@@ -2616,7 +2617,7 @@ function DocEditor({ doc, setDoc, customers, vendors, items, businessInfo, userR
                   {/* Buyer + Invoice details */}
                   <div style={{ display: 'flex', borderBottom: bdr }}>
                     <div style={{ flex: 1, padding: '10px 18px', borderRight: bdr }}>
-                      {[['Customer', customer?.name],['GSTIN', customer?.gstin || customer?.taxId],['Address', customer?.address],['Mob', customer?.phone],['Email', customer?.email]].map(([k,v]) => (
+                      {[['Customer', displayParty?.name],['GSTIN', displayParty?.gstin || displayParty?.taxId],['Address', displayParty?.address],['Mob', displayParty?.phone],['Email', displayParty?.email]].map(([k,v]) => (
                         <div key={k} style={{ display: 'flex', gap: 8, marginBottom: 3 }}>
                           <span style={{ fontWeight: 700, minWidth: 72 }}>{k}:</span>
                           <span style={{ color: k === 'Email' && v ? '#1A56DB' : '#222' }}>{v || '—'}</span>
@@ -2730,11 +2731,11 @@ function DocEditor({ doc, setDoc, customers, vendors, items, businessInfo, userR
               <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 16, marginBottom: 12 }}>
                 <div style={styles.billTo}>
                   <div style={styles.billToLabel}>Invoice Address (Bill To)</div>
-                  {customer ? (
+                  {displayParty ? (
                     <>
-                      <div style={styles.billToName}>{customer.name}</div>
-                      <div style={styles.previewSmall}>{customer.address}</div>
-                      <div style={styles.previewSmall}>{customer.state}</div>
+                      <div style={styles.billToName}>{displayParty.name}</div>
+                      <div style={styles.previewSmall}>{displayParty.address}</div>
+                      <div style={styles.previewSmall}>{displayParty.state}</div>
                     </>
                   ) : <div style={styles.previewSmall}>No customer selected</div>}
                 </div>
@@ -2771,12 +2772,12 @@ function DocEditor({ doc, setDoc, customers, vendors, items, businessInfo, userR
           ) : (
             <div style={styles.billTo}>
               <div style={styles.billToLabel}>{isVendorDoc ? 'Vendor / billed from' : 'Billed to'}</div>
-              {customer ? (
+              {displayParty ? (
                 <>
-                  <div style={styles.billToName}>{customer.name}</div>
-                  <div style={styles.previewSmall}>{customer.address}</div>
-                  <div style={styles.previewSmall}>{cc.taxIdLabel}: {customer.gstin || '—'}</div>
-                  <div style={styles.previewSmall}>State: {customer.state}</div>
+                  <div style={styles.billToName}>{displayParty.name}</div>
+                  <div style={styles.previewSmall}>{displayParty.address}</div>
+                  {(displayParty.gstin || displayParty.taxId) && <div style={styles.previewSmall}>{cc.taxIdLabel}: {displayParty.gstin || displayParty.taxId}</div>}
+                  {displayParty.state && <div style={styles.previewSmall}>State: {displayParty.state}</div>}
                 </>
               ) : (
                 <div style={styles.previewSmall}>{isVendorDoc ? 'No vendor selected' : 'No customer selected'}</div>
@@ -7616,7 +7617,6 @@ function ContractEditor({ contract, customers, termsLibrary, businessInfo, userR
 
   const totalScopeValue = SCOPE_SECTIONS.filter(s => form.scope[s.key]?.enabled).reduce((sum, s) => sum + (parseFloat(form.scope[s.key]?.value) || 0), 0);
 
-  const inputStyle = { width: '100%', border: '1px solid #DDD8CE', borderRadius: 6, padding: '8px 12px', font
   const inputStyle = { width: '100%', border: '1px solid #DDD8CE', borderRadius: 6, padding: '8px 12px', fontSize: 13, boxSizing: 'border-box', marginTop: 4 };
   const labelStyle = { fontSize: 12, fontWeight: 600, color: '#555' };
   const sectionHead = { fontSize: 13, fontWeight: 700, color: '#1E2A4A', borderBottom: '1px solid #EAE6DB', paddingBottom: 8, marginBottom: 14, marginTop: 24 };
@@ -8080,88 +8080,51 @@ function PartnerAgreement({ partner: p, termsLibrary, businessInfo: bi, document
   );
 }
 
-ing: '7px 12px' }}>{cm.category}</td><td style={{ padding: '7px 12px', textAlign: 'right' }}>{cm.percentage}%</td></tr>)}</tbody>
-            </table>
-          </div>
-        )}
-
-        {terms.items.length > 0 && (
-          <div style={{ marginBottom: 32 }}>
-            <div style={{ fontWeight: 700, fontSize: 13, color: '#1E2A4A', marginBottom: 12, textTransform: 'uppercase' }}>Terms & Conditions</div>
-            {terms.items.map((item, i) => (
-              <div key={i} style={{ marginBottom: 12 }}>
-                {item.title && <div style={{ fontWeight: 700 }}>{i + 1}. {item.title}</div>}
-                <div style={{ marginLeft: item.title ? 16 : 0 }}>{i + 1}. {item.text}</div>
-              </div>
-            ))}
-            {terms.extra && <div style={{ marginTop: 12 }}>{terms.extra}</div>}
-          </div>
-        )}
-
-        <div style={{ marginTop: 48, borderTop: '1px solid #DDD8CE', paddingTop: 32, display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 48 }}>
-          {[{ label: 'For ' + (bi.companyName || 'the Company') }, { label: 'For ' + p.name }].map((sig, i) => (
-            <div key={i}>
-              <div style={{ fontWeight: 700, marginBottom: 40, fontSize: 13, color: '#555' }}>{sig.label}</div>
-              <div style={{ borderTop: '1px solid #333', paddingTop: 8, color: '#888', fontSize: 12 }}>Authorised Signatory &nbsp;|&nbsp; Date: ___________</div>
-            </div>
-          ))}
-        </div>
-      </div>
-    </div>
-  );
-}
 
 // ─── Root App ─────────────────────────────────────────────────────────────────
-
 export default function App() {
-  const [authReady, setAuthReady]   = useState(false);
-  const [user, setUser]             = useState(null);
-  const [userRole, setUserRole]     = useState('admin');
-  const [ownerUid, setOwnerUid]     = useState(null);
-  const [syncStatus, setSyncStatus] = useState('idle');
+  const [view,             setView]           = useState('dashboard');
+  const [activeDoc,        setActiveDoc]       = useState(null);
+  const [user,             setUser]            = useState(null);
+  const [ownerUid,         setOwnerUid]        = useState(null);
+  const [authReady,        setAuthReady]       = useState(false);
+  const [userRole,         setUserRole]        = useState('admin');
+  const [syncStatus,       setSyncStatus]      = useState('synced');
+  const [editingCustomer,  setEditingCustomer] = useState(null);
+  const [editingVendor,    setEditingVendor]   = useState(null);
+  const [editingItem,      setEditingItem]     = useState(null);
+  const [docSearch,        setDocSearch]       = useState('');
 
-  // ── Navigation ────────────────────────────────────────────────────────────
-  const [view, setView]         = useState('dashboard');
-  const [activeDoc, setActiveDoc] = useState(null);
-  const [docSearch, setDocSearch] = useState('');
+  // ── Data state ──────────────────────────────────────────────────────────────
+  const [businessInfo,     _setBi]     = useState({});
+  const [documents,        _setDocs]   = useState([]);
+  const [customers,        _setCusts]  = useState([]);
+  const [vendors,          _setVends]  = useState([]);
+  const [items,            _setItems]  = useState([]);
+  const [employees,        _setEmps]   = useState([]);
+  const [payrollRuns,      _setPR]     = useState([]);
+  const [pettyCash,        _setPC]     = useState({ openingBalance: 0, entries: [] });
+  const [vouchers,         _setVouch]  = useState([]);
+  const [grns,             _setGrns]   = useState([]);
+  const [serviceOrders,    _setSO]     = useState([]);
+  const [productionOrders, _setPO]     = useState([]);
+  const [rawMaterials,     _setRM]     = useState([]);
+  const [boms,             _setBoms]   = useState([]);
+  const [stockLedger,      _setSL]     = useState([]);
+  const [parts,            _setParts]  = useState([]);
+  const [engDocs,          _setEngD]   = useState([]);
+  const [enquiries,        _setEnq]    = useState([]);
+  const [contracts,        _setCon]    = useState([]);
+  const [channelPartners,  _setCP]     = useState([]);
+  const [termsLibrary,     _setTL]     = useState({ clauses: [], templates: [] });
 
-  // ── Entity modals (managed here so list components can open them) ─────────
-  const [editingCustomer, setEditingCustomer] = useState(null);
-  const [editingVendor,   setEditingVendor]   = useState(null);
-  const [editingItem,     setEditingItem]     = useState(null);
-
-  // ── All data ──────────────────────────────────────────────────────────────
-  const [businessInfo,      _setBi]  = useState({});
-  const [documents,         _setDocs] = useState([]);
-  const [customers,         _setCusts] = useState([]);
-  const [vendors,           _setVends] = useState([]);
-  const [items,             _setItems] = useState([]);
-  const [employees,         _setEmps]  = useState([]);
-  const [payrollRuns,       _setPR]    = useState([]);
-  const [pettyCash,         _setPC]    = useState({ openingBalance: 0, entries: [] });
-  const [vouchers,          _setVouch] = useState([]);
-  const [grns,              _setGrns]  = useState([]);
-  const [serviceOrders,     _setSO]    = useState([]);
-  const [productionOrders,  _setPO]    = useState([]);
-  const [rawMaterials,      _setRM]    = useState([]);
-  const [boms,              _setBoms]  = useState([]);
-  const [stockLedger,       _setSL]    = useState([]);
-  const [parts,             _setParts] = useState([]);
-  const [engDocs,           _setEngD]  = useState([]);
-  const [enquiries,         _setEnq]   = useState([]);
-  const [contracts,         _setCon]   = useState([]);
-  const [channelPartners,   _setCP]    = useState([]);
-  const [termsLibrary,      _setTL]    = useState({ clauses: [], templates: [] });
-
-  // ── Auth ──────────────────────────────────────────────────────────────────
+  // ── Auth ────────────────────────────────────────────────────────────────────
   useEffect(() => {
     return watchAuth(async (firebaseUser) => {
       if (firebaseUser) {
-        // Set user immediately so login screen disappears right away
         setUser(firebaseUser);
         setAuthReady(true);
         if (!firebaseUser.emailVerified) return;
-        // Resolve ownerUid (admin = own uid, staff = owner's uid)
         try {
           const membership = await getMembership(firebaseUser.uid);
           if (membership) {
@@ -8183,7 +8146,7 @@ export default function App() {
     });
   }, []);
 
-  // ── Firestore subscription ────────────────────────────────────────────────
+  // ── Firestore subscription ───────────────────────────────────────────────────
   useEffect(() => {
     if (!ownerUid) return;
     const unsub = subscribeCompanyData(ownerUid, (data) => {
@@ -8213,7 +8176,7 @@ export default function App() {
     return unsub;
   }, [ownerUid]);
 
-  // ── Persist helper ────────────────────────────────────────────────────────
+  // ── Persist helper ───────────────────────────────────────────────────────────
   function persist(patch) {
     if (!ownerUid) return;
     setSyncStatus('syncing');
@@ -8222,7 +8185,7 @@ export default function App() {
       .catch(() => setSyncStatus('error'));
   }
 
-  // ── Wrapped setters (update local state + persist to Firestore) ───────────
+  // ── Wrapped setters ──────────────────────────────────────────────────────────
   function mkSet(rawSet, key) {
     return (v) => {
       if (typeof v === 'function') {
@@ -8255,73 +8218,43 @@ export default function App() {
   const setStockLedger      = mkSet(_setSL,    'stockLedger');
   const setParts            = mkSet(_setParts, 'parts');
   const setEngDocs          = mkSet(_setEngD,  'engDocs');
-  const setEnquiries        = mkSet(_setEnq,        'enquiries');
-  const setContracts        = mkSet(_setCon,        'contracts');
-  const setChannelPartners  = mkSet(_setCP,         'channelPartners');
-  const setTermsLibrary     = mkSet(_setTL,         'termsLibrary');
+  const setEnquiries        = mkSet(_setEnq,   'enquiries');
+  const setContracts        = mkSet(_setCon,   'contracts');
+  const setChannelPartners  = mkSet(_setCP,    'channelPartners');
+  const setTermsLibrary     = mkSet(_setTL,    'termsLibrary');
 
-  // ── Document number helpers ───────────────────────────────────────────────
-  // Indian financial year: April–March. Returns "25-26", "26-27", etc.
+  // ── Document number helpers ──────────────────────────────────────────────────
   function getFY(dateStr) {
     const d = dateStr ? new Date(dateStr) : new Date();
     const y = d.getFullYear();
-    const m = d.getMonth() + 1; // 1-based
+    const m = d.getMonth() + 1;
     const fyStart = m >= 4 ? y : y - 1;
     return `${String(fyStart).slice(-2)}-${String(fyStart + 1).slice(-2)}`;
   }
 
-  // Auto-generate next sequential number for a doc type + financial year.
-  // Format: INV/25-26/001  (user can still override in the number field)
   function nextDocNumber(type, dateStr) {
     const fy = getFY(dateStr);
-    const prefix = (DOC_TYPES[type]?.prefix || type.toUpperCase());
-    const pattern = `${prefix}/${fy}/`;
-    const nums = (documents || [])
-      .filter((d) => d.type === type && (d.number || '').startsWith(pattern))
-      .map((d) => parseInt((d.number || '').split('/').pop(), 10) || 0);
-    const next = nums.length ? Math.max(...nums) + 1 : 1;
-    return `${pattern}${String(next).padStart(3, '0')}`;
+    const prefix = DOC_TYPES[type]?.prefix || type.toUpperCase();
+    const same = documents.filter((d) => d.type === type && getFY(d.date) === fy);
+    return `${prefix}/${fy}/${String(same.length + 1).padStart(3, '0')}`;
   }
 
-  // ── Document helpers ──────────────────────────────────────────────────────
+  // ── Doc helpers ──────────────────────────────────────────────────────────────
   function startNewDoc(type) {
     const today = new Date().toISOString().slice(0, 10);
-    setActiveDoc({ ...blankDoc(type, businessInfo), number: nextDocNumber(type, today) });
+    setActiveDoc({
+      ...blankDoc(type, businessInfo),
+      number: nextDocNumber(type, today),
+    });
     setView('doceditor');
   }
 
-  function openDoc(docId) {
-    const d = documents.find((x) => x.id === docId);
-    if (d) { setActiveDoc({ ...d }); setView('doceditor'); }
+  function openDoc(doc) {
+    setActiveDoc(doc);
+    setView('doceditor');
   }
 
-  function deleteDoc(docId) {
-    if (!window.confirm('Delete this document?')) return;
-    setDocuments((ds) => ds.filter((d) => d.id !== docId));
-  }
-
-  // DocEditor calls onSave(status, rejectionNote?) — activeDoc holds the full doc
-  function saveDoc(status, rejectionNote = '') {
-    if (!activeDoc) return;
-    const id = activeDoc.id || crypto.randomUUID();
-    const patch = {
-      ...activeDoc,
-      id,
-      status,
-      rejectionNote: rejectionNote || activeDoc.rejectionNote || '',
-      updatedAt: Date.now(),
-    };
-    // Use functional update so we NEVER read stale documents closure
-    setDocuments((prev) => {
-      const existing = prev.find((d) => d.id === id);
-      const saved = { ...patch, createdAt: existing?.createdAt || Date.now() };
-      return existing ? prev.map((d) => d.id === id ? saved : d) : [...prev, saved];
-    });
-    setActiveDoc(null);
-    setView('documents');
-  }
-
-  function convertDoc(newType, srcDoc) {
+  function convertDoc(srcDoc, newType) {
     const today = new Date().toISOString().slice(0, 10);
     setActiveDoc({
       ...blankDoc(newType, businessInfo),
@@ -8338,53 +8271,70 @@ export default function App() {
     setView('doceditor');
   }
 
+  function handleSaveDoc(status, rejectionNote) {
+    const saved = {
+      ...activeDoc,
+      status: status || activeDoc.status || 'draft',
+      ...(rejectionNote !== undefined ? { rejectionNote, rejectedAt: Date.now() } : {}),
+      ...(status === 'approved' ? { approvedAt: Date.now() } : {}),
+      ...(status === 'submitted' ? { submittedAt: Date.now() } : {}),
+    };
+    const isNew = !documents.find((d) => d.id === saved.id);
+    setDocuments((prev) => isNew ? [...prev, saved] : prev.map((d) => d.id === saved.id ? saved : d));
+    // Auto-update stock ledger on first save of outgoing docs
+    if (isNew && ['invoice', 'delivery'].includes(saved.type)) {
+      const entries = (saved.items || []).filter(it => it.itemId && (it.qty || 0) !== 0).map(it => ({
+        id: crypto.randomUUID(), date: saved.date, docType: saved.type, docId: saved.id,
+        docNumber: saved.number, itemId: it.itemId, itemName: it.name,
+        qty: -(it.qty || 0), note: `${DOC_TYPES[saved.type]?.label || saved.type} ${saved.number}`,
+      }));
+      if (entries.length) setStockLedger((prev) => [...prev, ...entries]);
+    }
+    if (isNew && saved.type === 'purchasebill') {
+      const entries = (saved.items || []).filter(it => it.itemId && (it.qty || 0) !== 0).map(it => ({
+        id: crypto.randomUUID(), date: saved.date, docType: saved.type, docId: saved.id,
+        docNumber: saved.number, itemId: it.itemId, itemName: it.name,
+        qty: (it.qty || 0), note: `${DOC_TYPES[saved.type]?.label || saved.type} ${saved.number}`,
+      }));
+      if (entries.length) setStockLedger((prev) => [...prev, ...entries]);
+    }
+    setActiveDoc(null);
+    setView('documents');
+  }
+
+  function deleteDoc(id) {
+    if (!window.confirm('Delete this document?')) return;
+    setDocuments((prev) => prev.filter((d) => d.id !== id));
+  }
+
   async function handleLogout() { await logOut(); }
 
   const companyType = (businessInfo && businessInfo.companyType) || 'trading';
-  const country     = (businessInfo && businessInfo.country) || 'india';
+  const country     = (businessInfo && businessInfo.country)     || 'india';
+  const showTrade   = companyType === 'trading' || companyType === 'both' || companyType === 'manufacturing';
+  const showProduction = companyType === 'manufacturing' || companyType === 'both';
+  const showService    = companyType === 'service'       || companyType === 'both';
 
   const stats = useMemo(() => {
-    const totalRevenue  = documents.filter((d) => d.type === 'invoice')
-      .reduce((s, d) => s + (computeTotals(d, businessInfo.state, country).grandTotal || 0), 0);
-    const totalPurchases = documents.filter((d) => d.type === 'purchasebill')
-      .reduce((s, d) => s + (computeTotals(d, businessInfo.state, country).grandTotal || 0), 0);
-    const outstanding   = documents.filter((d) => d.type === 'invoice' && d.status !== 'paid')
-      .reduce((s, d) => s + (computeTotals(d, businessInfo.state, country).grandTotal || 0), 0);
-    const payable       = documents.filter((d) => d.type === 'purchasebill' && d.status !== 'paid')
-      .reduce((s, d) => s + (computeTotals(d, businessInfo.state, country).grandTotal || 0), 0);
-    const voucherList   = Array.isArray(vouchers) ? vouchers : [];
-    const totalReceived = voucherList.filter((v) => v.type === 'receipt')
-      .reduce((s, v) => s + (parseFloat(v.amount) || 0), 0);
-    const totalPaid     = voucherList.filter((v) => v.type === 'payment')
-      .reduce((s, v) => s + (parseFloat(v.amount) || 0), 0);
-    const counts = {};
-    documents.forEach((d) => { counts[d.type] = (counts[d.type] || 0) + 1; });
-    // Petty cash balance
-    const pcEntries = Array.isArray(pettyCash?.entries) ? pettyCash.entries : [];
-    const pcBalance = pcEntries.reduce((s, e) => s + (e.credit || 0) - (e.debit || 0), pettyCash?.openingBalance ?? 0);
-    // Inventory
-    const itemCount = items.length;
-    const lowStockCount = items.filter(it => (it.minStock ?? 0) > 0 && (it.stock ?? 0) <= (it.minStock ?? 0)).length;
-    // Production
-    const rmCount = rawMaterials.length;
-    const poCount = productionOrders.length;
-    const poOpen  = productionOrders.filter(po => po.status !== 'completed' && po.status !== 'cancelled').length;
-    return { totalRevenue, totalPurchases, outstanding, payable, totalReceived, totalPaid, counts, pcBalance, itemCount, lowStockCount, rmCount, poCount, poOpen };
-  }, [documents, vouchers, businessInfo, country, pettyCash, items, rawMaterials, productionOrders]);
+    const cc = COUNTRY_CONFIG[country] || COUNTRY_CONFIG.india;
+    const totalRevenue   = documents.filter(d => d.type === 'invoice').reduce((s, d) => s + (computeTotals(d, businessInfo.state, country).grandTotal || 0), 0);
+    const totalPurchases = documents.filter(d => d.type === 'purchasebill').reduce((s, d) => s + (computeTotals(d, businessInfo.state, country).grandTotal || 0), 0);
+    const outstanding    = documents.filter(d => d.type === 'invoice' && !d.paid).reduce((s, d) => s + (computeTotals(d, businessInfo.state, country).grandTotal || 0), 0);
+    const payable        = documents.filter(d => d.type === 'purchasebill' && !d.paid).reduce((s, d) => s + (computeTotals(d, businessInfo.state, country).grandTotal || 0), 0);
+    const voucherList    = Array.isArray(vouchers) ? vouchers : [];
+    const totalReceived  = voucherList.filter(v => v.type === 'receipt').reduce((s, v) => s + (parseFloat(v.amount) || 0), 0);
+    const totalPaid      = voucherList.filter(v => v.type === 'payment').reduce((s, v) => s + (parseFloat(v.amount) || 0), 0);
+    return { totalRevenue, totalPurchases, outstanding, payable, totalReceived, totalPaid };
+  }, [documents, vouchers, businessInfo, country]);
 
-  // ── Early gates ───────────────────────────────────────────────────────────
-  const spinner = (
-    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', height: '100vh', color: '#888780', fontSize: 14 }}>
-      Loading…
-    </div>
+  // ── Auth gates ───────────────────────────────────────────────────────────────
+  if (!authReady) return (
+    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', height: '100vh', fontSize: 16, color: '#888' }}>Loading…</div>
   );
-  if (!authReady) return spinner;
   if (!user) return <AuthScreen />;
-  if (!user.emailVerified) return <VerifyEmailScreen user={user} onLogout={handleLogout} />;
-  // Still resolving ownerUid (membership lookup in progress)
-  if (!ownerUid) return spinner;
+  if (user && !user.emailVerified) return <VerifyEmailScreen user={user} onLogout={handleLogout} />;
 
-  // ── Content renderer ──────────────────────────────────────────────────────
+  // ── Content router ───────────────────────────────────────────────────────────
   function renderContent() {
     if (view === 'doceditor' && activeDoc) {
       return (
@@ -8396,11 +8346,11 @@ export default function App() {
           items={items}
           businessInfo={businessInfo}
           userRole={userRole}
-          onSave={saveDoc}
+          onSave={handleSaveDoc}
           onCancel={() => { setActiveDoc(null); setView('documents'); }}
-          onAddCustomer={() => setEditingCustomer({ name: '', gstin: '', address: '', state: '', phone: '', email: '' })}
-          onAddVendor={() => setEditingVendor({ name: '', gstin: '', address: '', state: '', phone: '', email: '' })}
-          onConvert={(type, doc) => convertDoc(type, doc)}
+          onAddCustomer={(c) => setEditingCustomer(c || { name: '' })}
+          onAddVendor={(v) => setEditingVendor(v || { name: '' })}
+          onConvert={convertDoc}
           onOpenDoc={openDoc}
           documents={documents}
         />
@@ -8437,39 +8387,40 @@ export default function App() {
             openDoc={openDoc}
             deleteDoc={deleteDoc}
             startNewDoc={startNewDoc}
+            businessInfo={businessInfo}
           />
         );
       case 'customers':
         return (
           <CustomersList
             customers={customers}
+            setEditing={setEditingCustomer}
             setCustomers={setCustomers}
             documents={documents}
-            setEditing={setEditingCustomer}
           />
         );
       case 'vendors':
         return (
           <VendorsList
             vendors={vendors}
+            setEditing={setEditingVendor}
             setVendors={setVendors}
             documents={documents}
-            setEditing={setEditingVendor}
           />
         );
       case 'items':
         return (
           <ItemsList
             items={items}
-            setItems={setItems}
             setEditing={setEditingItem}
+            setItems={setItems}
             businessInfo={businessInfo}
           />
         );
-      case 'settings':
-        return <SettingsView businessInfo={businessInfo} setBusinessInfo={setBusinessInfo} />;
       case 'staff':
         return <StaffPage ownerUid={ownerUid} employees={employees} />;
+      case 'settings':
+        return <SettingsView businessInfo={businessInfo} setBusinessInfo={setBusinessInfo} />;
       case 'pettycash':
         return (
           <PettyCashList
@@ -8484,10 +8435,10 @@ export default function App() {
           <VoucherList
             vouchers={vouchers}
             setVouchers={setVouchers}
-            businessInfo={businessInfo}
             customers={customers}
             vendors={vendors}
             userRole={userRole}
+            businessInfo={businessInfo}
           />
         );
       case 'grn':
@@ -8523,13 +8474,7 @@ export default function App() {
           />
         );
       case 'bincard':
-        return (
-          <BinCard
-            items={items}
-            stockLedger={stockLedger}
-            businessInfo={businessInfo}
-          />
-        );
+        return <BinCard items={items} stockLedger={stockLedger} businessInfo={businessInfo} />;
       case 'employees':
         return (
           <EmployeesView
@@ -8683,11 +8628,7 @@ export default function App() {
       case 'taxreport':
         return <TaxReport documents={documents} customers={customers} businessInfo={businessInfo} />;
       default:
-        return (
-          <div style={{ padding: 40, color: '#888780', fontSize: 14 }}>
-            Section coming soon.
-          </div>
-        );
+        return <div style={{ padding: 40, color: '#888780', fontSize: 14 }}>Section coming soon.</div>;
     }
   }
 
@@ -8713,7 +8654,86 @@ export default function App() {
             box-shadow: none !important;
             border-radius: 0 !important;
             z-index: 9999 !important;
+            padding: 0 !important;
+            margin: 0 !important;
           }
+          .draft-watermark {
+            -webkit-print-color-adjust: exact !important;
+            print-color-adjust: exact !important;
+            color: rgba(185, 28, 28, 0.13) !important;
+          }
+        }
+        @page { size: A4; margin: 10mm 12mm; }
+      `}</style>
+
+      <Sidebar
+        view={view}
+        setView={setView}
+        setActiveDoc={setActiveDoc}
+        startNewDoc={startNewDoc}
+        syncStatus={syncStatus}
+        user={user}
+        onLogout={handleLogout}
+        userRole={userRole}
+        companyType={companyType}
+        country={country}
+      />
+
+      <main style={styles.main}>
+        {renderContent()}
+      </main>
+
+      {editingCustomer && (
+        <CustomerModal
+          customer={editingCustomer}
+          businessInfo={businessInfo}
+          onSave={(c) => {
+            const saved = { ...c, id: c.id || crypto.randomUUID() };
+            const isNew = !c.id;
+            setCustomers((prev) => isNew ? [...prev, saved] : prev.map((x) => x.id === saved.id ? saved : x));
+            if (isNew && view === 'doceditor' && activeDoc) {
+              setActiveDoc((d) => ({ ...d, customerId: saved.id, customerSnapshot: saved }));
+            }
+            setEditingCustomer(null);
+          }}
+          onClose={() => setEditingCustomer(null)}
+        />
+      )}
+
+      {editingVendor && (
+        <VendorModal
+          vendor={editingVendor}
+          businessInfo={businessInfo}
+          onSave={(v) => {
+            const saved = { ...v, id: v.id || crypto.randomUUID() };
+            const isNew = !v.id;
+            setVendors((prev) => isNew ? [...prev, saved] : prev.map((x) => x.id === saved.id ? saved : x));
+            if (isNew && view === 'doceditor' && activeDoc) {
+              setActiv              setActiveDoc((d) => ({ ...d, customerId: saved.id, customerSnapshot: saved }));
+            }
+            setEditingVendor(null);
+          }}
+          onClose={() => setEditingVendor(null)}
+        />
+      )}
+
+      {editingItem && (
+        <ItemModal
+          item={editingItem}
+          businessInfo={businessInfo}
+          onSave={(it) => {
+            const saved = { ...it, id: it.id || crypto.randomUUID() };
+            const isNew = !it.id;
+            setItems((prev) => isNew ? [...prev, saved] : prev.map((x) => x.id === saved.id ? saved : x));
+            setEditingItem(null);
+          }}
+          onClose={() => setEditingItem(null)}
+        />
+      )}
+    </div>
+  );
+}
+ }
           .draft-watermark {
             -webkit-print-color-adjust: exact !important;
             print-color-adjust: exact !important;
