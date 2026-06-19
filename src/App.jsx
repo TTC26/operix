@@ -136,10 +136,16 @@ const COUNTRY_CONFIG = {
 };
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
-function currency(n, sym) {
-  if (isNaN(n)) n = 0;
+function currency(n, sym, locale) {
+  if (isNaN(n) || n == null) n = 0;
   const s = sym !== undefined ? sym : '₹';
-  return s + Number(n).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  const loc = locale || 'en-IN';
+  return s + Number(n).toLocaleString(loc, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+}
+// Returns a formatter bound to the business's country — use this everywhere
+function makeFmt(businessInfo) {
+  const cc = COUNTRY_CONFIG[(businessInfo && businessInfo.country)] || COUNTRY_CONFIG.india;
+  return (n) => currency(n, cc.currency, cc.locale);
 }
 
 function computeTotals(doc, sellerState, country) {
@@ -660,14 +666,15 @@ function VendorModal({ vendor, onSave, onClose, businessInfo = {} }) {
 
 // ─── Items ─────────────────────────────────────────────────────
 
-function ItemsList({ items, setEditing, setItems }) {
+function ItemsList({ items, setEditing, setItems, businessInfo }) {
+  const fmt = makeFmt(businessInfo);
   return (
     <div style={styles.page}>
       <div style={styles.pageHeader}>
         <h1 className="serif" style={styles.h1}>Items & services</h1>
-        <p style={styles.muted}>Saved items auto-fill price, HSN code and GST rate on documents.</p>
+        <p style={styles.muted}>Saved items auto-fill price, HSN/SAC code and tax rate on documents.</p>
       </div>
-      <button onClick={() => setEditing({ name: '', hsn: '', purchaseRate: 0, saleRate: 0, gst: 18 })} style={styles.primaryBtn}><Plus size={15} /> Add item</button>
+      <button onClick={() => { const cc = COUNTRY_CONFIG[(businessInfo && businessInfo.country)] || COUNTRY_CONFIG.india; setEditing({ name: '', hsn: '', purchaseRate: 0, saleRate: 0, gst: cc.defaultTaxRate }); }} style={styles.primaryBtn}><Plus size={15} /> Add item</button>
       <div style={{ ...styles.list, marginTop: 16 }}>
         {items.length === 0 && <div style={styles.emptyBox}>No items yet. Add products or services to reuse across documents.</div>}
         {items.map((it) => (
@@ -677,8 +684,8 @@ function ItemsList({ items, setEditing, setItems }) {
               <div style={styles.docRowSub}>HSN {it.hsn || '—'} · Tax {it.gst}%</div>
             </div>
             <div style={{ textAlign: 'right', marginRight: 8 }}>
-              <div style={{ fontSize: 11, color: '#888780' }}>Buy: <span style={{ color: '#B5453A', fontWeight: 600 }}>{currency(it.purchaseRate ?? it.rate ?? 0)}</span></div>
-              <div style={{ fontSize: 11, color: '#888780' }}>Sell: <span style={{ color: '#1A7A3E', fontWeight: 600 }}>{currency(it.saleRate ?? it.rate ?? 0)}</span></div>
+              <div style={{ fontSize: 11, color: '#888780' }}>Buy: <span style={{ color: '#B5453A', fontWeight: 600 }}>{fmt(it.purchaseRate ?? it.rate ?? 0)}</span></div>
+              <div style={{ fontSize: 11, color: '#888780' }}>Sell: <span style={{ color: '#1A7A3E', fontWeight: 600 }}>{fmt(it.saleRate ?? it.rate ?? 0)}</span></div>
             </div>
             <button onClick={() => setEditing(it)} style={styles.ghostBtn}>Edit</button>
             <button onClick={() => setItems((is) => is.filter((x) => x.id !== it.id))} style={styles.iconBtn}><Trash2 size={15} color="#B5453A" /></button>
@@ -1341,7 +1348,7 @@ function DocRow({ doc, customers, vendors, onClick, businessInfo }) {
         <div style={styles.docRowSub}>{party ? party.name : (t.party === 'vendor' ? 'No vendor' : 'No customer')} · {t.label}</div>
       </div>
       <div style={styles.docRowDate}>{doc.date}</div>
-      <div className="serif" style={styles.docRowAmount}>{currency(totals.grandTotal)}</div>
+      <div className="serif" style={styles.docRowAmount}>{makeFmt(businessInfo)(totals.grandTotal)}</div>
       <StatusBadge status={doc.status} />
     </div>
   );
@@ -2849,6 +2856,9 @@ function PettyCashList({ pettyCash, setPettyCash, businessInfo, userRole }) {
   const [editingOB, setEditingOB] = useState(false);
   const [obInput, setObInput] = useState('');
   const canEdit = userRole === 'admin' || userRole === 'manager' || userRole === 'accounts';
+  const cc = COUNTRY_CONFIG[(businessInfo && businessInfo.country)] || COUNTRY_CONFIG.india;
+  const fmt = makeFmt(businessInfo);
+  const sym = cc.currency;
 
   const entries = Array.isArray(pettyCash.entries) ? pettyCash.entries : [];
 
@@ -2900,7 +2910,7 @@ function PettyCashList({ pettyCash, setPettyCash, businessInfo, userRole }) {
         </div>
         <div style={{ display: 'flex', gap: 10, alignItems: 'center' }}>
           <div style={{ background: balance >= 0 ? '#EEF7F1' : '#FEF2F2', borderRadius: 8, padding: '6px 14px', fontSize: 13, fontWeight: 600, color: balance >= 0 ? '#1A7A3E' : '#B91C1C' }}>
-            Balance: ₹{balance.toLocaleString('en-IN', { minimumFractionDigits: 2 })}
+            Balance: {fmt(balance)}
           </div>
           <button style={styles.secondaryBtn} onClick={() => setShowStatement(true)}>
             <Printer size={15} />Print / Export
@@ -2923,7 +2933,7 @@ function PettyCashList({ pettyCash, setPettyCash, businessInfo, userRole }) {
           </>
         ) : (
           <>
-            <span style={{ fontWeight: 600, color: '#1E2A4A' }}>₹{(pettyCash.openingBalance ?? 0).toLocaleString('en-IN', { minimumFractionDigits: 2 })}</span>
+            <span style={{ fontWeight: 600, color: '#1E2A4A' }}>{fmt(pettyCash.openingBalance ?? 0)}</span>
             {canEdit && <button style={{ ...styles.ghostBtn, padding: '3px 10px', fontSize: 12 }} onClick={() => { setObInput(pettyCash.openingBalance ?? 0); setEditingOB(true); }}>Edit</button>}
           </>
         )}
@@ -2933,7 +2943,7 @@ function PettyCashList({ pettyCash, setPettyCash, businessInfo, userRole }) {
         <table style={styles.table}>
           <thead>
             <tr>
-              {['Date', 'Voucher No', 'Category', 'Description', 'Paid To', 'Debit (₹)', 'Credit (₹)', 'Balance (₹)', 'Status', ''].map(h => (
+              {['Date', 'Voucher No', 'Category', 'Description', 'Paid To', `Debit (${sym.trim()})`, `Credit (${sym.trim()})`, `Balance (${sym.trim()})`, 'Status', ''].map(h => (
                 <th key={h} style={styles.th}>{h}</th>
               ))}
             </tr>
@@ -2949,9 +2959,9 @@ function PettyCashList({ pettyCash, setPettyCash, businessInfo, userRole }) {
                 <td style={styles.td}>{entry.category}</td>
                 <td style={styles.td}>{entry.description}</td>
                 <td style={styles.td}>{entry.paidTo}</td>
-                <td style={{ ...styles.td, color: '#B91C1C', fontWeight: 500 }}>{entry.debit ? '₹' + entry.debit.toLocaleString('en-IN', { minimumFractionDigits: 2 }) : '—'}</td>
-                <td style={{ ...styles.td, color: '#1A7A3E', fontWeight: 500 }}>{entry.credit ? '₹' + entry.credit.toLocaleString('en-IN', { minimumFractionDigits: 2 }) : '—'}</td>
-                <td style={{ ...styles.td, fontWeight: 600, color: entry.__balance >= 0 ? '#1E2A4A' : '#B91C1C' }}>₹{entry.__balance.toLocaleString('en-IN', { minimumFractionDigits: 2 })}</td>
+                <td style={{ ...styles.td, color: '#B91C1C', fontWeight: 500 }}>{entry.debit ? fmt(entry.debit) : '—'}</td>
+                <td style={{ ...styles.td, color: '#1A7A3E', fontWeight: 500 }}>{entry.credit ? fmt(entry.credit) : '—'}</td>
+                <td style={{ ...styles.td, fontWeight: 600, color: entry.__balance >= 0 ? '#1E2A4A' : '#B91C1C' }}>{fmt(entry.__balance)}</td>
                 <td style={styles.td}>
                   <StatusBadge status={entry.status || 'draft'} />
                   <ApprovalActions item={entry} onUpdate={(patch) => updateEntryStatus(entry.id, patch)} userRole={userRole} compact />
@@ -3040,7 +3050,7 @@ function PettyCashForm({ entry, onSave, onClose }) {
           <input value={form.paidTo} onChange={e => set('paidTo', e.target.value)} style={styles.input} placeholder="Name" />
         </div>
         <div style={styles.formGroup}>
-          <label style={styles.label}>Amount (₹)</label>
+          <label style={styles.label}>Amount</label>
           <input type="number" value={form.type === 'debit' ? form.debit : form.credit}
             onChange={e => form.type === 'debit' ? set('debit', e.target.value) : set('credit', e.target.value)}
             style={styles.input} placeholder="0.00" />
@@ -3073,7 +3083,7 @@ function StatementPanel({ rows, openingBalance, businessInfo, onClose }) {
     balance = balance - debit + credit;
     return { ...e, debit, credit, runningBalance: balance };
   });
-  const fmt = (n) => '₹' + Math.abs(n).toLocaleString('en-IN', { minimumFractionDigits: 2 });
+  const fmtStmt = (n) => makeFmt(businessInfo)(Math.abs(n));
 
   return (
     <div>
@@ -3097,7 +3107,7 @@ function StatementPanel({ rows, openingBalance, businessInfo, onClose }) {
         </div>
         {/* Opening balance */}
         <div style={{ fontSize: 13, marginBottom: 14, color: '#555' }}>
-          Opening Balance: <strong style={{ color: '#1E2A4A' }}>{fmt(openingBalance)}</strong>
+          Opening Balance: <strong style={{ color: '#1E2A4A' }}>{fmtStmt(openingBalance)}</strong>
         </div>
         {/* Table */}
         <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12 }}>
@@ -3116,16 +3126,16 @@ function StatementPanel({ rows, openingBalance, businessInfo, onClose }) {
                 <td style={{ padding: '6px 10px', borderBottom: '1px solid #F0EDE5', color: '#1E2A4A' }}>{e.description}</td>
                 <td style={{ padding: '6px 10px', borderBottom: '1px solid #F0EDE5', color: '#555' }}>{e.category}</td>
                 <td style={{ padding: '6px 10px', borderBottom: '1px solid #F0EDE5', color: '#555' }}>{e.paidTo}</td>
-                <td style={{ padding: '6px 10px', borderBottom: '1px solid #F0EDE5', textAlign: 'right', color: e.debit ? '#B91C1C' : '#ccc' }}>{e.debit ? fmt(e.debit) : '—'}</td>
-                <td style={{ padding: '6px 10px', borderBottom: '1px solid #F0EDE5', textAlign: 'right', color: e.credit ? '#1A7A3E' : '#ccc' }}>{e.credit ? fmt(e.credit) : '—'}</td>
-                <td style={{ padding: '6px 10px', borderBottom: '1px solid #F0EDE5', textAlign: 'right', fontWeight: 600, color: e.runningBalance >= 0 ? '#1E2A4A' : '#B91C1C' }}>{fmt(e.runningBalance)}</td>
+                <td style={{ padding: '6px 10px', borderBottom: '1px solid #F0EDE5', textAlign: 'right', color: e.debit ? '#B91C1C' : '#ccc' }}>{e.debit ? fmtStmt(e.debit) : '—'}</td>
+                <td style={{ padding: '6px 10px', borderBottom: '1px solid #F0EDE5', textAlign: 'right', color: e.credit ? '#1A7A3E' : '#ccc' }}>{e.credit ? fmtStmt(e.credit) : '—'}</td>
+                <td style={{ padding: '6px 10px', borderBottom: '1px solid #F0EDE5', textAlign: 'right', fontWeight: 600, color: e.runningBalance >= 0 ? '#1E2A4A' : '#B91C1C' }}>{fmtStmt(e.runningBalance)}</td>
               </tr>
             ))}
           </tbody>
         </table>
         {/* Closing balance */}
         <div style={{ marginTop: 20, textAlign: 'right', fontSize: 14, fontWeight: 700, color: '#1E2A4A', borderTop: '2px solid #1E2A4A', paddingTop: 10 }}>
-          Closing Balance: {fmt(ledger.length ? ledger[ledger.length - 1].runningBalance : openingBalance)}
+          Closing Balance: {fmtStmt(ledger.length ? ledger[ledger.length - 1].runningBalance : openingBalance)}
         </div>
       </div>
     </div>
@@ -3157,7 +3167,7 @@ function PettyCashVoucherPrint({ entry, businessInfo, onClose }) {
               ['Description', entry.description],
               [entry.debit > 0 ? 'Paid To' : 'Received From', entry.paidTo],
               ['Payment Mode', entry.mode],
-              ['Amount', '₹' + (entry.debit || entry.credit || 0).toLocaleString('en-IN', { minimumFractionDigits: 2 })],
+              ['Amount', makeFmt(businessInfo)(entry.debit || entry.credit || 0)],
               ['Type', entry.debit > 0 ? 'Expense (Debit)' : 'Cash Received (Credit)'],
               ...(entry.remarks ? [['Remarks', entry.remarks]] : []),
             ].map(([label, val]) => (
@@ -3234,6 +3244,7 @@ function VoucherList({ vouchers, setVouchers, businessInfo, customers, vendors, 
   }
 
   const totalAmount = filtered.reduce((sum, v) => sum + (parseFloat(v.amount) || 0), 0);
+  const fmt = makeFmt(businessInfo);
 
   const tabStyle = (t) => ({
     padding: '8px 20px', border: 'none', cursor: 'pointer', fontWeight: 500, fontSize: 13.5,
@@ -3290,7 +3301,7 @@ function VoucherList({ vouchers, setVouchers, businessInfo, customers, vendors, 
 
       {filtered.length > 0 && (
         <div style={{ background: tab === 'payment' ? '#FEF2F2' : '#EEF7F1', borderRadius: 8, padding: '8px 14px', marginBottom: 12, fontSize: 13, fontWeight: 600, color: tab === 'payment' ? '#B91C1C' : '#1A7A3E', display: 'inline-block' }}>
-          Total {tab === 'payment' ? 'Payments' : 'Receipts'}{partyFilter ? ` · ${partyFilter}` : ''}: ₹{totalAmount.toLocaleString('en-IN', { minimumFractionDigits: 2 })}
+          Total {tab === 'payment' ? 'Payments' : 'Receipts'}{partyFilter ? ` · ${partyFilter}` : ''}: {fmt(totalAmount)}
         </div>
       )}
 
@@ -3298,7 +3309,7 @@ function VoucherList({ vouchers, setVouchers, businessInfo, customers, vendors, 
         <table style={styles.table}>
           <thead>
             <tr>
-              {['Date', 'Voucher No', 'Party', 'Account Head', 'Mode', 'Amount (₹)', 'Narration', 'Status', ''].map(h => (
+              {['Date', 'Voucher No', 'Party', 'Account Head', 'Mode', 'Amount', 'Narration', 'Status', ''].map(h => (
                 <th key={h} style={styles.th}>{h}</th>
               ))}
             </tr>
@@ -3314,7 +3325,7 @@ function VoucherList({ vouchers, setVouchers, businessInfo, customers, vendors, 
                 <td style={styles.td}>{v.party}</td>
                 <td style={styles.td}>{v.accountHead}</td>
                 <td style={styles.td}><span style={{ background: '#F5F3EE', borderRadius: 4, padding: '2px 7px', fontSize: 11.5 }}>{v.mode}</span></td>
-                <td style={{ ...styles.td, fontWeight: 600, color: tab === 'payment' ? '#B91C1C' : '#1A7A3E' }}>₹{parseFloat(v.amount || 0).toLocaleString('en-IN', { minimumFractionDigits: 2 })}</td>
+                <td style={{ ...styles.td, fontWeight: 600, color: tab === 'payment' ? '#B91C1C' : '#1A7A3E' }}>{fmt(parseFloat(v.amount || 0))}</td>
                 <td style={{ ...styles.td, color: '#888780', maxWidth: 180 }}>{v.narration}</td>
                 <td style={styles.td}>
                   <StatusBadge status={v.status || 'draft'} />
@@ -3399,7 +3410,7 @@ function VoucherForm({ voucher, customers, vendors, onSave, onClose }) {
           </select>
         </div>
         <div style={styles.formGroup}>
-          <label style={styles.label}>Amount (₹)</label>
+          <label style={styles.label}>Amount</label>
           <input type="number" value={form.amount} onChange={e => set('amount', e.target.value)} style={styles.input} placeholder="0.00" />
         </div>
         <div style={styles.formGroup}>
@@ -4248,7 +4259,7 @@ function EmployeesView({ employees, setEmployees, userRole, businessInfo }) {
                     <span style={{ ...styles.badge, background: DEPT_COLORS[i % DEPT_COLORS.length], color: '#333' }}>{e.department || '—'}</span>
                   </td>
                   <td style={styles.td}>{e.phone}</td>
-                  <td style={{ ...styles.td, textAlign: 'right', fontWeight: 600 }}>{currency(parseFloat(e.basicSalary)||0)}</td>
+                  <td style={{ ...styles.td, textAlign: 'right', fontWeight: 600 }}>{makeFmt(businessInfo)(parseFloat(e.basicSalary)||0)}</td>
                   <td style={styles.td}>
                     <span style={{ ...styles.badge, ...(e.status === 'active' ? { background: '#D1FAE5', color: '#065F46' } : { background: '#F3F2EF', color: '#6B7494' }) }}>{e.status || 'active'}</span>
                   </td>
@@ -4266,7 +4277,7 @@ function EmployeesView({ employees, setEmployees, userRole, businessInfo }) {
       )}
       {showModal && (
         <Modal title={active ? 'Edit Employee' : 'New Employee'} onClose={() => setShowModal(false)} wide>
-          <EmployeeForm employee={active} count={employees.length} onSave={saveEmployee} onClose={() => setShowModal(false)} />
+          <EmployeeForm employee={active} count={employees.length} businessInfo={businessInfo} onSave={saveEmployee} onClose={() => setShowModal(false)} />
         </Modal>
       )}
     </div>
@@ -4291,7 +4302,7 @@ function EmpField({ label, name, type = 'text', placeholder, form, errors, set, 
   );
 }
 
-function EmployeeForm({ employee, count, onSave, onClose }) {
+function EmployeeForm({ employee, count, businessInfo, onSave, onClose }) {
   const blank = {
     id: crypto.randomUUID(),
     empId: 'EMP-' + String(count + 1).padStart(4, '0'),
@@ -4316,6 +4327,7 @@ function EmployeeForm({ employee, count, onSave, onClose }) {
   const tds   = parseFloat(form.tds) || 0;
   const deductions = pf + esi + tds;
   const net   = gross - deductions;
+  const fmtEmp = makeFmt(businessInfo);
 
   function validate() {
     const e = {};
@@ -4361,12 +4373,12 @@ function EmployeeForm({ employee, count, onSave, onClose }) {
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3,1fr)', gap: 10 }}>
         <EmpField label="PF % (of Basic)" name="pf" type="number" form={form} errors={errors} set={set} setErrors={setErrors} />
         <EmpField label="ESI % (of Gross)" name="esi" type="number" form={form} errors={errors} set={set} setErrors={setErrors} />
-        <EmpField label="TDS Fixed (₹)" name="tds" type="number" form={form} errors={errors} set={set} setErrors={setErrors} />
+        <EmpField label="TDS Fixed" name="tds" type="number" form={form} errors={errors} set={set} setErrors={setErrors} />
       </div>
       <div style={{ background: '#1E2A4A', color: '#fff', borderRadius: 8, padding: '10px 14px', marginBottom: 12, display: 'grid', gridTemplateColumns: 'repeat(3,1fr)', gap: 10, fontSize: 13 }}>
-        <div>Gross: <strong>{currency(gross)}</strong></div>
-        <div>Deductions: <strong>{currency(deductions)}</strong></div>
-        <div>Net Pay: <strong style={{ color: '#7FBF96' }}>{currency(net)}</strong></div>
+        <div>Gross: <strong>{fmtEmp(gross)}</strong></div>
+        <div>Deductions: <strong>{fmtEmp(deductions)}</strong></div>
+        <div>Net Pay: <strong style={{ color: '#7FBF96' }}>{fmtEmp(net)}</strong></div>
       </div>
 
       <div style={{ fontSize: 12, fontWeight: 700, letterSpacing: '0.07em', textTransform: 'uppercase', color: '#C9A24B', borderBottom: '1px solid #EAE6DB', paddingBottom: 6, marginBottom: 12 }}>Bank Details</div>
@@ -4393,6 +4405,7 @@ function PayrollView({ employees, payrollRuns, setPayrollRuns, businessInfo, use
   const [printRun, setPrintRun] = useState(null);
   const [printMode, setPrintMode] = useState(null); // 'summary' | 'individual'
   const canEdit = userRole === 'admin' || userRole === 'manager';
+  const fmt = makeFmt(businessInfo);
 
   function deleteRun(id) {
     if (!window.confirm('Delete this payroll run?')) return;
@@ -4447,9 +4460,9 @@ function PayrollView({ employees, payrollRuns, setPayrollRuns, businessInfo, use
                   <tr key={r.id}>
                     <td style={{ ...styles.td, fontWeight: 600 }}>{MONTHS.find(m=>m[0]===r.month)?.[1]} {r.year}</td>
                     <td style={styles.td}>{(r.lines||[]).length}</td>
-                    <td style={{ ...styles.td, textAlign: 'right' }}>{currency((r.lines||[]).reduce((s,l)=>s+(l.gross||0),0))}</td>
-                    <td style={{ ...styles.td, textAlign: 'right', color: '#B5453A' }}>{currency((r.lines||[]).reduce((s,l)=>s+(l.totalDeductions||0),0))}</td>
-                    <td style={{ ...styles.td, textAlign: 'right', fontWeight: 700, color: '#065F46' }}>{currency((r.lines||[]).reduce((s,l)=>s+(l.net||0),0))}</td>
+                    <td style={{ ...styles.td, textAlign: 'right' }}>{fmt((r.lines||[]).reduce((s,l)=>s+(l.gross||0),0))}</td>
+                    <td style={{ ...styles.td, textAlign: 'right', color: '#B5453A' }}>{fmt((r.lines||[]).reduce((s,l)=>s+(l.totalDeductions||0),0))}</td>
+                    <td style={{ ...styles.td, textAlign: 'right', fontWeight: 700, color: '#065F46' }}>{fmt((r.lines||[]).reduce((s,l)=>s+(l.net||0),0))}</td>
                     <td style={styles.td}>
                       <span style={{ ...styles.badge, background: sb.bg, color: sb.color }}>{sb.label}</span>
                     </td>
@@ -4499,6 +4512,7 @@ function PayrollView({ employees, payrollRuns, setPayrollRuns, businessInfo, use
         <PayrollModal
           employees={activeEmp}
           payrollRuns={payrollRuns}
+          businessInfo={businessInfo}
           onSave={(run) => { setPayrollRuns(prev => [...prev, run]); setShowModal(false); }}
           onClose={() => setShowModal(false)}
         />
@@ -4507,11 +4521,12 @@ function PayrollView({ employees, payrollRuns, setPayrollRuns, businessInfo, use
   );
 }
 
-function PayrollModal({ employees, payrollRuns, onSave, onClose }) {
+function PayrollModal({ employees, payrollRuns, businessInfo, onSave, onClose }) {
   const now = new Date();
   const [month, setMonth] = useState(String(now.getMonth() + 1).padStart(2, '0'));
   const [year, setYear]   = useState(String(now.getFullYear()));
   const [error, setError] = useState('');
+  const fmt = makeFmt(businessInfo);
 
   const initLines = () => employees.map(e => {
     const basic = parseFloat(e.basicSalary) || 0;
@@ -4595,9 +4610,9 @@ function PayrollModal({ employees, payrollRuns, onSave, onClose }) {
               </div>
             )}
             <div style={{ marginLeft: 'auto', display: 'flex', gap: 20, fontSize: 13 }}>
-              <span>Gross: <strong>{currency(totalGross)}</strong></span>
-              <span style={{ color: '#B5453A' }}>Deductions: <strong>{currency(totalDed)}</strong></span>
-              <span style={{ color: '#065F46', fontWeight: 700 }}>Net: <strong>{currency(totalNet)}</strong></span>
+              <span>Gross: <strong>{fmt(totalGross)}</strong></span>
+              <span style={{ color: '#B5453A' }}>Deductions: <strong>{fmt(totalDed)}</strong></span>
+              <span style={{ color: '#065F46', fontWeight: 700 }}>Net: <strong>{fmt(totalNet)}</strong></span>
             </div>
           </div>
 
@@ -4614,7 +4629,7 @@ function PayrollModal({ employees, payrollRuns, onSave, onClose }) {
               <table style={{ ...styles.table, fontSize: 12 }}>
                 <thead>
                   <tr style={{ background: '#F7F4EE' }}>
-                    {['Employee','Gross (₹)','Working Days','Paid Days','PF (₹)','ESI (₹)','TDS (₹)','LOP Days','LOP (₹)','Advance (₹)','Other Deduct','Note','Net Pay (₹)'].map(h=>(
+                    {['Employee','Gross','Working Days','Paid Days','PF','ESI','TDS','LOP Days','LOP','Advance','Other Deduct','Note','Net Pay'].map(h=>(
                       <th key={h} style={{ ...styles.th, whiteSpace: 'nowrap', padding: '8px 8px' }}>{h}</th>
                     ))}
                   </tr>
@@ -4626,7 +4641,7 @@ function PayrollModal({ employees, payrollRuns, onSave, onClose }) {
                         <div style={{ fontWeight: 600 }}>{l.name}</div>
                         <div style={{ color: '#888', fontSize: 11 }}>{l.empId} · {l.designation}</div>
                       </td>
-                      <td style={{ ...styles.td, textAlign: 'right', fontWeight: 600 }}>{currency(l.gross)}</td>
+                      <td style={{ ...styles.td, textAlign: 'right', fontWeight: 600 }}>{fmt(l.gross)}</td>
                       <td style={{ ...styles.td, textAlign: 'center' }}>{l.workingDays}</td>
                       <td style={{ ...styles.td, textAlign: 'center' }}>
                         <input type="number" min={0} max={l.workingDays}
@@ -4634,9 +4649,9 @@ function PayrollModal({ employees, payrollRuns, onSave, onClose }) {
                           value={l.paidDays}
                           onChange={e => updateLine(i, { paidDays: parseFloat(e.target.value)||0 })} />
                       </td>
-                      <td style={{ ...styles.td, textAlign: 'right', color: '#666' }}>{currency(l.pf)}</td>
-                      <td style={{ ...styles.td, textAlign: 'right', color: '#666' }}>{currency(l.esi)}</td>
-                      <td style={{ ...styles.td, textAlign: 'right', color: '#666' }}>{currency(l.tds)}</td>
+                      <td style={{ ...styles.td, textAlign: 'right', color: '#666' }}>{fmt(l.pf)}</td>
+                      <td style={{ ...styles.td, textAlign: 'right', color: '#666' }}>{fmt(l.esi)}</td>
+                      <td style={{ ...styles.td, textAlign: 'right', color: '#666' }}>{fmt(l.tds)}</td>
                       {/* LOP Days */}
                       <td style={{ ...styles.td, textAlign: 'center' }}>
                         <input type="number" min={0} max={l.workingDays}
@@ -4646,7 +4661,7 @@ function PayrollModal({ employees, payrollRuns, onSave, onClose }) {
                       </td>
                       {/* LOP amount — auto-calculated */}
                       <td style={{ ...styles.td, textAlign: 'right', color: l.lopAmt > 0 ? '#B5453A' : '#ccc' }}>
-                        {l.lopAmt > 0 ? `-${currency(l.lopAmt)}` : '—'}
+                        {l.lopAmt > 0 ? `-${fmt(l.lopAmt)}` : '—'}
                       </td>
                       {/* Advance deduction */}
                       <td style={{ ...styles.td, textAlign: 'right' }}>
@@ -4673,7 +4688,7 @@ function PayrollModal({ employees, payrollRuns, onSave, onClose }) {
                           onChange={e => updateLine(i, { otherDeductNote: e.target.value })} />
                       </td>
                       <td style={{ ...styles.td, textAlign: 'right', fontWeight: 700, color: '#065F46', whiteSpace: 'nowrap' }}>
-                        {currency(l.net)}
+                        {fmt(l.net)}
                       </td>
                     </tr>
                   ))}
@@ -6338,9 +6353,10 @@ function DrawingUploader({ files = [], onChange, ownerUid, folder }) {
   );
 }
 
-function RawMaterialsList({ rawMaterials, setRawMaterials, userRole, ownerUid }) {
+function RawMaterialsList({ rawMaterials, setRawMaterials, userRole, ownerUid, businessInfo }) {
   const [editing, setEditing] = useState(null);
   const canEdit = userRole === 'admin' || userRole === 'manager' || userRole === 'inventory';
+  const fmt = makeFmt(businessInfo);
 
   function upsert(m) {
     if (m.id) {
@@ -6364,7 +6380,7 @@ function RawMaterialsList({ rawMaterials, setRawMaterials, userRole, ownerUid })
           <div key={m.id} style={styles.recordRow}>
             <div style={{ flex: 1 }}>
               <div style={styles.docRowTitle}>{m.name}</div>
-              <div style={styles.docRowSub}>Unit: {m.unit || '—'} · Rate: {currency(m.rate || 0)} · Min stock: {m.minStock || 0}</div>
+              <div style={styles.docRowSub}>Unit: {m.unit || '—'} · Rate: {fmt(m.rate || 0)} · Min stock: {m.minStock || 0}</div>
             </div>
             <div style={{ textAlign: 'right', minWidth: 80 }}>
               <div className="serif" style={{ fontSize: 18, fontWeight: 700, color: (m.stock <= m.minStock) ? '#B5453A' : '#1E2A4A' }}>{m.stock}</div>
@@ -7409,6 +7425,7 @@ export default function App() {
             items={items}
             setItems={setItems}
             setEditing={setEditingItem}
+            businessInfo={businessInfo}
           />
         );
       case 'settings':
@@ -7511,6 +7528,7 @@ export default function App() {
             setRawMaterials={setRawMaterials}
             userRole={userRole}
             ownerUid={ownerUid}
+            businessInfo={businessInfo}
           />
         );
       case 'bom':
