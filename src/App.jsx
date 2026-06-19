@@ -1343,7 +1343,7 @@ function Dashboard({ stats, documents, customers, vendors, businessInfo, startNe
           <button key={key} onClick={() => startNewDoc(key)} style={styles.quickCard}>
             <t.icon size={22} strokeWidth={1.6} color={t.color} />
             <span style={styles.quickLabel}>{t.label}</span>
-            <span style={styles.quickCount}>{stats.counts[key]} created</span>
+            <span style={styles.quickCount}>{stats.counts[key] || 0} created</span>
           </button>
         ))}
       </div>
@@ -1978,7 +1978,13 @@ function HsnSearchModal({ onSelect, onClose }) {
 // ─── DocEditor ─────────────────────────────────────────────────
 
 function DocEditor({ doc, setDoc, customers, vendors, items, businessInfo, userRole, onSave, onCancel, onAddCustomer, onAddVendor, onConvert, onOpenDoc, documents = [] }) {
+  // All hooks MUST come before any conditional returns (React Rules of Hooks)
+  const [rejectMode, setRejectMode] = useState(false);
+  const [rejectionNote, setRejectionNote] = useState('');
+  const [hsnSearchRow, setHsnSearchRow] = useState(null); // rowId being searched
+
   const t = DOC_TYPES[doc.type];
+  if (!t) return <div style={{ padding: 32, color: '#B5453A' }}>Unknown document type: "{doc.type}". Please go back and try again.</div>;
   const isVendorDoc = t.party === 'vendor';
   const partyList = isVendorDoc ? vendors : customers;
   const totals = computeTotals(doc, businessInfo.state, businessInfo.country);
@@ -1987,9 +1993,6 @@ function DocEditor({ doc, setDoc, customers, vendors, items, businessInfo, userR
   const template = businessInfo.template || 'classic';
   const cc = COUNTRY_CONFIG[businessInfo.country || 'india'];
   const fmt = (n) => currency(n, cc.currency);
-  const [rejectMode, setRejectMode] = useState(false);
-  const [rejectionNote, setRejectionNote] = useState('');
-  const [hsnSearchRow, setHsnSearchRow] = useState(null); // rowId being searched
 
   // Field editing rules
   const isApproved = doc.status === 'approved';
@@ -7244,8 +7247,20 @@ function TermsLibraryView({ termsLibrary, setTermsLibrary, userRole }) {
   const clauses   = termsLibrary.clauses   || [];
   const templates = termsLibrary.templates || [];
 
-  function saveClauses(next)   { setTermsLibrary(prev => ({ ...prev, clauses: next })); }
-  function saveTemplates(next) { setTermsLibrary(prev => ({ ...prev, templates: next })); }
+  function saveClauses(updater) {
+    setTermsLibrary(prev => {
+      const prevClauses = prev.clauses || [];
+      const next = typeof updater === 'function' ? updater(prevClauses) : updater;
+      return { ...prev, clauses: next };
+    });
+  }
+  function saveTemplates(updater) {
+    setTermsLibrary(prev => {
+      const prevTemplates = prev.templates || [];
+      const next = typeof updater === 'function' ? updater(prevTemplates) : updater;
+      return { ...prev, templates: next };
+    });
+  }
 
   // ── Clause CRUD ──
   function handleSaveClause(form) {
@@ -7493,7 +7508,8 @@ function ContractList({ contracts, setContracts, customers, termsLibrary, busine
 
   function handleSave(form) {
     if (!form.number) form.number = nextConNum();
-    setContracts(prev => form._isNew ? [...prev, { ...form, _isNew: undefined }] : prev.map(c => c.id === form.id ? form : c));
+    const { _isNew, ...rest } = form; // strip _isNew so Firestore doesn't reject undefined field
+    setContracts(prev => _isNew ? [...prev, rest] : prev.map(c => c.id === rest.id ? rest : c));
     setEditing(null);
   }
 
@@ -7859,7 +7875,8 @@ function ChannelPartnerList({ channelPartners, setChannelPartners, documents, te
 
   function handleSave(form) {
     if (!form.number) form.number = nextCPNum();
-    setChannelPartners(prev => form._isNew ? [...prev, { ...form, _isNew: undefined }] : prev.map(p => p.id === form.id ? form : p));
+    const { _isNew, ...rest } = form; // strip _isNew so Firestore doesn't reject undefined field
+    setChannelPartners(prev => _isNew ? [...prev, rest] : prev.map(p => p.id === rest.id ? rest : p));
     setEditing(null);
   }
 
@@ -8325,8 +8342,22 @@ export default function App() {
     const totalReceived  = voucherList.filter(v => v.type === 'receipt').reduce((s, v) => s + (parseFloat(v.amount) || 0), 0);
     const totalPaid      = voucherList.filter(v => v.type === 'payment').reduce((s, v) => s + (parseFloat(v.amount) || 0), 0);
     const counts = documents.reduce((acc, d) => { if (d.type) acc[d.type] = (acc[d.type] || 0) + 1; return acc; }, {});
-    return { totalRevenue, totalPurchases, outstanding, payable, totalReceived, totalPaid, counts };
-  }, [documents, vouchers, businessInfo, country]);
+    // Petty cash balance
+    const pcEntries = Array.isArray(pettyCash?.entries) ? pettyCash.entries : [];
+    const pcBalance = (pettyCash?.openingBalance || 0) + pcEntries.reduce((s, e) => s + (e.type === 'income' ? (e.amount || 0) : -(e.amount || 0)), 0);
+    // Inventory stats
+    const itemCount = items.length;
+    const lowStockCount = items.filter(it => {
+      if (!it.minStock) return false;
+      const qty = (it.openingStock || 0) + stockLedger.filter(l => l.itemId === it.id).reduce((s, l) => s + (l.qty || 0), 0);
+      return qty < it.minStock;
+    }).length;
+    // Production stats
+    const rmCount = rawMaterials.length;
+    const poCount = productionOrders.length;
+    const poOpen  = productionOrders.filter(p => p.status !== 'completed' && p.status !== 'done').length;
+    return { totalRevenue, totalPurchases, outstanding, payable, totalReceived, totalPaid, counts, pcBalance, itemCount, lowStockCount, rmCount, poCount, poOpen };
+  }, [documents, vouchers, businessInfo, country, pettyCash, items, stockLedger, rawMaterials, productionOrders]);
 
   // ── Auth gates ───────────────────────────────────────────────────────────────
   if (!authReady) return (
@@ -8693,7 +8724,7 @@ export default function App() {
             const isNew = !c.id;
             setCustomers((prev) => isNew ? [...prev, saved] : prev.map((x) => x.id === saved.id ? saved : x));
             if (isNew && view === 'doceditor' && activeDoc) {
-              setActiveDoc((d) => ({ ...d, customerId: saved.id, customerSnapshot: saved }));
+              setActiveDoc((d) => ({ ...d, customerId: saved.id, customerSnapshot: save              setActiveDoc((d) => ({ ...d, customerId: saved.id, customerSnapshot: saved }));
             }
             setEditingCustomer(null);
           }}
@@ -8719,7 +8750,7 @@ export default function App() {
       )}
 
       {editingItem && (
-        <ItemModal
+            <ItemModal
           item={editingItem}
           businessInfo={businessInfo}
           onSave={(it) => {
