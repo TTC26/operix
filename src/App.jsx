@@ -9322,19 +9322,3 @@ export default function App() {
     </div>
   );
 }
-
-        <ItemModal
-          item={editingItem}
-          businessInfo={businessInfo}
-          onSave={(it) => {
-            const saved = { ...it, id: it.id || crypto.randomUUID() };
-            const isNew = !it.id;
-            setItems((prev) => isNew ? [...prev, saved] : prev.map((x) => x.id === saved.id ? saved : x));
-            setEditingItem(null);
-          }}
-          onClose={() => setEditingItem(null)}
-        />
-      )}
-    </div>
-  );
-}
