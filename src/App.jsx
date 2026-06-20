@@ -8447,7 +8447,7 @@ export default function App() {
           onAddCustomer={(c) => setEditingCustomer(c || { name: '' })}
           onAddVendor={(v) => setEditingVendor(v || { name: '' })}
           onConvert={convertDoc}
-          onOpenDoc={openDoc}
+          onOpenDoc={(docId) => { const found = documents.find(d => d.id === docId); if (found) openDoc(found); }}
           documents={documents}
         />
       );
