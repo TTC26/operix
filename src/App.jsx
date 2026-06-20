@@ -857,9 +857,16 @@ function TemplateMiniPreview({ template, name }) {
 }
 
 
-function SettingsView({ businessInfo, setBusinessInfo, onExportData }) {
+function SettingsView({ businessInfo, setBusinessInfo, onExportData, onSaved }) {
   const [form, setForm] = useState(businessInfo);
+  const [saved, setSaved] = useState(false);
   useEffect(() => setForm(businessInfo), [businessInfo]);
+
+  function handleSave() {
+    setBusinessInfo(form);
+    setSaved(true);
+    setTimeout(() => { setSaved(false); if (onSaved) onSaved(); }, 1200);
+  }
 
   function handleLogoUpload(e) {
     const file = e.target.files[0];
@@ -1076,7 +1083,9 @@ function SettingsView({ businessInfo, setBusinessInfo, onExportData }) {
           <input value={form.signatory || ''} onChange={(e) => setForm((p) => ({ ...p, signatory: e.target.value }))} style={styles.input} placeholder="e.g. Director / Manager" />
         </div>
 
-        <button onClick={() => setBusinessInfo(form)} style={styles.primaryBtn}>Save profile</button>
+        <button onClick={handleSave} style={{ ...styles.primaryBtn, background: saved ? '#1A7A3E' : undefined, transition: 'background 0.3s' }}>
+          {saved ? '✓ Settings saved!' : 'Save profile'}
+        </button>
 
         {/* ── Data & Privacy ── */}
         <div style={{ ...styles.sectionDivider, marginTop: 32 }}>Data &amp; Privacy</div>
@@ -1320,9 +1329,20 @@ function StaffModal({ ownerUid, onSaved, onClose, employees = [] }) {
 
 // ─── Dashboard ─────────────────────────────────────────────────
 
+// Doc types visible per company type
+const DASHBOARD_DOC_TYPES = {
+  trading:       ['quotation', 'invoice', 'delivery', 'packing_list', 'creditnote', 'purchase', 'purchasebill'],
+  service:       ['quotation', 'invoice', 'creditnote'],
+  manufacturing: ['quotation', 'invoice', 'delivery', 'packing_list', 'creditnote', 'purchase', 'purchasebill'],
+  both:          ['quotation', 'invoice', 'delivery', 'packing_list', 'creditnote', 'purchase', 'purchasebill'],
+};
+
 function Dashboard({ stats, documents, customers, vendors, businessInfo, startNewDoc, openDoc, setView, vouchers = [], pettyCash = {}, productionOrders = [], rawMaterials = [], items = [], companyType = 'trading' }) {
+  const allowedTypes = DASHBOARD_DOC_TYPES[companyType] || Object.keys(DOC_TYPES);
   const recent = [...documents].sort((a, b) => b.createdAt - a.createdAt).slice(0, 5);
   const showProduction = companyType === 'manufacturing' || companyType === 'both';
+  const showService    = companyType === 'service';
+  const showTrade      = companyType !== 'service';
   const cc = COUNTRY_CONFIG[businessInfo?.country || 'india'];
   const cur = (n) => currency(n, cc.currency);
   return (
@@ -1337,16 +1357,18 @@ function Dashboard({ stats, documents, customers, vendors, businessInfo, startNe
         <StatCard label="Total invoiced" value={cur(stats.totalRevenue)} accent="#1E2A4A" />
         <StatCard label="Outstanding (receivable)" value={cur(stats.outstanding)} accent="#B5453A" />
         <StatCard label="Quotations" value={stats.counts.quotation || 0} accent="#C9A24B" sub="created" />
-        <StatCard label="Delivery notes" value={stats.counts.delivery || 0} accent="#3D7A5C" sub="created" />
+        {showTrade && <StatCard label="Delivery notes" value={stats.counts.delivery || 0} accent="#3D7A5C" sub="created" />}
       </div>
 
-      <div style={styles.dashSection}>Purchase</div>
-      <div style={styles.statGrid}>
-        <StatCard label="Total purchases" value={cur(stats.totalPurchases)} accent="#6B5BAE" />
-        <StatCard label="Payable to vendors" value={cur(stats.payable)} accent="#8A6FD6" />
-        <StatCard label="Purchase orders" value={stats.counts.purchase || 0} accent="#6B5BAE" sub="raised" />
-        <StatCard label="Vendors" value={vendors.length} accent="#555" sub="registered" />
-      </div>
+      {showTrade && <>
+        <div style={styles.dashSection}>Purchase</div>
+        <div style={styles.statGrid}>
+          <StatCard label="Total purchases" value={cur(stats.totalPurchases)} accent="#6B5BAE" />
+          <StatCard label="Payable to vendors" value={cur(stats.payable)} accent="#8A6FD6" />
+          <StatCard label="Purchase orders" value={stats.counts.purchase || 0} accent="#6B5BAE" sub="raised" />
+          <StatCard label="Vendors" value={vendors.length} accent="#555" sub="registered" />
+        </div>
+      </>}
 
       <div style={styles.dashSection}>Accounts</div>
       <div style={styles.statGrid}>
@@ -1356,19 +1378,21 @@ function Dashboard({ stats, documents, customers, vendors, businessInfo, startNe
         <StatCard label="Customers" value={customers.length} accent="#1E2A4A" sub="registered" />
       </div>
 
-      <div style={styles.dashSection}>Inventory</div>
-      <div style={styles.statGrid}>
-        <StatCard label="Items master" value={stats.itemCount} accent="#3D7A5C" sub="products / services" />
-        <StatCard label="Low / out of stock" value={stats.lowStockCount || 0} accent={stats.lowStockCount > 0 ? '#B91C1C' : '#3D7A5C'} sub={stats.lowStockCount > 0 ? 'needs attention' : 'all items ok'} />
-        {showProduction && <StatCard label="Raw materials" value={stats.rmCount} accent="#C9A24B" sub="in master" />}
-        {showProduction && <StatCard label="Production orders" value={stats.poCount} accent="#1E2A4A" sub={`${stats.poOpen} open`} />}
-      </div>
+      {showTrade && <>
+        <div style={styles.dashSection}>Inventory</div>
+        <div style={styles.statGrid}>
+          <StatCard label="Items master" value={stats.itemCount} accent="#3D7A5C" sub="products / services" />
+          <StatCard label="Low / out of stock" value={stats.lowStockCount || 0} accent={stats.lowStockCount > 0 ? '#B91C1C' : '#3D7A5C'} sub={stats.lowStockCount > 0 ? 'needs attention' : 'all items ok'} />
+          {showProduction && <StatCard label="Raw materials" value={stats.rmCount} accent="#C9A24B" sub="in master" />}
+          {showProduction && <StatCard label="Production orders" value={stats.poCount} accent="#1E2A4A" sub={`${stats.poOpen} open`} />}
+        </div>
+      </>}
 
       <div style={styles.sectionRow}>
         <div className="serif" style={styles.h2}>Quick create</div>
       </div>
       <div style={styles.quickGrid}>
-        {Object.entries(DOC_TYPES).map(([key, t]) => (
+        {Object.entries(DOC_TYPES).filter(([key]) => allowedTypes.includes(key)).map(([key, t]) => (
           <button key={key} onClick={() => startNewDoc(key)} style={styles.quickCard}>
             <t.icon size={22} strokeWidth={1.6} color={t.color} />
             <span style={styles.quickLabel}>{t.label}</span>
@@ -8987,7 +9011,7 @@ export default function App() {
       case 'staff':
         return <StaffPage ownerUid={ownerUid} employees={employees} />;
       case 'settings':
-        return <SettingsView businessInfo={businessInfo} setBusinessInfo={setBusinessInfo} onExportData={exportAllData} />;
+        return <SettingsView businessInfo={businessInfo} setBusinessInfo={setBusinessInfo} onExportData={exportAllData} onSaved={() => setView('dashboard')} />;
       case 'pettycash':
         return (
           <PettyCashList
