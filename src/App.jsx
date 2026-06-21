@@ -1019,19 +1019,35 @@ function SettingsView({ businessInfo, setBusinessInfo, onExportData, onSaved }) 
 
         <div style={styles.formGroup}>
           <label style={styles.label}>Company type</label>
-          <div style={{ display: 'flex', gap: 10, marginTop: 4 }}>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 8, marginTop: 4 }}>
             {[
-              { id: 'trading', label: 'Trading', desc: 'Buy & sell only' },
-              { id: 'manufacturing', label: 'Manufacturing', desc: 'Produce goods' },
-              { id: 'both', label: 'Both', desc: 'Trade + Manufacture' },
-              { id: 'service', label: 'Service', desc: 'Service-based business' },
-            ].map((t) => (
-              <button key={t.id} onClick={() => setForm((p) => ({ ...p, companyType: t.id }))}
-                style={{ ...styles.templateCard, flex: 1, ...(form.companyType === t.id ? styles.templateCardActive : {}) }}>
-                <div style={{ fontWeight: 600, fontSize: 13, color: '#1E2A4A' }}>{t.label}</div>
-                <div style={{ fontSize: 11.5, color: '#888780' }}>{t.desc}</div>
-              </button>
-            ))}
+              { id: 'trading',       label: '🛒 Trading',             desc: 'Buy & sell goods — invoices, POs, delivery, stock' },
+              { id: 'manufacturing', label: '🏭 Manufacturing',        desc: 'Produce goods — BOM, production orders, QA' },
+              { id: 'service',       label: '🔧 Services / MEP Suite', desc: 'Manpower & site work — projects, activity planner, attendance' },
+            ].map((t) => {
+              const cur = form.activeTypes || [form.companyType || 'trading'];
+              const active = cur.includes(t.id);
+              return (
+                <div key={t.id} onClick={() => {
+                  const next = active ? cur.filter(x => x !== t.id) : [...cur, t.id];
+                  setForm(p => ({ ...p, activeTypes: next.length ? next : [t.id] }));
+                }} style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '10px 14px', borderRadius: 10, border: active ? '2px solid #1E2A4A' : '2px solid #EAE6DB', background: active ? '#F0EFE9' : '#FAFAF8', cursor: 'pointer', userSelect: 'none' }}>
+                  <div style={{ width: 20, height: 20, borderRadius: 5, border: active ? '2px solid #1E2A4A' : '2px solid #BDB9B0', background: active ? '#1E2A4A' : '#fff', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
+                    {active && <span style={{ color: '#fff', fontSize: 13, fontWeight: 700 }}>✓</span>}
+                  </div>
+                  <div>
+                    <div style={{ fontWeight: 600, fontSize: 13, color: '#1E2A4A' }}>{t.label}</div>
+                    <div style={{ fontSize: 11.5, color: '#888780' }}>{t.desc}</div>
+                  </div>
+                </div>
+              );
+            })}
+            <button onClick={() => setForm(p => {
+              const cur = p.activeTypes || [p.companyType || 'trading'];
+              return { ...p, activeTypes: cur.length === 3 ? ['trading'] : ['trading','manufacturing','service'] };
+            })} style={{ ...styles.ghostBtn, alignSelf: 'flex-start', marginTop: 2 }}>
+              {((form.activeTypes || [form.companyType || 'trading']).length === 3) ? 'Deselect all' : 'Select all 3 activities'}
+            </button>
           </div>
         </div>
 
