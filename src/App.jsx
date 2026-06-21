@@ -706,7 +706,6 @@ function ItemModal({ item, onSave, onClose, businessInfo = {} }) {
   const cc = COUNTRY_CONFIG[businessInfo?.country || 'india'] || COUNTRY_CONFIG.india;
   const [form, setForm] = useState({ openingStock: 0, minStock: 0, unit: '', ...item });
   const set = (k, v) => setForm(p => ({ ...p, [k]: v }));
-  const cc = COUNTRY_CONFIG[businessInfo.country || 'india'] || COUNTRY_CONFIG.other;
   return (
     <Modal onClose={onClose} title={item.id ? 'Edit item' : 'Add item'}>
       <div style={styles.formGroup}>
