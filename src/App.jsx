@@ -1604,7 +1604,7 @@ const SECTION_VIEWS = {
   quality:     ['isoprinciples', 'deptprocedures', 'inprocessqa', 'qatesting'],
   hr:          ['employees', 'payroll'],
   scope:       ['scopeofwork'],
-  site:        ['siteprojects', 'dsrreports', 'clientmaterials', 'siteattendance', 'evaluation'],
+  site:        ['siteprojects', 'activityplanner', 'dailyupdates', 'progressboard', 'clientmaterials', 'siteattendance', 'evaluation'],
   admin:       ['staff', 'contracts', 'termslibrary'],
 };
 
@@ -1785,11 +1785,13 @@ function Sidebar({ view, setView, setActiveDoc, startNewDoc, syncStatus, user, o
         </Section>
       )}
 
-      {/* Site Operations — service companies (MEP / manpower supply) */}
+      {/* MEP Suite — service / MEP manpower companies */}
       {showService && (
-        <Section sectionKey="site" label="Site Operations">
-          <NavBtn id="siteprojects"    label="Site Projects"    icon={MapPin} />
-          <NavBtn id="dsrreports"      label="Daily Reports"    icon={ClipboardList} />
+        <Section sectionKey="site" label="MEP Suite">
+          <NavBtn id="siteprojects"    label="Projects"         icon={MapPin} />
+          <NavBtn id="activityplanner" label="Activity Planner" icon={ClipboardList} />
+          <NavBtn id="dailyupdates"    label="Daily Updates"    icon={Pencil} />
+          <NavBtn id="progressboard"   label="Progress Board"   icon={BarChart2} />
           <NavBtn id="clientmaterials" label="Client Materials" icon={Package} />
           <NavBtn id="siteattendance"  label="Attendance"       icon={Users} />
           <NavBtn id="evaluation"      label="Quarterly Review" icon={BarChart2} />
@@ -8651,360 +8653,896 @@ function QualityDocForm({ item, fields, onSave, onClose }) {
   );
 }
 
-// ─── Site Operations (MEP / Manpower Supply) ─────────────────────────────────
+// ─── MEP Suite (Primavera-style Project Control) ──────────────────────────────
 
-// ── Site Projects ──────────────────────────────────────────────────────────────
-function SiteProjectsView({ projects, setProjects, employees, userRole }) {
+// ── MEP Constants ──────────────────────────────────────────────────────────────
+const MEP_DISCIPLINES = ['Electrical','Plumbing','HVAC','Firefighting','Civil','IT/Networking','Other'];
+const MEP_PHASES = ['Mobilisation','Rough-in / First Fix','Second Fix','Testing & Commissioning','Snagging','Handover'];
+const MEP_UNITS = ['%','m','m²','m³','kg','nos','sets','points','circuits','floors','rooms'];
+
+// ── Helper: compute activity progress (latest cumulative %) ────────────────────
+function getActivityProgress(actId, progressUpdates) {
+  const updates = progressUpdates.filter(u => u.activityId === actId).sort((a,b)=>(b.date||'').localeCompare(a.date||''));
+  return updates.length ? (updates[0].cumulativePct || 0) : 0;
+}
+
+// ── Site Projects (MEP) ────────────────────────────────────────────────────────
+function MEPProjectsView({ siteProjects, setSiteProjects, employees, siteActivities, progressUpdates, userRole }) {
   const [editing, setEditing] = useState(null);
-  const [search, setSearch] = useState('');
+  const [selected, setSelected] = useState(null);
   const canEdit = userRole === 'admin' || userRole === 'manager';
-  const filtered = projects.filter(p =>
-    (p.name || '').toLowerCase().includes(search.toLowerCase()) ||
-    (p.client || '').toLowerCase().includes(search.toLowerCase()) ||
-    (p.location || '').toLowerCase().includes(search.toLowerCase())
-  );
+
   function save(form) {
     const rec = { ...form, id: form.id || crypto.randomUUID() };
-    setProjects(prev => form.id ? prev.map(p => p.id === form.id ? rec : p) : [...prev, rec]);
+    setSiteProjects(prev => form.id ? prev.map(p => p.id === form.id ? rec : p) : [...prev, rec]);
     setEditing(null);
   }
-  function del(id) { if (confirm('Delete project?')) setProjects(prev => prev.filter(p => p.id !== id)); }
-  const STATUS_COLOR = { planning: '#C9A24B', active: '#1A7A3E', on_hold: '#B5453A', completed: '#3D7A5C' };
+  function del(id) { if (confirm('Delete project and all its data?')) setSiteProjects(prev => prev.filter(p => p.id !== id)); }
+
+  function projectProgress(proj) {
+    const acts = siteActivities.filter(a => a.projectId === proj.id);
+    if (!acts.length) return 0;
+    const totalWeight = acts.reduce((s,a) => s + (parseFloat(a.weight)||1), 0);
+    const weightedPct = acts.reduce((s,a) => {
+      const pct = getActivityProgress(a.id, progressUpdates);
+      return s + pct * (parseFloat(a.weight)||1);
+    }, 0);
+    return totalWeight ? Math.round(weightedPct / totalWeight) : 0;
+  }
+
+  const STATUS_COLOR = { planning:'#C9A24B', active:'#1A7A3E', on_hold:'#B5453A', completed:'#3D7A5C' };
+
+  if (selected) {
+    const proj = siteProjects.find(p => p.id === selected);
+    if (!proj) { setSelected(null); return null; }
+    const acts = siteActivities.filter(a => a.projectId === proj.id);
+    const overallPct = projectProgress(proj);
+    // Group by villa
+    const villas = proj.villas || [];
+    return (
+      <div style={styles.page}>
+        <div style={{ display:'flex', alignItems:'center', gap:10, marginBottom:18 }}>
+          <button style={styles.ghostBtn} onClick={() => setSelected(null)}>← Back</button>
+          <div>
+            <h2 className="serif" style={styles.h2}>{proj.name}</h2>
+            <div style={{ fontSize:12, color:'#888' }}>{proj.client} · {proj.location}</div>
+          </div>
+          <div style={{ marginLeft:'auto', display:'flex', gap:8 }}>
+            {canEdit && <button style={styles.ghostBtn} onClick={() => setEditing(proj)}>Edit Project</button>}
+          </div>
+        </div>
+        {/* Overall progress */}
+        <div style={{ background:'#fff', border:'1px solid #EAE6DB', borderRadius:12, padding:'16px 20px', marginBottom:16 }}>
+          <div style={{ display:'flex', justifyContent:'space-between', marginBottom:8 }}>
+            <span style={{ fontWeight:600, fontSize:14 }}>Overall Completion</span>
+            <span style={{ fontWeight:700, fontSize:18, color: overallPct===100?'#1A7A3E':'#1E2A4A' }}>{overallPct}%</span>
+          </div>
+          <div style={{ background:'#EAE6DB', borderRadius:6, height:10 }}>
+            <div style={{ width:`${overallPct}%`, background:overallPct===100?'#1A7A3E':'#1E2A4A', borderRadius:6, height:10, transition:'width 0.4s' }} />
+          </div>
+          <div style={{ display:'grid', gridTemplateColumns:'repeat(4,1fr)', gap:10, marginTop:14 }}>
+            {[['Villas',(proj.villas||[]).length,''],['Activities',acts.length,''],
+              ['In Progress',acts.filter(a=>getActivityProgress(a.id,progressUpdates)>0&&getActivityProgress(a.id,progressUpdates)<100).length,'#C9A24B'],
+              ['Completed',acts.filter(a=>getActivityProgress(a.id,progressUpdates)>=100).length,'#1A7A3E']].map(([l,v,c])=>(
+              <div key={l} style={{ textAlign:'center', background:'#FAF8F4', borderRadius:8, padding:'8px 4px' }}>
+                <div style={{ fontSize:20, fontWeight:700, color:c||'#1E2A4A' }}>{v}</div>
+                <div style={{ fontSize:11, color:'#888' }}>{l}</div>
+              </div>
+            ))}
+          </div>
+        </div>
+        {/* Villa progress cards */}
+        <div style={{ display:'grid', gridTemplateColumns:'repeat(auto-fill, minmax(280px, 1fr))', gap:12 }}>
+          {villas.map(v => {
+            const villActs = acts.filter(a => a.villaId === v.id);
+            const villaPct = villActs.length ? Math.round(villActs.reduce((s,a)=>s+getActivityProgress(a.id,progressUpdates),0)/villActs.length) : 0;
+            return (
+              <div key={v.id} style={{ background:'#fff', border:'1px solid #EAE6DB', borderRadius:10, padding:'14px 16px' }}>
+                <div style={{ display:'flex', justifyContent:'space-between', marginBottom:8 }}>
+                  <span style={{ fontWeight:600, fontSize:13 }}>{v.name}</span>
+                  <span style={{ fontWeight:700, fontSize:15, color:villaPct===100?'#1A7A3E':'#1E2A4A' }}>{villaPct}%</span>
+                </div>
+                <div style={{ background:'#EAE6DB', borderRadius:4, height:6, marginBottom:10 }}>
+                  <div style={{ width:`${villaPct}%`, background:villaPct===100?'#1A7A3E':'#C9A24B', borderRadius:4, height:6 }} />
+                </div>
+                {MEP_DISCIPLINES.slice(0,6).map(disc => {
+                  const discActs = villActs.filter(a=>a.discipline===disc);
+                  if (!discActs.length) return null;
+                  const discPct = Math.round(discActs.reduce((s,a)=>s+getActivityProgress(a.id,progressUpdates),0)/discActs.length);
+                  return (
+                    <div key={disc} style={{ display:'flex', justifyContent:'space-between', fontSize:12, color:'#555', marginBottom:3 }}>
+                      <span>{disc}</span>
+                      <span style={{ fontWeight:600, color:discPct===100?'#1A7A3E':discPct>0?'#C9A24B':'#aaa' }}>{discPct}%</span>
+                    </div>
+                  );
+                })}
+                <div style={{ fontSize:11, color:'#aaa', marginTop:6 }}>{villActs.length} activities</div>
+              </div>
+            );
+          })}
+          {villas.length === 0 && <div style={{ color:'#aaa', fontSize:13 }}>No villas set up. Edit the project to add villas.</div>}
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div style={styles.page}>
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 18 }}>
+      <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', marginBottom:18 }}>
         <div>
-          <h2 className="serif" style={styles.h2}>Site Projects</h2>
-          <p style={styles.muted}>{projects.length} project{projects.length !== 1 ? 's' : ''}</p>
+          <h2 className="serif" style={styles.h2}>MEP Projects</h2>
+          <p style={styles.muted}>{siteProjects.length} project{siteProjects.length!==1?'s':''}</p>
         </div>
-        {canEdit && <button style={styles.primaryBtn} onClick={() => setEditing({ _isNew: true, status: 'active', progress: 0 })}>+ New Project</button>}
+        {canEdit && <button style={styles.primaryBtn} onClick={() => setEditing({ _isNew:true, status:'active', villas:[], disciplines:[...MEP_DISCIPLINES] })}>+ New Project</button>}
       </div>
-      <input value={search} onChange={e => setSearch(e.target.value)} style={{ ...styles.input, marginBottom: 16 }} placeholder="Search by name, client or location…" />
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(320px, 1fr))', gap: 14 }}>
-        {filtered.map(p => {
-          const team = employees.filter(e => (p.teamIds || []).includes(e.id));
+      <div style={{ display:'grid', gridTemplateColumns:'repeat(auto-fill, minmax(320px, 1fr))', gap:14 }}>
+        {siteProjects.map(proj => {
+          const pct = projectProgress(proj);
+          const acts = siteActivities.filter(a=>a.projectId===proj.id);
           return (
-            <div key={p.id} style={{ background: '#fff', border: '1px solid #EAE6DB', borderRadius: 12, padding: '16px 18px' }}>
-              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 8 }}>
-                <div style={{ fontWeight: 600, fontSize: 14, color: '#1E2A4A' }}>{p.name}</div>
-                <span style={{ fontSize: 11, fontWeight: 700, color: STATUS_COLOR[p.status] || '#888', background: '#F5F3EE', borderRadius: 6, padding: '2px 8px', textTransform: 'uppercase' }}>{p.status}</span>
+            <div key={proj.id} style={{ background:'#fff', border:'1px solid #EAE6DB', borderRadius:12, padding:'16px 18px', cursor:'pointer' }} onClick={() => setSelected(proj.id)}>
+              <div style={{ display:'flex', justifyContent:'space-between', marginBottom:6 }}>
+                <div style={{ fontWeight:600, fontSize:14, color:'#1E2A4A' }}>{proj.name}</div>
+                <span style={{ fontSize:11, fontWeight:700, color:STATUS_COLOR[proj.status]||'#888', background:'#F5F3EE', borderRadius:6, padding:'2px 8px', textTransform:'uppercase' }}>{proj.status}</span>
               </div>
-              <div style={{ fontSize: 12.5, color: '#666', marginBottom: 4 }}>📍 {p.location || '—'} &nbsp;·&nbsp; 👤 {p.client || '—'}</div>
-              <div style={{ fontSize: 12, color: '#888', marginBottom: 10 }}>{p.startDate} → {p.endDate || 'ongoing'}</div>
-              {/* Progress bar */}
-              <div style={{ marginBottom: 10 }}>
-                <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 11.5, color: '#555', marginBottom: 4 }}>
-                  <span>Overall progress</span><span style={{ fontWeight: 600 }}>{p.progress || 0}%</span>
+              <div style={{ fontSize:12, color:'#666', marginBottom:8 }}>📍 {proj.location} · {proj.client}</div>
+              <div style={{ marginBottom:6 }}>
+                <div style={{ display:'flex', justifyContent:'space-between', fontSize:12, marginBottom:4 }}>
+                  <span>{(proj.villas||[]).length} villas · {acts.length} activities</span>
+                  <span style={{ fontWeight:700, color:pct===100?'#1A7A3E':'#1E2A4A' }}>{pct}%</span>
                 </div>
-                <div style={{ background: '#EAE6DB', borderRadius: 4, height: 6 }}>
-                  <div style={{ width: `${p.progress || 0}%`, background: '#1A7A3E', borderRadius: 4, height: 6, transition: 'width 0.3s' }} />
+                <div style={{ background:'#EAE6DB', borderRadius:4, height:6 }}>
+                  <div style={{ width:`${pct}%`, background:pct===100?'#1A7A3E':'#C9A24B', borderRadius:4, height:6 }} />
                 </div>
               </div>
-              <div style={{ fontSize: 11.5, color: '#666', marginBottom: 10 }}>Team: {team.length > 0 ? team.map(e => e.name).join(', ') : 'Not assigned'}</div>
+              <div style={{ fontSize:11.5, color:'#888' }}>{proj.startDate} → {proj.endDate||'ongoing'}</div>
               {canEdit && (
-                <div style={{ display: 'flex', gap: 8 }}>
-                  <button style={{ ...styles.ghostBtn, fontSize: 12 }} onClick={() => setEditing(p)}>Edit</button>
-                  <button style={{ ...styles.ghostBtn, fontSize: 12, color: '#B5453A' }} onClick={() => del(p.id)}>Delete</button>
+                <div style={{ display:'flex', gap:8, marginTop:10 }} onClick={e=>e.stopPropagation()}>
+                  <button style={{ ...styles.ghostBtn, fontSize:12 }} onClick={() => setEditing(proj)}>Edit</button>
+                  <button style={{ ...styles.ghostBtn, fontSize:12, color:'#B5453A' }} onClick={() => del(proj.id)}>Delete</button>
                 </div>
               )}
             </div>
           );
         })}
-        {filtered.length === 0 && <div style={{ color: '#aaa', padding: 24 }}>No projects found.</div>}
+        {siteProjects.length===0 && <div style={{ color:'#aaa', padding:24 }}>No projects yet.</div>}
       </div>
-      {editing && <SiteProjectForm project={editing} employees={employees} onSave={save} onClose={() => setEditing(null)} />}
+      {editing && <MEPProjectForm project={editing} employees={employees} onSave={save} onClose={()=>setEditing(null)} />}
     </div>
   );
 }
 
-function SiteProjectForm({ project, employees, onSave, onClose }) {
+function MEPProjectForm({ project, employees, onSave, onClose }) {
   const [form, setForm] = useState({
-    name: '', client: '', location: '', type: 'villa', startDate: '', endDate: '',
-    status: 'active', progress: 0, teamIds: [], description: '',
+    name:'', client:'', location:'', startDate:'', endDate:'', status:'active',
+    teamIds:[], disciplines:[...MEP_DISCIPLINES], villas:[], description:'', contractRef:'',
     ...project,
   });
-  function set(k, v) { setForm(f => ({ ...f, [k]: v })); }
-  function toggleTeam(id) {
-    setForm(f => ({ ...f, teamIds: f.teamIds.includes(id) ? f.teamIds.filter(x => x !== id) : [...f.teamIds, id] }));
+  const [newVilla, setNewVilla] = useState('');
+  function set(k,v) { setForm(f=>({...f,[k]:v})); }
+  function addVilla() {
+    if (!newVilla.trim()) return;
+    set('villas', [...form.villas, { id: crypto.randomUUID(), name: newVilla.trim() }]);
+    setNewVilla('');
   }
-  const PROJECT_TYPES = ['villa', 'apartment', 'commercial', 'industrial', 'infrastructure', 'other'];
+  function removeVilla(id) { set('villas', form.villas.filter(v=>v.id!==id)); }
+  function toggleDisc(d) { set('disciplines', form.disciplines.includes(d) ? form.disciplines.filter(x=>x!==d) : [...form.disciplines, d]); }
+  function toggleTeam(id) { set('teamIds', form.teamIds.includes(id) ? form.teamIds.filter(x=>x!==id) : [...form.teamIds, id]); }
+  // Bulk add villas
+  function bulkAdd() {
+    const prefix = prompt('Villa name prefix (e.g. "Villa"):', 'Villa');
+    if (!prefix) return;
+    const count = parseInt(prompt('How many villas to add?', '10'), 10);
+    if (!count || count < 1) return;
+    const existing = form.villas.length;
+    const newOnes = Array.from({ length: count }, (_,i) => ({ id: crypto.randomUUID(), name: `${prefix} ${existing + i + 1}` }));
+    set('villas', [...form.villas, ...newOnes]);
+  }
   return (
-    <Modal title={form._isNew ? 'New Site Project' : 'Edit Project'} onClose={onClose} width={560}>
-      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
-        {[['name','Project Name',true],['client','Client Name',true],['location','Site Location',false]].map(([k,l,req]) => (
-          <div key={k} style={{ gridColumn: k === 'location' ? '1/-1' : undefined, ...styles.formGroup }}>
-            <label style={styles.label}>{l}{req && ' *'}</label>
-            <input value={form[k] || ''} onChange={e => set(k, e.target.value)} style={styles.input} />
+    <Modal title={form._isNew ? 'New MEP Project' : 'Edit Project'} onClose={onClose} width={600}>
+      <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:12 }}>
+        {[['name','Project Name *'],['client','Client / Developer *'],['location','Site Location'],['contractRef','Contract / PO Ref']].map(([k,l])=>(
+          <div key={k} style={{ gridColumn: k==='location'||k==='contractRef'?'1/-1':undefined, ...styles.formGroup }}>
+            <label style={styles.label}>{l}</label>
+            <input value={form[k]||''} onChange={e=>set(k,e.target.value)} style={styles.input} />
           </div>
         ))}
         <div style={styles.formGroup}>
-          <label style={styles.label}>Type</label>
-          <select value={form.type} onChange={e => set('type', e.target.value)} style={styles.input}>
-            {PROJECT_TYPES.map(t => <option key={t} value={t}>{t.charAt(0).toUpperCase() + t.slice(1)}</option>)}
-          </select>
-        </div>
-        <div style={styles.formGroup}>
           <label style={styles.label}>Status</label>
-          <select value={form.status} onChange={e => set('status', e.target.value)} style={styles.input}>
-            {['planning','active','on_hold','completed'].map(s => <option key={s} value={s}>{s.replace('_',' ')}</option>)}
+          <select value={form.status} onChange={e=>set('status',e.target.value)} style={styles.input}>
+            {['planning','active','on_hold','completed'].map(s=><option key={s} value={s}>{s.replace('_',' ')}</option>)}
           </select>
         </div>
+        <div style={styles.formGroup}></div>
         <div style={styles.formGroup}>
           <label style={styles.label}>Start Date</label>
-          <input type="date" value={form.startDate || ''} onChange={e => set('startDate', e.target.value)} style={styles.input} />
+          <input type="date" value={form.startDate||''} onChange={e=>set('startDate',e.target.value)} style={styles.input} />
         </div>
         <div style={styles.formGroup}>
           <label style={styles.label}>End Date</label>
-          <input type="date" value={form.endDate || ''} onChange={e => set('endDate', e.target.value)} style={styles.input} />
+          <input type="date" value={form.endDate||''} onChange={e=>set('endDate',e.target.value)} style={styles.input} />
         </div>
-        <div style={{ gridColumn: '1/-1', ...styles.formGroup }}>
-          <label style={styles.label}>Overall Progress: {form.progress || 0}%</label>
-          <input type="range" min={0} max={100} value={form.progress || 0} onChange={e => set('progress', +e.target.value)}
-            style={{ width: '100%', accentColor: '#1A7A3E' }} />
-        </div>
-        <div style={{ gridColumn: '1/-1', ...styles.formGroup }}>
-          <label style={styles.label}>Description / Scope</label>
-          <textarea value={form.description || ''} onChange={e => set('description', e.target.value)} style={{ ...styles.input, height: 60 }} />
-        </div>
-        <div style={{ gridColumn: '1/-1', ...styles.formGroup }}>
-          <label style={styles.label}>Assign Team</label>
-          <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, marginTop: 6 }}>
-            {employees.map(e => (
-              <button key={e.id} onClick={() => toggleTeam(e.id)}
-                style={{ fontSize: 12, padding: '4px 10px', borderRadius: 20, border: '1px solid #DDD8CC', cursor: 'pointer',
-                  background: form.teamIds.includes(e.id) ? '#1E2A4A' : '#F5F3EE',
-                  color: form.teamIds.includes(e.id) ? '#fff' : '#444' }}>
-                {e.name}
-              </button>
+        <div style={{ gridColumn:'1/-1', ...styles.formGroup }}>
+          <label style={styles.label}>Disciplines in scope</label>
+          <div style={{ display:'flex', flexWrap:'wrap', gap:6, marginTop:6 }}>
+            {MEP_DISCIPLINES.map(d=>(
+              <button key={d} onClick={()=>toggleDisc(d)} style={{ fontSize:12, padding:'4px 10px', borderRadius:20, border:'1px solid #DDD8CC', cursor:'pointer', background:form.disciplines.includes(d)?'#1E2A4A':'#F5F3EE', color:form.disciplines.includes(d)?'#fff':'#444' }}>{d}</button>
             ))}
-            {employees.length === 0 && <span style={{ color: '#aaa', fontSize: 12 }}>No employees found — add them in HR first</span>}
           </div>
         </div>
+        {/* Villas */}
+        <div style={{ gridColumn:'1/-1', ...styles.formGroup }}>
+          <div style={{ display:'flex', justifyContent:'space-between', marginBottom:6 }}>
+            <label style={styles.label}>Villas / Units ({form.villas.length})</label>
+            <button style={{ ...styles.ghostBtn, fontSize:11 }} onClick={bulkAdd}>+ Bulk add</button>
+          </div>
+          <div style={{ display:'flex', gap:8, marginBottom:8 }}>
+            <input value={newVilla} onChange={e=>setNewVilla(e.target.value)} onKeyDown={e=>e.key==='Enter'&&addVilla()}
+              style={{ ...styles.input, flex:1 }} placeholder='e.g. "Villa 1" then press Enter' />
+            <button style={styles.primaryBtn} onClick={addVilla}>Add</button>
+          </div>
+          <div style={{ display:'flex', flexWrap:'wrap', gap:6, maxHeight:120, overflowY:'auto' }}>
+            {form.villas.map(v=>(
+              <span key={v.id} style={{ fontSize:12, background:'#EAE6DB', borderRadius:8, padding:'3px 10px', display:'flex', alignItems:'center', gap:6 }}>
+                {v.name}
+                <button onClick={()=>removeVilla(v.id)} style={{ border:'none', background:'none', cursor:'pointer', color:'#888', fontSize:12, padding:0 }}>×</button>
+              </span>
+            ))}
+          </div>
+        </div>
+        {/* Team */}
+        {employees.length > 0 && (
+          <div style={{ gridColumn:'1/-1', ...styles.formGroup }}>
+            <label style={styles.label}>Assign Team</label>
+            <div style={{ display:'flex', flexWrap:'wrap', gap:6, marginTop:6 }}>
+              {employees.map(e=>(
+                <button key={e.id} onClick={()=>toggleTeam(e.id)} style={{ fontSize:12, padding:'4px 10px', borderRadius:20, border:'1px solid #DDD8CC', cursor:'pointer', background:form.teamIds.includes(e.id)?'#1E2A4A':'#F5F3EE', color:form.teamIds.includes(e.id)?'#fff':'#444' }}>{e.name}</button>
+              ))}
+            </div>
+          </div>
+        )}
+        <div style={{ gridColumn:'1/-1', ...styles.formGroup }}>
+          <label style={styles.label}>Description / Scope summary</label>
+          <textarea value={form.description||''} onChange={e=>set('description',e.target.value)} style={{ ...styles.input, height:56 }} />
+        </div>
       </div>
-      <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 10, marginTop: 18 }}>
+      <div style={{ display:'flex', justifyContent:'flex-end', gap:10, marginTop:16 }}>
         <button style={styles.ghostBtn} onClick={onClose}>Cancel</button>
-        <button style={styles.primaryBtn} onClick={() => { if (!form.name) return alert('Project name required'); onSave(form); }}>Save Project</button>
+        <button style={styles.primaryBtn} onClick={()=>{ if(!form.name||!form.client) return alert('Name and client required'); onSave(form); }}>Save Project</button>
       </div>
     </Modal>
   );
 }
 
-// ── Daily Site Reports (DSR) ────────────────────────────────────────────────────
-function DSRView({ dsrReports, setDsrReports, projects, employees, clientMaterials, userRole }) {
+// ── Activity Planner (WBS + BOM) ────────────────────────────────────────────────
+function ActivityPlannerView({ siteActivities, setSiteActivities, siteProjects, progressUpdates, userRole }) {
+  const [selProject, setSelProject] = useState(siteProjects[0]?.id || '');
   const [editing, setEditing] = useState(null);
-  const [filterProject, setFilterProject] = useState('');
-  const [filterDate, setFilterDate] = useState('');
-  const canEdit = userRole === 'admin' || userRole === 'manager' || userRole === 'sales';
-  const sorted = [...dsrReports]
-    .filter(r => (!filterProject || r.projectId === filterProject) && (!filterDate || r.date === filterDate))
-    .sort((a, b) => (b.date || '').localeCompare(a.date || ''));
+  const [expandedBOM, setExpandedBOM] = useState({});
+  const canEdit = userRole === 'admin' || userRole === 'manager';
+  const project = siteProjects.find(p=>p.id===selProject);
+  const acts = siteActivities.filter(a=>a.projectId===selProject).sort((a,b)=>{
+    const vA = (project?.villas||[]).findIndex(v=>v.id===a.villaId);
+    const vB = (project?.villas||[]).findIndex(v=>v.id===b.villaId);
+    if (vA!==vB) return vA-vB;
+    return (a.sequence||0)-(b.sequence||0);
+  });
+
   function save(form) {
-    const rec = { ...form, id: form.id || crypto.randomUUID() };
-    setDsrReports(prev => form.id ? prev.map(r => r.id === form.id ? rec : r) : [...prev, rec]);
+    const rec = { ...form, id: form.id || crypto.randomUUID(), projectId: selProject };
+    setSiteActivities(prev => form.id ? prev.map(a=>a.id===form.id?rec:a) : [...prev, rec]);
     setEditing(null);
   }
-  function del(id) { if (confirm('Delete report?')) setDsrReports(prev => prev.filter(r => r.id !== id)); }
-  const TRADE_COLOR = { electrical: '#C9A24B', plumbing: '#3D7A5C', hvac: '#1E7A9A', civil: '#6B5BAE', other: '#888' };
+  function del(id) { if (confirm('Delete activity?')) setSiteActivities(prev=>prev.filter(a=>a.id!==id)); }
+  function lockBOM(id) {
+    setSiteActivities(prev=>prev.map(a=>a.id===id?{...a,bomLocked:true}:a));
+  }
+  function toggleBOM(id) { setExpandedBOM(p=>({...p,[id]:!p[id]})); }
+
+  if (!siteProjects.length) return (
+    <div style={styles.page}>
+      <h2 className="serif" style={styles.h2}>Activity Planner</h2>
+      <p style={{ color:'#aaa', marginTop:16 }}>Create a project first, then come back to add activities.</p>
+    </div>
+  );
+
+  // Group by villa
+  const villas = project?.villas || [];
+  const byVilla = villas.reduce((acc,v)=>{ acc[v.id]=acts.filter(a=>a.villaId===v.id); return acc; },{});
+  const unassigned = acts.filter(a=>!a.villaId);
+
+  const totalWeight = acts.reduce((s,a)=>s+(parseFloat(a.weight)||0),0);
+
   return (
     <div style={styles.page}>
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 18 }}>
+      <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', marginBottom:14 }}>
         <div>
-          <h2 className="serif" style={styles.h2}>Daily Site Reports</h2>
-          <p style={styles.muted}>{dsrReports.length} report{dsrReports.length !== 1 ? 's' : ''}</p>
+          <h2 className="serif" style={styles.h2}>Activity Planner</h2>
+          <p style={styles.muted}>{acts.length} activities · total weight: {totalWeight.toFixed(0)}%</p>
         </div>
-        {canEdit && <button style={styles.primaryBtn} onClick={() => setEditing({ _isNew: true, date: new Date().toISOString().slice(0, 10), activities: [], progressItems: [] })}>+ New DSR</button>}
+        <div style={{ display:'flex', gap:10 }}>
+          <select value={selProject} onChange={e=>setSelProject(e.target.value)} style={{ ...styles.input, width:220 }}>
+            {siteProjects.map(p=><option key={p.id} value={p.id}>{p.name}</option>)}
+          </select>
+          {canEdit && <button style={styles.primaryBtn} onClick={()=>setEditing({ _isNew:true, villaId:'', discipline:(project?.disciplines||MEP_DISCIPLINES)[0], phase: MEP_PHASES[0], weight:5, bom:[], bomLocked:false })}>+ Add Activity</button>}
+        </div>
       </div>
-      <div style={{ display: 'flex', gap: 10, marginBottom: 16, flexWrap: 'wrap' }}>
-        <select value={filterProject} onChange={e => setFilterProject(e.target.value)} style={{ ...styles.input, width: 220 }}>
-          <option value="">All Projects</option>
-          {projects.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
-        </select>
-        <input type="date" value={filterDate} onChange={e => setFilterDate(e.target.value)} style={{ ...styles.input, width: 160 }} />
-        {(filterProject || filterDate) && <button style={styles.ghostBtn} onClick={() => { setFilterProject(''); setFilterDate(''); }}>Clear</button>}
-      </div>
-      <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
-        {sorted.map(r => {
-          const proj = projects.find(p => p.id === r.projectId);
-          return (
-            <div key={r.id} style={{ background: '#fff', border: '1px solid #EAE6DB', borderRadius: 12, padding: '14px 18px' }}>
-              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 8 }}>
-                <div>
-                  <div style={{ fontWeight: 600, fontSize: 14, color: '#1E2A4A' }}>{r.date} — {proj?.name || 'Unknown project'}</div>
-                  <div style={{ fontSize: 12, color: '#888', marginTop: 2 }}>Reported by: {r.reportedBy || '—'} &nbsp;·&nbsp; Progress: <strong>{r.overallProgress || 0}%</strong></div>
-                </div>
-                {canEdit && (
-                  <div style={{ display: 'flex', gap: 6 }}>
-                    <button style={{ ...styles.ghostBtn, fontSize: 12 }} onClick={() => setEditing(r)}>Edit</button>
-                    <button style={{ ...styles.ghostBtn, fontSize: 12, color: '#B5453A' }} onClick={() => del(r.id)}>×</button>
-                  </div>
-                )}
-              </div>
-              {(r.activities || []).length > 0 && (
-                <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, marginBottom: 6 }}>
-                  {r.activities.map((a, i) => {
-                    const emp = employees.find(e => e.id === a.employeeId);
-                    return (
-                      <span key={i} style={{ fontSize: 11.5, background: '#F5F3EE', border: '1px solid #EAE6DB', borderRadius: 8, padding: '3px 8px', color: '#444' }}>
-                        <span style={{ display: 'inline-block', width: 8, height: 8, borderRadius: '50%', background: TRADE_COLOR[a.trade] || '#888', marginRight: 5 }} />
-                        {emp?.name || '?'}: {a.task} ({a.hours}h)
-                      </span>
-                    );
-                  })}
-                </div>
-              )}
-              {r.notes && <div style={{ fontSize: 12, color: '#666', fontStyle: 'italic' }}>{r.notes}</div>}
-            </div>
-          );
-        })}
-        {sorted.length === 0 && <div style={{ color: '#aaa', padding: 24 }}>No reports found.</div>}
-      </div>
+
+      {/* Activities table */}
+      {[...villas.map(v=>({ v, items: byVilla[v.id]||[] })), ...(unassigned.length?[{v:{id:'__none',name:'Project-wide / Unassigned'}, items:unassigned}]:[])].map(({v, items})=>(
+        <div key={v.id} style={{ marginBottom:20 }}>
+          <div style={{ ...styles.dashSection, fontSize:12, color:'#1E2A4A', marginBottom:8 }}>
+            🏠 {v.name} &nbsp;<span style={{ color:'#aaa', fontWeight:400 }}>({items.length} activities)</span>
+          </div>
+          {items.length===0 && <div style={{ fontSize:12, color:'#aaa', paddingLeft:8, marginBottom:8 }}>No activities yet.</div>}
+          <div style={{ overflowX:'auto' }}>
+            <table style={{ ...styles.table, fontSize:12.5 }}>
+              <thead>
+                <tr style={{ background:'#F5F3EE' }}>
+                  {['Discipline','Phase','Activity','Planned Start','Planned End','Dur (d)','Wt%','Progress','BOM',''].map(h=>(
+                    <th key={h} style={{ ...styles.th, whiteSpace:'nowrap' }}>{h}</th>
+                  ))}
+                </tr>
+              </thead>
+              <tbody>
+                {items.map(act=>{
+                  const pct = getActivityProgress(act.id, progressUpdates);
+                  const bomExpanded = expandedBOM[act.id];
+                  return (
+                    <React.Fragment key={act.id}>
+                      <tr style={{ borderTop:'1px solid #EAE6DB' }}>
+                        <td style={styles.td}><span style={{ fontWeight:600, color:'#1E2A4A' }}>{act.discipline}</span></td>
+                        <td style={styles.td}><span style={{ fontSize:11, color:'#888' }}>{act.phase}</span></td>
+                        <td style={styles.td}>{act.name}</td>
+                        <td style={{ ...styles.td, color:'#555' }}>{act.plannedStart||'—'}</td>
+                        <td style={{ ...styles.td, color:'#555' }}>{act.plannedEnd||'—'}</td>
+                        <td style={{ ...styles.td, textAlign:'center' }}>{act.duration||'—'}</td>
+                        <td style={{ ...styles.td, textAlign:'center' }}>{act.weight||0}%</td>
+                        <td style={{ ...styles.td, minWidth:100 }}>
+                          <div style={{ display:'flex', alignItems:'center', gap:6 }}>
+                            <div style={{ flex:1, background:'#EAE6DB', borderRadius:3, height:5 }}>
+                              <div style={{ width:`${pct}%`, background:pct===100?'#1A7A3E':'#C9A24B', borderRadius:3, height:5 }} />
+                            </div>
+                            <span style={{ fontSize:11, fontWeight:600, color:pct===100?'#1A7A3E':'#555', width:28 }}>{pct}%</span>
+                          </div>
+                        </td>
+                        <td style={styles.td}>
+                          <button onClick={()=>toggleBOM(act.id)} style={{ ...styles.ghostBtn, fontSize:11, padding:'2px 8px' }}>
+                            {(act.bom||[]).length} items {bomExpanded?'▲':'▼'}
+                          </button>
+                          {act.bomLocked && <span style={{ fontSize:10, color:'#1A7A3E', marginLeft:4 }}>🔒</span>}
+                        </td>
+                        <td style={styles.td}>
+                          {canEdit && (
+                            <div style={{ display:'flex', gap:4 }}>
+                              <button style={{ ...styles.ghostBtn, fontSize:11, padding:'2px 7px' }} onClick={()=>setEditing(act)}>Edit</button>
+                              <button style={{ ...styles.ghostBtn, fontSize:11, padding:'2px 7px', color:'#B5453A' }} onClick={()=>del(act.id)}>×</button>
+                            </div>
+                          )}
+                        </td>
+                      </tr>
+                      {bomExpanded && (
+                        <tr>
+                          <td colSpan={10} style={{ padding:'0 0 8px 16px', background:'#FDFCF9' }}>
+                            <BOMInlineEditor activity={act} onUpdate={updated=>setSiteActivities(prev=>prev.map(a=>a.id===act.id?updated:a))} canEdit={canEdit&&!act.bomLocked} />
+                            {canEdit && !act.bomLocked && (
+                              <button style={{ ...styles.ghostBtn, fontSize:11, color:'#1A7A3E', marginTop:6 }} onClick={()=>lockBOM(act.id)}>
+                                🔒 Lock BOM (after order approval)
+                              </button>
+                            )}
+                          </td>
+                        </tr>
+                      )}
+                    </React.Fragment>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      ))}
+
       {editing && (
-        <DSRForm report={editing} projects={projects} employees={employees} clientMaterials={clientMaterials}
-          onSave={save} onClose={() => setEditing(null)} />
+        <ActivityForm activity={editing} project={project} onSave={save} onClose={()=>setEditing(null)} />
       )}
     </div>
   );
 }
 
-function DSRForm({ report, projects, employees, clientMaterials, onSave, onClose }) {
-  const [form, setForm] = useState({
-    date: new Date().toISOString().slice(0, 10), projectId: '', reportedBy: '',
-    activities: [], progressItems: [], materialsUsedIds: [], overallProgress: 0,
-    weather: 'clear', notes: '', nextDayPlan: '',
-    ...report,
-  });
-  function set(k, v) { setForm(f => ({ ...f, [k]: v })); }
-  const TRADES = ['electrical', 'plumbing', 'hvac', 'civil', 'other'];
-  const WEATHER = ['clear', 'partly cloudy', 'cloudy', 'rain', 'heavy rain', 'sandstorm'];
-  function addActivity() {
-    set('activities', [...form.activities, { employeeId: '', trade: 'electrical', task: '', hours: 8 }]);
-  }
-  function updateActivity(i, k, v) {
-    const acts = [...form.activities]; acts[i] = { ...acts[i], [k]: v }; set('activities', acts);
-  }
-  function removeActivity(i) { set('activities', form.activities.filter((_, idx) => idx !== i)); }
-  function addProgress() {
-    set('progressItems', [...form.progressItems, { area: '', pct: 0 }]);
-  }
-  function updateProgress(i, k, v) {
-    const items = [...form.progressItems]; items[i] = { ...items[i], [k]: v }; set('progressItems', items);
-  }
-  function removeProgress(i) { set('progressItems', form.progressItems.filter((_, idx) => idx !== i)); }
-  function toggleMaterial(id) {
-    set('materialsUsedIds', form.materialsUsedIds.includes(id)
-      ? form.materialsUsedIds.filter(x => x !== id)
-      : [...form.materialsUsedIds, id]);
-  }
-  const projMaterials = clientMaterials.filter(m => m.projectId === form.projectId);
+function BOMInlineEditor({ activity, onUpdate, canEdit }) {
+  const bom = activity.bom || [];
+  function addRow() { onUpdate({ ...activity, bom: [...bom, { id:crypto.randomUUID(), material:'', plannedQty:'', unit:'nos', consumed:0 }] }); }
+  function updateRow(i,k,v) { const b=[...bom]; b[i]={...b[i],[k]:v}; onUpdate({...activity,bom:b}); }
+  function removeRow(i) { onUpdate({...activity, bom:bom.filter((_,idx)=>idx!==i)}); }
   return (
-    <Modal title={form._isNew ? 'New Daily Site Report' : 'Edit DSR'} onClose={onClose} width={640}>
-      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
-        <div style={styles.formGroup}>
-          <label style={styles.label}>Date *</label>
-          <input type="date" value={form.date} onChange={e => set('date', e.target.value)} style={styles.input} />
+    <div style={{ padding:'8px 0' }}>
+      <div style={{ fontWeight:600, fontSize:12, color:'#1E2A4A', marginBottom:6 }}>
+        Bill of Materials {activity.bomLocked && <span style={{ color:'#1A7A3E', fontSize:11 }}>— Locked (order approved)</span>}
+      </div>
+      {bom.length===0 && <div style={{ fontSize:12, color:'#aaa', marginBottom:6 }}>No materials added.</div>}
+      {bom.map((row,i)=>(
+        <div key={row.id||i} style={{ display:'grid', gridTemplateColumns:'3fr 1.5fr 1fr 1.5fr auto', gap:8, marginBottom:6, alignItems:'center' }}>
+          {canEdit
+            ? <input value={row.material} onChange={e=>updateRow(i,'material',e.target.value)} style={{ ...styles.input, fontSize:12 }} placeholder="Material description" />
+            : <span style={{ fontSize:12 }}>{row.material}</span>}
+          {canEdit
+            ? <input type="number" value={row.plannedQty} onChange={e=>updateRow(i,'plannedQty',e.target.value)} style={{ ...styles.input, fontSize:12 }} placeholder="Planned qty" />
+            : <span style={{ fontSize:12 }}>{row.plannedQty}</span>}
+          {canEdit
+            ? <select value={row.unit} onChange={e=>updateRow(i,'unit',e.target.value)} style={{ ...styles.input, fontSize:12 }}>
+                {MEP_UNITS.map(u=><option key={u} value={u}>{u}</option>)}
+              </select>
+            : <span style={{ fontSize:12 }}>{row.unit}</span>}
+          <span style={{ fontSize:12, color:'#555' }}>Used: <strong>{row.consumed||0}</strong></span>
+          {canEdit && <button onClick={()=>removeRow(i)} style={{ ...styles.ghostBtn, color:'#B5453A', fontSize:12, padding:'2px 7px' }}>×</button>}
+        </div>
+      ))}
+      {canEdit && <button style={{ ...styles.ghostBtn, fontSize:11 }} onClick={addRow}>+ Add material</button>}
+    </div>
+  );
+}
+
+function ActivityForm({ activity, project, onSave, onClose }) {
+  const [form, setForm] = useState({
+    name:'', villaId:'', discipline:'Electrical', phase: MEP_PHASES[0],
+    plannedStart:'', plannedEnd:'', duration:'', weight:5, sequence:0,
+    plannedQty:'', unit:'%', bom:[], bomLocked:false,
+    ...activity,
+  });
+  function set(k,v) { setForm(f=>({...f,[k]:v})); }
+  const villas = project?.villas || [];
+  const disciplines = project?.disciplines || MEP_DISCIPLINES;
+  return (
+    <Modal title={form._isNew?'New Activity':'Edit Activity'} onClose={onClose} width={560}>
+      <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:12 }}>
+        <div style={{ gridColumn:'1/-1', ...styles.formGroup }}>
+          <label style={styles.label}>Activity Name *</label>
+          <input value={form.name} onChange={e=>set('name',e.target.value)} style={styles.input} placeholder="e.g. Electrical Rough-in" />
         </div>
         <div style={styles.formGroup}>
-          <label style={styles.label}>Project *</label>
-          <select value={form.projectId} onChange={e => set('projectId', e.target.value)} style={styles.input}>
-            <option value="">— Select project —</option>
-            {projects.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
+          <label style={styles.label}>Villa / Unit</label>
+          <select value={form.villaId} onChange={e=>set('villaId',e.target.value)} style={styles.input}>
+            <option value="">Project-wide</option>
+            {villas.map(v=><option key={v.id} value={v.id}>{v.name}</option>)}
           </select>
         </div>
         <div style={styles.formGroup}>
-          <label style={styles.label}>Reported by</label>
-          <input value={form.reportedBy || ''} onChange={e => set('reportedBy', e.target.value)} style={styles.input} placeholder="Site supervisor name" />
-        </div>
-        <div style={styles.formGroup}>
-          <label style={styles.label}>Weather</label>
-          <select value={form.weather} onChange={e => set('weather', e.target.value)} style={styles.input}>
-            {WEATHER.map(w => <option key={w} value={w}>{w}</option>)}
+          <label style={styles.label}>Discipline</label>
+          <select value={form.discipline} onChange={e=>set('discipline',e.target.value)} style={styles.input}>
+            {disciplines.map(d=><option key={d} value={d}>{d}</option>)}
           </select>
         </div>
-        <div style={{ gridColumn: '1/-1', ...styles.formGroup }}>
-          <label style={styles.label}>Overall Progress: {form.overallProgress || 0}%</label>
-          <input type="range" min={0} max={100} value={form.overallProgress || 0}
-            onChange={e => set('overallProgress', +e.target.value)}
-            style={{ width: '100%', accentColor: '#1A7A3E' }} />
+        <div style={{ gridColumn:'1/-1', ...styles.formGroup }}>
+          <label style={styles.label}>Phase</label>
+          <select value={form.phase} onChange={e=>set('phase',e.target.value)} style={styles.input}>
+            {MEP_PHASES.map(p=><option key={p} value={p}>{p}</option>)}
+          </select>
+        </div>
+        <div style={styles.formGroup}>
+          <label style={styles.label}>Planned Start</label>
+          <input type="date" value={form.plannedStart||''} onChange={e=>set('plannedStart',e.target.value)} style={styles.input} />
+        </div>
+        <div style={styles.formGroup}>
+          <label style={styles.label}>Planned End</label>
+          <input type="date" value={form.plannedEnd||''} onChange={e=>set('plannedEnd',e.target.value)} style={styles.input} />
+        </div>
+        <div style={styles.formGroup}>
+          <label style={styles.label}>Duration (days)</label>
+          <input type="number" value={form.duration||''} onChange={e=>set('duration',e.target.value)} style={styles.input} />
+        </div>
+        <div style={styles.formGroup}>
+          <label style={styles.label}>Weight % (for overall progress)</label>
+          <input type="number" min={0} max={100} value={form.weight||0} onChange={e=>set('weight',+e.target.value)} style={styles.input} />
+        </div>
+        <div style={styles.formGroup}>
+          <label style={styles.label}>Planned Qty</label>
+          <input value={form.plannedQty||''} onChange={e=>set('plannedQty',e.target.value)} style={styles.input} placeholder="e.g. 100" />
+        </div>
+        <div style={styles.formGroup}>
+          <label style={styles.label}>Unit</label>
+          <select value={form.unit||'%'} onChange={e=>set('unit',e.target.value)} style={styles.input}>
+            {MEP_UNITS.map(u=><option key={u} value={u}>{u}</option>)}
+          </select>
+        </div>
+        <div style={{ gridColumn:'1/-1', ...styles.formGroup }}>
+          <label style={styles.label}>Sequence (for ordering)</label>
+          <input type="number" value={form.sequence||0} onChange={e=>set('sequence',+e.target.value)} style={styles.input} />
+        </div>
+      </div>
+      <div style={{ display:'flex', justifyContent:'flex-end', gap:10, marginTop:16 }}>
+        <button style={styles.ghostBtn} onClick={onClose}>Cancel</button>
+        <button style={styles.primaryBtn} onClick={()=>{ if(!form.name) return alert('Activity name required'); onSave(form); }}>Save Activity</button>
+      </div>
+    </Modal>
+  );
+}
+
+// ── Daily Progress Updates ──────────────────────────────────────────────────────
+function DailyUpdateView({ progressUpdates, setProgressUpdates, siteActivities, siteProjects, employees, userRole }) {
+  const [selProject, setSelProject] = useState(siteProjects[0]?.id||'');
+  const [selDate, setSelDate] = useState(new Date().toISOString().slice(0,10));
+  const [editing, setEditing] = useState(null);
+  const canEdit = userRole==='admin'||userRole==='manager'||userRole==='sales';
+
+  const project = siteProjects.find(p=>p.id===selProject);
+  const todayUpdates = progressUpdates.filter(u=>u.projectId===selProject&&u.date===selDate);
+  const projectActs = siteActivities.filter(a=>a.projectId===selProject);
+
+  function save(form) {
+    const rec = { ...form, id: form.id||crypto.randomUUID(), projectId: selProject, date: selDate };
+    setProgressUpdates(prev => form.id ? prev.map(u=>u.id===form.id?rec:u) : [...prev, rec]);
+    // Update consumed materials in siteActivities
+    if (form.materialsConsumed?.length) {
+      // consumed is tracked per activity bom row
+    }
+    setEditing(null);
+  }
+  function del(id) { if(confirm('Delete update?')) setProgressUpdates(prev=>prev.filter(u=>u.id!==id)); }
+
+  if (!siteProjects.length) return (
+    <div style={styles.page}>
+      <h2 className="serif" style={styles.h2}>Daily Progress Updates</h2>
+      <p style={{ color:'#aaa', marginTop:16 }}>Create a project and activities first.</p>
+    </div>
+  );
+
+  return (
+    <div style={styles.page}>
+      <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', marginBottom:14 }}>
+        <div>
+          <h2 className="serif" style={styles.h2}>Daily Progress Updates</h2>
+          <p style={styles.muted}>{todayUpdates.length} update{todayUpdates.length!==1?'s':''} for selected date</p>
+        </div>
+        {canEdit && <button style={styles.primaryBtn} onClick={()=>setEditing({ _isNew:true, activityId:'', cumulativePct:0, dailyQtyDone:'', workers:[], materialsConsumed:[], issues:'', remarks:'' })}>+ Add Update</button>}
+      </div>
+
+      <div style={{ display:'flex', gap:10, marginBottom:18, flexWrap:'wrap', alignItems:'center' }}>
+        <select value={selProject} onChange={e=>setSelProject(e.target.value)} style={{ ...styles.input, width:220 }}>
+          {siteProjects.map(p=><option key={p.id} value={p.id}>{p.name}</option>)}
+        </select>
+        <input type="date" value={selDate} onChange={e=>setSelDate(e.target.value)} style={{ ...styles.input, width:160 }} />
+        <div style={{ display:'flex', gap:6 }}>
+          <button style={styles.ghostBtn} onClick={()=>{ const d=new Date(selDate); d.setDate(d.getDate()-1); setSelDate(d.toISOString().slice(0,10)); }}>◀ Prev</button>
+          <button style={styles.ghostBtn} onClick={()=>setSelDate(new Date().toISOString().slice(0,10))}>Today</button>
+          <button style={styles.ghostBtn} onClick={()=>{ const d=new Date(selDate); d.setDate(d.getDate()+1); setSelDate(d.toISOString().slice(0,10)); }}>Next ▶</button>
         </div>
       </div>
 
-      {/* Activities */}
-      <div style={{ marginTop: 16, marginBottom: 6, fontWeight: 600, fontSize: 13, color: '#1E2A4A' }}>
-        Manpower Activities
-        <button style={{ ...styles.ghostBtn, fontSize: 11, marginLeft: 10 }} onClick={addActivity}>+ Add</button>
+      {/* Updates for selected date */}
+      {todayUpdates.length===0 && <div style={{ color:'#aaa', padding:24 }}>No updates logged for {selDate}.</div>}
+      <div style={{ display:'flex', flexDirection:'column', gap:10 }}>
+        {todayUpdates.map(u=>{
+          const act = projectActs.find(a=>a.id===u.activityId);
+          const villa = (project?.villas||[]).find(v=>v.id===act?.villaId);
+          const prevPct = progressUpdates
+            .filter(x=>x.activityId===u.activityId && x.date<u.date)
+            .sort((a,b)=>b.date.localeCompare(a.date))[0]?.cumulativePct || 0;
+          const delta = (u.cumulativePct||0) - prevPct;
+          return (
+            <div key={u.id} style={{ background:'#fff', border:'1px solid #EAE6DB', borderRadius:12, padding:'14px 18px' }}>
+              <div style={{ display:'flex', justifyContent:'space-between', alignItems:'flex-start', marginBottom:8 }}>
+                <div>
+                  <span style={{ fontWeight:600, fontSize:14, color:'#1E2A4A' }}>{villa?.name||'Project-wide'}</span>
+                  <span style={{ fontSize:12, color:'#888', marginLeft:8 }}>→ {act?.discipline} → {act?.name||'?'}</span>
+                </div>
+                <div style={{ display:'flex', gap:8, alignItems:'center' }}>
+                  <span style={{ fontWeight:700, fontSize:16, color:'#1A7A3E' }}>{u.cumulativePct}%</span>
+                  {delta>0 && <span style={{ fontSize:11, color:'#1A7A3E', background:'#E6F5EC', borderRadius:6, padding:'2px 7px' }}>+{delta}% today</span>}
+                  {canEdit && <>
+                    <button style={{ ...styles.ghostBtn, fontSize:12 }} onClick={()=>setEditing(u)}>Edit</button>
+                    <button style={{ ...styles.ghostBtn, fontSize:12, color:'#B5453A' }} onClick={()=>del(u.id)}>×</button>
+                  </>}
+                </div>
+              </div>
+              {/* Workers */}
+              {(u.workers||[]).length>0 && (
+                <div style={{ display:'flex', flexWrap:'wrap', gap:6, marginBottom:6 }}>
+                  {u.workers.map((w,i)=>{
+                    const emp=employees.find(e=>e.id===w.employeeId);
+                    return <span key={i} style={{ fontSize:11.5, background:'#F5F3EE', borderRadius:8, padding:'3px 8px' }}>{emp?.name||'?'} · {w.hours}h · {w.trade}</span>;
+                  })}
+                </div>
+              )}
+              {/* Materials consumed */}
+              {(u.materialsConsumed||[]).length>0 && (
+                <div style={{ fontSize:12, color:'#555', marginBottom:4 }}>
+                  Materials: {u.materialsConsumed.map(m=>`${m.material} (${m.qty} ${m.unit})`).join(' · ')}
+                </div>
+              )}
+              {u.issues && <div style={{ fontSize:12, color:'#B5453A', marginTop:4 }}>⚠ {u.issues}</div>}
+              {u.remarks && <div style={{ fontSize:12, color:'#666', fontStyle:'italic', marginTop:4 }}>{u.remarks}</div>}
+            </div>
+          );
+        })}
       </div>
-      {form.activities.map((a, i) => (
-        <div key={i} style={{ display: 'grid', gridTemplateColumns: '2fr 1fr 3fr 1fr auto', gap: 8, marginBottom: 8, alignItems: 'center' }}>
-          <select value={a.employeeId} onChange={e => updateActivity(i, 'employeeId', e.target.value)} style={{ ...styles.input, fontSize: 12 }}>
+
+      {editing && (
+        <UpdateForm update={editing} projectActs={projectActs} project={project} employees={employees}
+          progressUpdates={progressUpdates} onSave={save} onClose={()=>setEditing(null)} />
+      )}
+    </div>
+  );
+}
+
+function UpdateForm({ update, projectActs, project, employees, progressUpdates, onSave, onClose }) {
+  const TRADES = ['Electrical','Plumbing','HVAC','Civil','Firefighting','IT','General'];
+  const [form, setForm] = useState({
+    activityId:'', cumulativePct:0, dailyQtyDone:'', workers:[], materialsConsumed:[], issues:'', remarks:'',
+    ...update,
+  });
+  function set(k,v) { setForm(f=>({...f,[k]:v})); }
+
+  const selAct = projectActs.find(a=>a.id===form.activityId);
+  const lastPct = form.activityId ? (progressUpdates
+    .filter(u=>u.activityId===form.activityId&&u.id!==form.id)
+    .sort((a,b)=>b.date.localeCompare(a.date))[0]?.cumulativePct||0) : 0;
+
+  function addWorker() { set('workers',[...form.workers,{ employeeId:'', trade:'Electrical', hours:8 }]); }
+  function updateWorker(i,k,v) { const w=[...form.workers]; w[i]={...w[i],[k]:v}; set('workers',w); }
+  function removeWorker(i) { set('workers',form.workers.filter((_,idx)=>idx!==i)); }
+
+  // Materials come from the activity BOM
+  const actBOM = selAct?.bom || [];
+  function toggleMat(row) {
+    const existing = form.materialsConsumed.find(m=>m.bomId===row.id);
+    if (existing) {
+      set('materialsConsumed', form.materialsConsumed.filter(m=>m.bomId!==row.id));
+    } else {
+      set('materialsConsumed', [...form.materialsConsumed, { bomId:row.id, material:row.material, qty:'', unit:row.unit }]);
+    }
+  }
+  function setMatQty(bomId, qty) {
+    set('materialsConsumed', form.materialsConsumed.map(m=>m.bomId===bomId?{...m,qty}:m));
+  }
+
+  // Group acts by villa
+  const villas = project?.villas||[];
+  const byVilla = {};
+  projectActs.forEach(a=>{ const key=a.villaId||'__none'; (byVilla[key]=byVilla[key]||[]).push(a); });
+
+  return (
+    <Modal title={form._isNew?'Log Progress Update':'Edit Update'} onClose={onClose} width={600}>
+      <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:12, marginBottom:12 }}>
+        <div style={{ gridColumn:'1/-1', ...styles.formGroup }}>
+          <label style={styles.label}>Activity *</label>
+          <select value={form.activityId} onChange={e=>set('activityId',e.target.value)} style={styles.input}>
+            <option value="">— Select activity —</option>
+            {villas.map(v=>{
+              const items=byVilla[v.id]||[];
+              if (!items.length) return null;
+              return <optgroup key={v.id} label={v.name}>{items.map(a=><option key={a.id} value={a.id}>{a.discipline} → {a.name}</option>)}</optgroup>;
+            })}
+            {(byVilla['__none']||[]).length>0 && (
+              <optgroup label="Project-wide">{(byVilla['__none']||[]).map(a=><option key={a.id} value={a.id}>{a.discipline} → {a.name}</option>)}</optgroup>
+            )}
+          </select>
+        </div>
+        {form.activityId && (
+          <div style={{ gridColumn:'1/-1' }}>
+            <div style={{ fontSize:12, color:'#888', marginBottom:6 }}>Previous progress: <strong>{lastPct}%</strong> → Setting cumulative to:</div>
+            <div style={{ display:'flex', alignItems:'center', gap:10 }}>
+              <input type="range" min={lastPct} max={100} value={form.cumulativePct}
+                onChange={e=>set('cumulativePct',+e.target.value)} style={{ flex:1, accentColor:'#1A7A3E' }} />
+              <span style={{ fontWeight:700, fontSize:18, color:'#1A7A3E', width:48 }}>{form.cumulativePct}%</span>
+            </div>
+            {selAct?.plannedQty && (
+              <div style={{ ...styles.formGroup, marginTop:10 }}>
+                <label style={styles.label}>Quantity done today ({selAct.unit})</label>
+                <input value={form.dailyQtyDone||''} onChange={e=>set('dailyQtyDone',e.target.value)} style={styles.input} placeholder={`Planned: ${selAct.plannedQty} ${selAct.unit}`} />
+              </div>
+            )}
+          </div>
+        )}
+      </div>
+
+      {/* Workers */}
+      <div style={{ marginBottom:6, display:'flex', justifyContent:'space-between', alignItems:'center' }}>
+        <span style={{ fontWeight:600, fontSize:13, color:'#1E2A4A' }}>Manpower Today</span>
+        <button style={{ ...styles.ghostBtn, fontSize:11 }} onClick={addWorker}>+ Add</button>
+      </div>
+      {form.workers.map((w,i)=>(
+        <div key={i} style={{ display:'grid', gridTemplateColumns:'2fr 1.5fr 1fr auto', gap:8, marginBottom:8, alignItems:'center' }}>
+          <select value={w.employeeId} onChange={e=>updateWorker(i,'employeeId',e.target.value)} style={{ ...styles.input, fontSize:12 }}>
             <option value="">— Employee —</option>
-            {employees.map(e => <option key={e.id} value={e.id}>{e.name}</option>)}
+            {employees.map(e=><option key={e.id} value={e.id}>{e.name}</option>)}
           </select>
-          <select value={a.trade} onChange={e => updateActivity(i, 'trade', e.target.value)} style={{ ...styles.input, fontSize: 12 }}>
-            {TRADES.map(t => <option key={t} value={t}>{t}</option>)}
+          <select value={w.trade} onChange={e=>updateWorker(i,'trade',e.target.value)} style={{ ...styles.input, fontSize:12 }}>
+            {TRADES.map(t=><option key={t} value={t}>{t}</option>)}
           </select>
-          <input value={a.task} onChange={e => updateActivity(i, 'task', e.target.value)} style={{ ...styles.input, fontSize: 12 }} placeholder="Task description" />
-          <input type="number" min={0} max={12} value={a.hours} onChange={e => updateActivity(i, 'hours', +e.target.value)} style={{ ...styles.input, fontSize: 12 }} placeholder="hrs" />
-          <button onClick={() => removeActivity(i)} style={{ ...styles.ghostBtn, color: '#B5453A', fontSize: 12, padding: '4px 8px' }}>×</button>
+          <input type="number" min={1} max={12} value={w.hours} onChange={e=>updateWorker(i,'hours',+e.target.value)} style={{ ...styles.input, fontSize:12 }} placeholder="hrs" />
+          <button onClick={()=>removeWorker(i)} style={{ ...styles.ghostBtn, color:'#B5453A', fontSize:12, padding:'4px 8px' }}>×</button>
         </div>
       ))}
-      {form.activities.length === 0 && <div style={{ fontSize: 12, color: '#aaa', marginBottom: 8 }}>No activities logged yet.</div>}
+      {form.workers.length===0 && <div style={{ fontSize:12, color:'#aaa', marginBottom:8 }}>No workers added.</div>}
 
-      {/* Progress by area */}
-      <div style={{ marginTop: 14, marginBottom: 6, fontWeight: 600, fontSize: 13, color: '#1E2A4A' }}>
-        Progress by Area / System
-        <button style={{ ...styles.ghostBtn, fontSize: 11, marginLeft: 10 }} onClick={addProgress}>+ Add</button>
-      </div>
-      {form.progressItems.map((item, i) => (
-        <div key={i} style={{ display: 'grid', gridTemplateColumns: '3fr 2fr auto', gap: 8, marginBottom: 8, alignItems: 'center' }}>
-          <input value={item.area} onChange={e => updateProgress(i, 'area', e.target.value)} style={{ ...styles.input, fontSize: 12 }} placeholder="Area / system (e.g. Living room electrical)" />
-          <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-            <input type="range" min={0} max={100} value={item.pct} onChange={e => updateProgress(i, 'pct', +e.target.value)}
-              style={{ flex: 1, accentColor: '#1A7A3E' }} />
-            <span style={{ fontSize: 12, width: 32, textAlign: 'right' }}>{item.pct}%</span>
-          </div>
-          <button onClick={() => removeProgress(i)} style={{ ...styles.ghostBtn, color: '#B5453A', fontSize: 12, padding: '4px 8px' }}>×</button>
-        </div>
-      ))}
-
-      {/* Materials from client */}
-      {projMaterials.length > 0 && (
+      {/* Materials consumed */}
+      {actBOM.length>0 && (
         <>
-          <div style={{ marginTop: 14, marginBottom: 6, fontWeight: 600, fontSize: 13, color: '#1E2A4A' }}>Materials Received from Client (used today)</div>
-          <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, marginBottom: 10 }}>
-            {projMaterials.map(m => (
-              <button key={m.id} onClick={() => toggleMaterial(m.id)}
-                style={{ fontSize: 12, padding: '4px 10px', borderRadius: 20, border: '1px solid #DDD8CC', cursor: 'pointer',
-                  background: form.materialsUsedIds.includes(m.id) ? '#1E2A4A' : '#F5F3EE',
-                  color: form.materialsUsedIds.includes(m.id) ? '#fff' : '#444' }}>
-                {m.refNo || m.id.slice(0,6)} — {(m.items || []).length} item(s)
-              </button>
-            ))}
-          </div>
+          <div style={{ fontWeight:600, fontSize:13, color:'#1E2A4A', marginTop:10, marginBottom:6 }}>Materials Consumed Today</div>
+          {actBOM.map(row=>{
+            const sel = form.materialsConsumed.find(m=>m.bomId===row.id);
+            return (
+              <div key={row.id} style={{ display:'flex', gap:8, marginBottom:6, alignItems:'center' }}>
+                <button onClick={()=>toggleMat(row)} style={{ fontSize:12, padding:'3px 10px', borderRadius:20, border:'1px solid #DDD8CC', cursor:'pointer', background:sel?'#1E2A4A':'#F5F3EE', color:sel?'#fff':'#444', whiteSpace:'nowrap' }}>
+                  {row.material}
+                </button>
+                {sel && (
+                  <div style={{ display:'flex', gap:6, alignItems:'center' }}>
+                    <input type="number" value={sel.qty||''} onChange={e=>setMatQty(row.id,e.target.value)} style={{ ...styles.input, width:80, fontSize:12 }} placeholder="qty" />
+                    <span style={{ fontSize:12, color:'#666' }}>{row.unit}</span>
+                  </div>
+                )}
+                {!sel && <span style={{ fontSize:11, color:'#aaa' }}>planned: {row.plannedQty} {row.unit}</span>}
+              </div>
+            );
+          })}
         </>
       )}
 
-      <div style={styles.formGroup}>
-        <label style={styles.label}>Notes / Observations</label>
-        <textarea value={form.notes || ''} onChange={e => set('notes', e.target.value)} style={{ ...styles.input, height: 56 }} />
+      <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:12, marginTop:12 }}>
+        <div style={styles.formGroup}>
+          <label style={styles.label}>Issues / Blockers</label>
+          <textarea value={form.issues||''} onChange={e=>set('issues',e.target.value)} style={{ ...styles.input, height:50 }} placeholder="Any problems on site?" />
+        </div>
+        <div style={styles.formGroup}>
+          <label style={styles.label}>Remarks</label>
+          <textarea value={form.remarks||''} onChange={e=>set('remarks',e.target.value)} style={{ ...styles.input, height:50 }} />
+        </div>
       </div>
-      <div style={styles.formGroup}>
-        <label style={styles.label}>Next Day Plan</label>
-        <textarea value={form.nextDayPlan || ''} onChange={e => set('nextDayPlan', e.target.value)} style={{ ...styles.input, height: 48 }} />
-      </div>
-      <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 10, marginTop: 12 }}>
+      <div style={{ display:'flex', justifyContent:'flex-end', gap:10, marginTop:14 }}>
         <button style={styles.ghostBtn} onClick={onClose}>Cancel</button>
-        <button style={styles.primaryBtn} onClick={() => {
-          if (!form.date) return alert('Date required');
-          if (!form.projectId) return alert('Select a project');
-          onSave(form);
-        }}>Save Report</button>
+        <button style={styles.primaryBtn} onClick={()=>{ if(!form.activityId) return alert('Select an activity'); onSave(form); }}>Save Update</button>
       </div>
     </Modal>
+  );
+}
+
+// ── Progress Board (Matrix view) ────────────────────────────────────────────────
+function ProgressBoardView({ siteProjects, siteActivities, progressUpdates }) {
+  const [selProject, setSelProject] = useState(siteProjects[0]?.id||'');
+  const project = siteProjects.find(p=>p.id===selProject);
+  const acts = siteActivities.filter(a=>a.projectId===selProject);
+  const villas = project?.villas||[];
+  const disciplines = project?.disciplines||MEP_DISCIPLINES;
+
+  function cellPct(villaId, discipline) {
+    const cellActs = acts.filter(a=>a.villaId===villaId&&a.discipline===discipline);
+    if (!cellActs.length) return null;
+    const avg = cellActs.reduce((s,a)=>s+getActivityProgress(a.id,progressUpdates),0)/cellActs.length;
+    return Math.round(avg);
+  }
+  function villaPct(villaId) {
+    const va = acts.filter(a=>a.villaId===villaId);
+    if (!va.length) return null;
+    return Math.round(va.reduce((s,a)=>s+getActivityProgress(a.id,progressUpdates),0)/va.length);
+  }
+  function discPct(discipline) {
+    const da = acts.filter(a=>a.discipline===discipline);
+    if (!da.length) return null;
+    return Math.round(da.reduce((s,a)=>s+getActivityProgress(a.id,progressUpdates),0)/da.length);
+  }
+  const overallPct = acts.length ? Math.round(acts.reduce((s,a)=>s+getActivityProgress(a.id,progressUpdates),0)/acts.length) : null;
+
+  function pctColor(pct) {
+    if (pct===null) return '#F0EDE6';
+    if (pct===100) return '#1A7A3E';
+    if (pct>=75) return '#3D7A5C';
+    if (pct>=50) return '#C9A24B';
+    if (pct>0) return '#E07A2B';
+    return '#EAE6DB';
+  }
+  function pctBg(pct) {
+    if (pct===null) return '#F5F3EE';
+    if (pct===100) return '#E6F5EC';
+    if (pct>=75) return '#EBF5F0';
+    if (pct>=50) return '#FDF7E6';
+    if (pct>0) return '#FEF0E0';
+    return '#FAF8F4';
+  }
+
+  if (!siteProjects.length) return (
+    <div style={styles.page}>
+      <h2 className="serif" style={styles.h2}>Progress Board</h2>
+      <p style={{ color:'#aaa', marginTop:16 }}>Create a project and activities first.</p>
+    </div>
+  );
+
+  const activeDisciplines = disciplines.filter(d=>acts.some(a=>a.discipline===d));
+
+  return (
+    <div style={styles.page}>
+      <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', marginBottom:14 }}>
+        <div>
+          <h2 className="serif" style={styles.h2}>Progress Board</h2>
+          <p style={styles.muted}>Villa × Discipline completion matrix</p>
+        </div>
+        <select value={selProject} onChange={e=>setSelProject(e.target.value)} style={{ ...styles.input, width:220 }}>
+          {siteProjects.map(p=><option key={p.id} value={p.id}>{p.name}</option>)}
+        </select>
+      </div>
+      {overallPct!==null && (
+        <div style={{ background:'#fff', border:'1px solid #EAE6DB', borderRadius:10, padding:'12px 16px', marginBottom:16, display:'flex', alignItems:'center', gap:16 }}>
+          <div>
+            <div style={{ fontSize:11, color:'#888', fontWeight:700, textTransform:'uppercase', letterSpacing:'0.06em' }}>Overall Project</div>
+            <div style={{ fontSize:24, fontWeight:700, color:pctColor(overallPct) }}>{overallPct}%</div>
+          </div>
+          <div style={{ flex:1, background:'#EAE6DB', borderRadius:6, height:12 }}>
+            <div style={{ width:`${overallPct}%`, background:pctColor(overallPct), borderRadius:6, height:12, transition:'width 0.4s' }} />
+          </div>
+        </div>
+      )}
+      <div style={{ overflowX:'auto' }}>
+        <table style={{ borderCollapse:'collapse', fontSize:13, minWidth: villas.length>0?`${180+activeDisciplines.length*90}px`:'auto' }}>
+          <thead>
+            <tr>
+              <th style={{ padding:'10px 14px', textAlign:'left', background:'#F5F3EE', border:'1px solid #EAE6DB', fontSize:12, color:'#555', minWidth:140 }}>Villa / Unit</th>
+              {activeDisciplines.map(d=>(
+                <th key={d} style={{ padding:'10px 12px', background:'#F5F3EE', border:'1px solid #EAE6DB', textAlign:'center', fontSize:12, color:'#555', whiteSpace:'nowrap' }}>{d}</th>
+              ))}
+              <th style={{ padding:'10px 12px', background:'#EAE6DB', border:'1px solid #D8D4CC', textAlign:'center', fontSize:12, color:'#444', fontWeight:700 }}>Overall</th>
+            </tr>
+          </thead>
+          <tbody>
+            {villas.map(v=>{
+              const vPct = villaPct(v.id);
+              return (
+                <tr key={v.id}>
+                  <td style={{ padding:'8px 14px', border:'1px solid #EAE6DB', fontWeight:600, fontSize:13, color:'#1E2A4A', background:'#FAFAF8' }}>{v.name}</td>
+                  {activeDisciplines.map(d=>{
+                    const pct = cellPct(v.id, d);
+                    return (
+                      <td key={d} style={{ padding:'6px 12px', border:'1px solid #EAE6DB', textAlign:'center', background:pctBg(pct) }}>
+                        {pct!==null
+                          ? <div>
+                              <div style={{ fontWeight:700, color:pctColor(pct), fontSize:14 }}>{pct}%</div>
+                              <div style={{ height:3, background:'#EAE6DB', borderRadius:2, marginTop:3 }}>
+                                <div style={{ width:`${pct}%`, background:pctColor(pct), height:3, borderRadius:2 }} />
+                              </div>
+                            </div>
+                          : <span style={{ color:'#ccc', fontSize:12 }}>—</span>
+                        }
+                      </td>
+                    );
+                  })}
+                  <td style={{ padding:'8px 12px', border:'1px solid #D8D4CC', textAlign:'center', background:pctBg(vPct), fontWeight:700, color:pctColor(vPct), fontSize:15 }}>
+                    {vPct!==null?`${vPct}%`:'—'}
+                  </td>
+                </tr>
+              );
+            })}
+            {/* Totals row */}
+            <tr>
+              <td style={{ padding:'8px 14px', border:'1px solid #EAE6DB', fontWeight:700, fontSize:12, color:'#888', background:'#EAE6DB' }}>DISCIPLINE AVG</td>
+              {activeDisciplines.map(d=>{
+                const pct=discPct(d);
+                return (
+                  <td key={d} style={{ padding:'8px 12px', border:'1px solid #D8D4CC', textAlign:'center', background:'#EAE6DB', fontWeight:700, color:pctColor(pct), fontSize:14 }}>
+                    {pct!==null?`${pct}%`:'—'}
+                  </td>
+                );
+              })}
+              <td style={{ padding:'8px 12px', border:'1px solid #C8C4BC', textAlign:'center', background:'#DDD8CC', fontWeight:700, color:pctColor(overallPct), fontSize:16 }}>
+                {overallPct!==null?`${overallPct}%`:'—'}
+              </td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+
+      {/* Legend */}
+      <div style={{ display:'flex', gap:14, marginTop:14, flexWrap:'wrap' }}>
+        {[['Not started','#EAE6DB'],['In progress','#E07A2B'],['50%+','#C9A24B'],['75%+','#3D7A5C'],['Complete','#1A7A3E']].map(([l,c])=>(
+          <div key={l} style={{ display:'flex', alignItems:'center', gap:6, fontSize:12, color:'#555' }}>
+            <div style={{ width:14, height:14, borderRadius:3, background:c }} />{l}
+          </div>
+        ))}
+      </div>
+    </div>
   );
 }
 
 // ── Client Materials Received ───────────────────────────────────────────────────
-function ClientMaterialView({ clientMaterials, setClientMaterials, projects, employees, userRole }) {
+function ClientMaterialView({ clientMaterials, setClientMaterials, siteProjects, employees, userRole }) {
   const [editing, setEditing] = useState(null);
   const [filterProject, setFilterProject] = useState('');
   const canEdit = userRole === 'admin' || userRole === 'manager';
@@ -9029,17 +9567,17 @@ function ClientMaterialView({ clientMaterials, setClientMaterials, projects, emp
       </div>
       <select value={filterProject} onChange={e => setFilterProject(e.target.value)} style={{ ...styles.input, width: 240, marginBottom: 14 }}>
         <option value="">All Projects</option>
-        {projects.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
+        {siteProjects.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
       </select>
       <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
         {sorted.map(m => {
-          const proj = projects.find(p => p.id === m.projectId);
+          const proj = siteProjects.find(p => p.id === m.projectId);
           return (
             <div key={m.id} style={{ background: '#fff', border: '1px solid #EAE6DB', borderRadius: 12, padding: '14px 18px' }}>
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 6 }}>
                 <div>
                   <div style={{ fontWeight: 600, fontSize: 14, color: '#1E2A4A' }}>{m.date} — {proj?.name || '—'}</div>
-                  <div style={{ fontSize: 12, color: '#888', marginTop: 2 }}>Ref: {m.refNo || '—'} &nbsp;·&nbsp; Received by: {m.receivedBy || '—'}</div>
+                  <div style={{ fontSize: 12, color: '#888', marginTop: 2 }}>Ref: {m.refNo || '—'} · Received by: {m.receivedBy || '—'}</div>
                 </div>
                 <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
                   <span style={{ fontSize: 11, fontWeight: 700, color: COND_COLOR[m.status] || '#888', background: '#F5F3EE', borderRadius: 6, padding: '2px 8px', textTransform: 'uppercase' }}>{m.status}</span>
@@ -9074,12 +9612,12 @@ function ClientMaterialView({ clientMaterials, setClientMaterials, projects, emp
         })}
         {sorted.length === 0 && <div style={{ color: '#aaa', padding: 24 }}>No material receipts logged.</div>}
       </div>
-      {editing && <ClientMaterialForm record={editing} projects={projects} employees={employees} onSave={save} onClose={() => setEditing(null)} />}
+      {editing && <ClientMaterialForm record={editing} siteProjects={siteProjects} employees={employees} onSave={save} onClose={() => setEditing(null)} />}
     </div>
   );
 }
 
-function ClientMaterialForm({ record, projects, employees, onSave, onClose }) {
+function ClientMaterialForm({ record, siteProjects, employees, onSave, onClose }) {
   const [form, setForm] = useState({
     date: new Date().toISOString().slice(0, 10), projectId: '', refNo: '',
     receivedBy: '', status: 'received', items: [], remarks: '',
@@ -9092,70 +9630,57 @@ function ClientMaterialForm({ record, projects, employees, onSave, onClose }) {
   return (
     <Modal title={form._isNew ? 'Log Material Receipt' : 'Edit Receipt'} onClose={onClose} width={620}>
       <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
-        <div style={styles.formGroup}>
-          <label style={styles.label}>Date *</label>
-          <input type="date" value={form.date} onChange={e => set('date', e.target.value)} style={styles.input} />
-        </div>
+        <div style={styles.formGroup}><label style={styles.label}>Date *</label><input type="date" value={form.date} onChange={e=>set('date',e.target.value)} style={styles.input} /></div>
         <div style={styles.formGroup}>
           <label style={styles.label}>Project *</label>
-          <select value={form.projectId} onChange={e => set('projectId', e.target.value)} style={styles.input}>
+          <select value={form.projectId} onChange={e=>set('projectId',e.target.value)} style={styles.input}>
             <option value="">— Select —</option>
-            {projects.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
+            {siteProjects.map(p=><option key={p.id} value={p.id}>{p.name}</option>)}
           </select>
         </div>
-        <div style={styles.formGroup}>
-          <label style={styles.label}>Client Delivery Ref / DO No.</label>
-          <input value={form.refNo || ''} onChange={e => set('refNo', e.target.value)} style={styles.input} placeholder="e.g. DO-2024-001" />
-        </div>
+        <div style={styles.formGroup}><label style={styles.label}>Client Delivery Ref / DO No.</label><input value={form.refNo||''} onChange={e=>set('refNo',e.target.value)} style={styles.input} placeholder="e.g. DO-2024-001" /></div>
         <div style={styles.formGroup}>
           <label style={styles.label}>Received by</label>
-          <select value={form.receivedBy || ''} onChange={e => set('receivedBy', e.target.value)} style={styles.input}>
-            <option value="">— Select employee —</option>
-            {employees.map(e => <option key={e.id} value={e.name}>{e.name}</option>)}
+          <select value={form.receivedBy||''} onChange={e=>set('receivedBy',e.target.value)} style={styles.input}>
+            <option value="">— Select —</option>
+            {employees.map(e=><option key={e.id} value={e.name}>{e.name}</option>)}
           </select>
         </div>
-        <div style={{ gridColumn: '1/-1', ...styles.formGroup }}>
-          <label style={styles.label}>Overall Status</label>
-          <select value={form.status} onChange={e => set('status', e.target.value)} style={{ ...styles.input, width: 200 }}>
-            {['received','partially received','returned','pending verification'].map(s => <option key={s} value={s}>{s}</option>)}
+        <div style={{ gridColumn:'1/-1', ...styles.formGroup }}>
+          <label style={styles.label}>Status</label>
+          <select value={form.status} onChange={e=>set('status',e.target.value)} style={{ ...styles.input, width:200 }}>
+            {['received','partially received','returned','pending verification'].map(s=><option key={s} value={s}>{s}</option>)}
           </select>
         </div>
       </div>
-      <div style={{ marginTop: 14, marginBottom: 6, fontWeight: 600, fontSize: 13, color: '#1E2A4A' }}>
-        Items Received
-        <button style={{ ...styles.ghostBtn, fontSize: 11, marginLeft: 10 }} onClick={addItem}>+ Add item</button>
+      <div style={{ marginTop:14, marginBottom:6, fontWeight:600, fontSize:13, color:'#1E2A4A' }}>
+        Items Received <button style={{ ...styles.ghostBtn, fontSize:11, marginLeft:10 }} onClick={addItem}>+ Add item</button>
       </div>
-      {form.items.map((it, i) => (
-        <div key={i} style={{ display: 'grid', gridTemplateColumns: '3fr 1fr 1fr 1.2fr auto', gap: 8, marginBottom: 8, alignItems: 'center' }}>
-          <input value={it.description} onChange={e => updateItem(i,'description',e.target.value)} style={{ ...styles.input, fontSize: 12 }} placeholder="Description" />
-          <input value={it.qty} onChange={e => updateItem(i,'qty',e.target.value)} style={{ ...styles.input, fontSize: 12 }} placeholder="Qty" />
-          <select value={it.unit} onChange={e => updateItem(i,'unit',e.target.value)} style={{ ...styles.input, fontSize: 12 }}>
-            {['nos','m','m²','kg','ltr','roll','set','lot'].map(u => <option key={u} value={u}>{u}</option>)}
+      {form.items.map((it,i)=>(
+        <div key={i} style={{ display:'grid', gridTemplateColumns:'3fr 1fr 1fr 1.2fr auto', gap:8, marginBottom:8, alignItems:'center' }}>
+          <input value={it.description} onChange={e=>updateItem(i,'description',e.target.value)} style={{ ...styles.input, fontSize:12 }} placeholder="Description" />
+          <input value={it.qty} onChange={e=>updateItem(i,'qty',e.target.value)} style={{ ...styles.input, fontSize:12 }} placeholder="Qty" />
+          <select value={it.unit} onChange={e=>updateItem(i,'unit',e.target.value)} style={{ ...styles.input, fontSize:12 }}>
+            {['nos','m','m²','kg','ltr','roll','set','lot'].map(u=><option key={u} value={u}>{u}</option>)}
           </select>
-          <select value={it.condition} onChange={e => updateItem(i,'condition',e.target.value)} style={{ ...styles.input, fontSize: 12 }}>
-            {['good','damaged','partial'].map(c => <option key={c} value={c}>{c}</option>)}
+          <select value={it.condition} onChange={e=>updateItem(i,'condition',e.target.value)} style={{ ...styles.input, fontSize:12 }}>
+            {['good','damaged','partial'].map(c=><option key={c} value={c}>{c}</option>)}
           </select>
-          <button onClick={() => removeItem(i)} style={{ ...styles.ghostBtn, color: '#B5453A', fontSize: 12, padding: '4px 8px' }}>×</button>
+          <button onClick={()=>removeItem(i)} style={{ ...styles.ghostBtn, color:'#B5453A', fontSize:12, padding:'4px 8px' }}>×</button>
         </div>
       ))}
-      {form.items.length === 0 && <div style={{ fontSize: 12, color: '#aaa', marginBottom: 8 }}>No items added.</div>}
-      <div style={{ ...styles.formGroup, marginTop: 10 }}>
-        <label style={styles.label}>Remarks</label>
-        <textarea value={form.remarks || ''} onChange={e => set('remarks', e.target.value)} style={{ ...styles.input, height: 50 }} />
-      </div>
-      <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 10, marginTop: 12 }}>
+      {form.items.length===0 && <div style={{ fontSize:12, color:'#aaa', marginBottom:8 }}>No items added.</div>}
+      <div style={{ ...styles.formGroup, marginTop:10 }}><label style={styles.label}>Remarks</label><textarea value={form.remarks||''} onChange={e=>set('remarks',e.target.value)} style={{ ...styles.input, height:50 }} /></div>
+      <div style={{ display:'flex', justifyContent:'flex-end', gap:10, marginTop:12 }}>
         <button style={styles.ghostBtn} onClick={onClose}>Cancel</button>
-        <button style={styles.primaryBtn} onClick={() => {
-          if (!form.date || !form.projectId) return alert('Date and project required');
-          onSave(form);
-        }}>Save Receipt</button>
+        <button style={styles.primaryBtn} onClick={()=>{ if(!form.date||!form.projectId) return alert('Date and project required'); onSave(form); }}>Save Receipt</button>
       </div>
     </Modal>
   );
 }
 
 // ── Site Attendance ─────────────────────────────────────────────────────────────
-function SiteAttendanceView({ siteAttendance, setSiteAttendance, projects, employees, userRole }) {
+function SiteAttendanceView({ siteAttendance, setSiteAttendance, siteProjects, employees, userRole }) {
   const [editing, setEditing] = useState(null);
   const [filterProject, setFilterProject] = useState('');
   const [filterMonth, setFilterMonth] = useState(new Date().toISOString().slice(0, 7));
@@ -9170,7 +9695,6 @@ function SiteAttendanceView({ siteAttendance, setSiteAttendance, projects, emplo
   }
   function del(id) { if (confirm('Delete attendance record?')) setSiteAttendance(prev => prev.filter(r => r.id !== id)); }
   const STATUS_ICON = { present: '✅', absent: '❌', half_day: '🔶', leave: '🔵' };
-  // Monthly summary per employee
   const empSummary = employees.reduce((acc, emp) => {
     const records = sorted.flatMap(r => (r.records || []).filter(x => x.employeeId === emp.id));
     acc[emp.id] = {
@@ -9185,49 +9709,36 @@ function SiteAttendanceView({ siteAttendance, setSiteAttendance, projects, emplo
   return (
     <div style={styles.page}>
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 18 }}>
-        <div>
-          <h2 className="serif" style={styles.h2}>Site Attendance</h2>
-          <p style={styles.muted}>{siteAttendance.length} daily record{siteAttendance.length !== 1 ? 's' : ''}</p>
-        </div>
+        <div><h2 className="serif" style={styles.h2}>Site Attendance</h2><p style={styles.muted}>{siteAttendance.length} daily records</p></div>
         {canEdit && <button style={styles.primaryBtn} onClick={() => setEditing({ _isNew: true, date: new Date().toISOString().slice(0, 10), records: [] })}>+ Mark Attendance</button>}
       </div>
       <div style={{ display: 'flex', gap: 10, marginBottom: 16, flexWrap: 'wrap' }}>
         <select value={filterProject} onChange={e => setFilterProject(e.target.value)} style={{ ...styles.input, width: 220 }}>
           <option value="">All Projects</option>
-          {projects.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
+          {siteProjects.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
         </select>
         <input type="month" value={filterMonth} onChange={e => setFilterMonth(e.target.value)} style={{ ...styles.input, width: 160 }} />
         <button style={styles.ghostBtn} onClick={() => setFilterMonth('')}>All months</button>
       </div>
-
-      {/* Monthly summary */}
       {employees.length > 0 && (
         <>
           <div style={styles.dashSection}>Monthly Summary — {filterMonth || 'All time'}</div>
           <div style={{ overflowX: 'auto', marginBottom: 20 }}>
             <table style={styles.table}>
-              <thead>
-                <tr style={{ background: '#F5F3EE' }}>
-                  {['Employee', 'Days Logged', 'Present', 'Half Day', 'Absent', 'Leave', 'Attendance %'].map(h => (
-                    <th key={h} style={{ ...styles.th, textAlign: h === 'Employee' ? 'left' : 'center' }}>{h}</th>
-                  ))}
-                </tr>
-              </thead>
+              <thead><tr style={{ background: '#F5F3EE' }}>{['Employee','Days Logged','Present','Half Day','Absent','Leave','Attendance %'].map(h=><th key={h} style={{ ...styles.th, textAlign: h==='Employee'?'left':'center' }}>{h}</th>)}</tr></thead>
               <tbody>
                 {employees.map(emp => {
                   const s = empSummary[emp.id] || {};
-                  const pct = s.total ? Math.round(((s.present + s.halfDay * 0.5) / s.total) * 100) : 0;
+                  const pct = s.total ? Math.round(((s.present + (s.halfDay||0) * 0.5) / s.total) * 100) : 0;
                   return (
                     <tr key={emp.id} style={{ borderTop: '1px solid #EAE6DB' }}>
                       <td style={styles.td}>{emp.name}</td>
-                      <td style={{ ...styles.td, textAlign: 'center' }}>{s.total || 0}</td>
-                      <td style={{ ...styles.td, textAlign: 'center', color: '#1A7A3E', fontWeight: 600 }}>{s.present || 0}</td>
-                      <td style={{ ...styles.td, textAlign: 'center', color: '#C9A24B' }}>{s.halfDay || 0}</td>
-                      <td style={{ ...styles.td, textAlign: 'center', color: '#B5453A' }}>{s.absent || 0}</td>
-                      <td style={{ ...styles.td, textAlign: 'center', color: '#6B5BAE' }}>{s.leave || 0}</td>
-                      <td style={{ ...styles.td, textAlign: 'center' }}>
-                        <span style={{ fontWeight: 700, color: pct >= 80 ? '#1A7A3E' : pct >= 60 ? '#C9A24B' : '#B5453A' }}>{s.total ? `${pct}%` : '—'}</span>
-                      </td>
+                      <td style={{ ...styles.td, textAlign:'center' }}>{s.total||0}</td>
+                      <td style={{ ...styles.td, textAlign:'center', color:'#1A7A3E', fontWeight:600 }}>{s.present||0}</td>
+                      <td style={{ ...styles.td, textAlign:'center', color:'#C9A24B' }}>{s.halfDay||0}</td>
+                      <td style={{ ...styles.td, textAlign:'center', color:'#B5453A' }}>{s.absent||0}</td>
+                      <td style={{ ...styles.td, textAlign:'center', color:'#6B5BAE' }}>{s.leave||0}</td>
+                      <td style={{ ...styles.td, textAlign:'center' }}><span style={{ fontWeight:700, color: pct>=80?'#1A7A3E':pct>=60?'#C9A24B':'#B5453A' }}>{s.total?`${pct}%`:'—'}</span></td>
                     </tr>
                   );
                 })}
@@ -9236,12 +9747,10 @@ function SiteAttendanceView({ siteAttendance, setSiteAttendance, projects, emplo
           </div>
         </>
       )}
-
-      {/* Daily records */}
       <div style={styles.dashSection}>Daily Records</div>
       <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
         {sorted.map(r => {
-          const proj = projects.find(p => p.id === r.projectId);
+          const proj = siteProjects.find(p => p.id === r.projectId);
           const presentCount = (r.records || []).filter(x => x.status === 'present').length;
           return (
             <div key={r.id} style={{ background: '#fff', border: '1px solid #EAE6DB', borderRadius: 12, padding: '12px 16px' }}>
@@ -9249,23 +9758,17 @@ function SiteAttendanceView({ siteAttendance, setSiteAttendance, projects, emplo
                 <div>
                   <span style={{ fontWeight: 600, fontSize: 14, color: '#1E2A4A' }}>{r.date}</span>
                   <span style={{ fontSize: 12, color: '#888', marginLeft: 10 }}>{proj?.name || '—'}</span>
-                  <span style={{ fontSize: 12, color: '#1A7A3E', marginLeft: 10 }}>{presentCount}/{(r.records || []).length} present</span>
+                  <span style={{ fontSize: 12, color: '#1A7A3E', marginLeft: 10 }}>{presentCount}/{(r.records||[]).length} present</span>
                 </div>
-                {canEdit && (
-                  <div style={{ display: 'flex', gap: 6 }}>
-                    <button style={{ ...styles.ghostBtn, fontSize: 12 }} onClick={() => setEditing(r)}>Edit</button>
-                    <button style={{ ...styles.ghostBtn, fontSize: 12, color: '#B5453A' }} onClick={() => del(r.id)}>×</button>
-                  </div>
-                )}
+                {canEdit && <div style={{ display:'flex', gap:6 }}>
+                  <button style={{ ...styles.ghostBtn, fontSize: 12 }} onClick={() => setEditing(r)}>Edit</button>
+                  <button style={{ ...styles.ghostBtn, fontSize: 12, color: '#B5453A' }} onClick={() => del(r.id)}>×</button>
+                </div>}
               </div>
               <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
                 {(r.records || []).map((rec, i) => {
                   const emp = employees.find(e => e.id === rec.employeeId);
-                  return (
-                    <span key={i} style={{ fontSize: 12, background: '#F5F3EE', borderRadius: 8, padding: '3px 10px' }}>
-                      {STATUS_ICON[rec.status] || '?'} {emp?.name || '?'}
-                    </span>
-                  );
+                  return <span key={i} style={{ fontSize: 12, background: '#F5F3EE', borderRadius: 8, padding: '3px 10px' }}>{STATUS_ICON[rec.status]||'?'} {emp?.name||'?'}</span>;
                 })}
               </div>
             </div>
@@ -9273,94 +9776,72 @@ function SiteAttendanceView({ siteAttendance, setSiteAttendance, projects, emplo
         })}
         {sorted.length === 0 && <div style={{ color: '#aaa', padding: 24 }}>No attendance records for this period.</div>}
       </div>
-      {editing && <AttendanceSheet sheet={editing} projects={projects} employees={employees} onSave={save} onClose={() => setEditing(null)} />}
+      {editing && <AttendanceSheet sheet={editing} siteProjects={siteProjects} employees={employees} onSave={save} onClose={() => setEditing(null)} />}
     </div>
   );
 }
 
-function AttendanceSheet({ sheet, projects, employees, onSave, onClose }) {
+function AttendanceSheet({ sheet, siteProjects, employees, onSave, onClose }) {
   const [form, setForm] = useState({
     date: new Date().toISOString().slice(0, 10), projectId: '',
     records: employees.map(e => ({ employeeId: e.id, status: 'present', note: '' })),
     ...sheet,
   });
-  // If editing and records don't cover all employees, fill missing ones
   useEffect(() => {
     if (form.records.length === 0 && employees.length > 0) {
       setForm(f => ({ ...f, records: employees.map(e => ({ employeeId: e.id, status: 'present', note: '' })) }));
     }
   }, []);
   function set(k, v) { setForm(f => ({ ...f, [k]: v })); }
-  function setRecord(i, k, v) {
-    const recs = [...form.records]; recs[i] = { ...recs[i], [k]: v }; set('records', recs);
-  }
-  const STATUSES = [
-    { value: 'present',  label: 'Present',  color: '#1A7A3E' },
-    { value: 'absent',   label: 'Absent',   color: '#B5453A' },
-    { value: 'half_day', label: 'Half Day', color: '#C9A24B' },
-    { value: 'leave',    label: 'Leave',    color: '#6B5BAE' },
-  ];
-  // Filter to project team if project selected
-  const proj = projects.find(p => p.id === form.projectId);
-  const relevantEmps = proj?.teamIds?.length
-    ? employees.filter(e => proj.teamIds.includes(e.id))
-    : employees;
+  function setRecord(i, k, v) { const recs = [...form.records]; recs[i] = { ...recs[i], [k]: v }; set('records', recs); }
+  const STATUSES = [{ value:'present',label:'P',color:'#1A7A3E' },{ value:'absent',label:'A',color:'#B5453A' },{ value:'half_day',label:'½',color:'#C9A24B' },{ value:'leave',label:'L',color:'#6B5BAE' }];
+  const proj = siteProjects.find(p => p.id === form.projectId);
+  const relevantEmps = proj?.teamIds?.length ? employees.filter(e => proj.teamIds.includes(e.id)) : employees;
   const displayRecords = form.records.filter(r => relevantEmps.some(e => e.id === r.employeeId));
   return (
-    <Modal title="Mark Attendance" onClose={onClose} width={580}>
-      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12, marginBottom: 16 }}>
-        <div style={styles.formGroup}>
-          <label style={styles.label}>Date *</label>
-          <input type="date" value={form.date} onChange={e => set('date', e.target.value)} style={styles.input} />
-        </div>
+    <Modal title="Mark Attendance" onClose={onClose} width={560}>
+      <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:12, marginBottom:16 }}>
+        <div style={styles.formGroup}><label style={styles.label}>Date *</label><input type="date" value={form.date} onChange={e=>set('date',e.target.value)} style={styles.input} /></div>
         <div style={styles.formGroup}>
           <label style={styles.label}>Project</label>
-          <select value={form.projectId} onChange={e => set('projectId', e.target.value)} style={styles.input}>
+          <select value={form.projectId} onChange={e=>set('projectId',e.target.value)} style={styles.input}>
             <option value="">— All / General —</option>
-            {projects.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
+            {siteProjects.map(p=><option key={p.id} value={p.id}>{p.name}</option>)}
           </select>
         </div>
       </div>
-      <div style={{ marginBottom: 8, fontWeight: 600, fontSize: 13, color: '#1E2A4A' }}>
-        Employees ({relevantEmps.length})
-      </div>
-      <div style={{ display: 'flex', flexDirection: 'column', gap: 8, maxHeight: 340, overflowY: 'auto' }}>
-        {displayRecords.map((rec, i) => {
+      <div style={{ fontWeight:600, fontSize:13, color:'#1E2A4A', marginBottom:8 }}>Employees ({relevantEmps.length})</div>
+      <div style={{ display:'flex', flexDirection:'column', gap:8, maxHeight:340, overflowY:'auto' }}>
+        {displayRecords.map((rec) => {
           const emp = employees.find(e => e.id === rec.employeeId);
           const allIdx = form.records.findIndex(r => r.employeeId === rec.employeeId);
           return (
-            <div key={rec.employeeId} style={{ display: 'grid', gridTemplateColumns: '2fr 2fr 3fr', gap: 10, alignItems: 'center', padding: '8px 12px', background: '#FAF8F4', borderRadius: 8 }}>
-              <span style={{ fontSize: 13, fontWeight: 500 }}>{emp?.name || '?'}</span>
-              <div style={{ display: 'flex', gap: 4 }}>
-                {STATUSES.map(s => (
-                  <button key={s.value} onClick={() => setRecord(allIdx, 'status', s.value)}
-                    style={{ fontSize: 11, padding: '3px 7px', borderRadius: 6, border: 'none', cursor: 'pointer',
-                      background: rec.status === s.value ? s.color : '#EAE6DB',
-                      color: rec.status === s.value ? '#fff' : '#666', fontWeight: rec.status === s.value ? 700 : 400 }}>
+            <div key={rec.employeeId} style={{ display:'grid', gridTemplateColumns:'2fr 1fr 3fr', gap:10, alignItems:'center', padding:'8px 12px', background:'#FAF8F4', borderRadius:8 }}>
+              <span style={{ fontSize:13, fontWeight:500 }}>{emp?.name||'?'}</span>
+              <div style={{ display:'flex', gap:4 }}>
+                {STATUSES.map(s=>(
+                  <button key={s.value} onClick={()=>setRecord(allIdx,'status',s.value)}
+                    style={{ fontSize:12, padding:'3px 8px', borderRadius:6, border:'none', cursor:'pointer', background:rec.status===s.value?s.color:'#EAE6DB', color:rec.status===s.value?'#fff':'#666', fontWeight:700 }}>
                     {s.label}
                   </button>
                 ))}
               </div>
-              <input value={rec.note || ''} onChange={e => setRecord(allIdx, 'note', e.target.value)}
-                style={{ ...styles.input, fontSize: 12, padding: '4px 8px' }} placeholder="Note (optional)" />
+              <input value={rec.note||''} onChange={e=>setRecord(allIdx,'note',e.target.value)} style={{ ...styles.input, fontSize:12, padding:'4px 8px' }} placeholder="Note (optional)" />
             </div>
           );
         })}
-        {displayRecords.length === 0 && <div style={{ color: '#aaa', fontSize: 13 }}>No employees to show. Add team in the project settings.</div>}
+        {displayRecords.length===0 && <div style={{ color:'#aaa', fontSize:13 }}>No employees. Add team in project settings.</div>}
       </div>
-      <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 10, marginTop: 16 }}>
+      <div style={{ display:'flex', justifyContent:'flex-end', gap:10, marginTop:16 }}>
         <button style={styles.ghostBtn} onClick={onClose}>Cancel</button>
-        <button style={styles.primaryBtn} onClick={() => {
-          if (!form.date) return alert('Date required');
-          onSave(form);
-        }}>Save Attendance</button>
+        <button style={styles.primaryBtn} onClick={()=>{ if(!form.date) return alert('Date required'); onSave(form); }}>Save Attendance</button>
       </div>
     </Modal>
   );
 }
 
 // ── Quarterly Evaluation ────────────────────────────────────────────────────────
-function QuarterlyEvalView({ evaluations, setEvaluations, employees, siteAttendance, dsrReports, projects, userRole }) {
+function QuarterlyEvalView({ evaluations, setEvaluations, employees, siteAttendance, progressUpdates, siteProjects, userRole }) {
   const [editing, setEditing] = useState(null);
   const [filterEmp, setFilterEmp] = useState('');
   const canEdit = userRole === 'admin' || userRole === 'manager';
@@ -9368,99 +9849,80 @@ function QuarterlyEvalView({ evaluations, setEvaluations, employees, siteAttenda
     .filter(e => !filterEmp || e.employeeId === filterEmp)
     .sort((a, b) => `${b.year}${b.quarter}`.localeCompare(`${a.year}${a.quarter}`));
 
-  // Auto-compute stats for an employee in a given period
   function computeStats(employeeId, quarter, year) {
-    const qMonths = { Q1: ['01','02','03'], Q2: ['04','05','06'], Q3: ['07','08','09'], Q4: ['10','11','12'] }[quarter];
+    const qMonths = { Q1:['01','02','03'], Q2:['04','05','06'], Q3:['07','08','09'], Q4:['10','11','12'] }[quarter];
     const prefix = qMonths.map(m => `${year}-${m}`);
-    const attRecs = siteAttendance
-      .filter(r => prefix.some(p => (r.date || '').startsWith(p)))
-      .flatMap(r => (r.records || []).filter(x => x.employeeId === employeeId));
+    const attRecs = siteAttendance.filter(r=>prefix.some(p=>(r.date||'').startsWith(p))).flatMap(r=>(r.records||[]).filter(x=>x.employeeId===employeeId));
     const total = attRecs.length;
-    const present = attRecs.filter(x => x.status === 'present').length;
-    const halfDay = attRecs.filter(x => x.status === 'half_day').length;
-    const attPct = total ? Math.round(((present + halfDay * 0.5) / total) * 100) : 0;
-    const dsrCount = dsrReports
-      .filter(r => prefix.some(p => (r.date || '').startsWith(p)))
-      .filter(r => (r.activities || []).some(a => a.employeeId === employeeId))
-      .length;
+    const present = attRecs.filter(x=>x.status==='present').length;
+    const halfDay = attRecs.filter(x=>x.status==='half_day').length;
+    const attPct = total ? Math.round(((present+halfDay*0.5)/total)*100) : 0;
+    const dsrCount = progressUpdates.filter(u=>prefix.some(p=>(u.date||'').startsWith(p))).filter(u=>(u.workers||[]).some(w=>w.employeeId===employeeId)).length;
     return { attPct, dsrCount, totalDays: total };
   }
-
   function save(form) {
     const rec = { ...form, id: form.id || crypto.randomUUID() };
     setEvaluations(prev => form.id ? prev.map(e => e.id === form.id ? rec : e) : [...prev, rec]);
     setEditing(null);
   }
   function del(id) { if (confirm('Delete evaluation?')) setEvaluations(prev => prev.filter(e => e.id !== id)); }
-
-  const RATING_COLOR = { 5: '#1A7A3E', 4: '#3D7A5C', 3: '#C9A24B', 2: '#E07A2B', 1: '#B5453A' };
+  const RATING_COLOR = { 5:'#1A7A3E', 4:'#3D7A5C', 3:'#C9A24B', 2:'#E07A2B', 1:'#B5453A' };
   const currentYear = new Date().getFullYear();
-  const currentQ = `Q${Math.ceil((new Date().getMonth() + 1) / 3)}`;
-
+  const currentQ = `Q${Math.ceil((new Date().getMonth()+1)/3)}`;
   return (
     <div style={styles.page}>
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 18 }}>
-        <div>
-          <h2 className="serif" style={styles.h2}>Quarterly Evaluation</h2>
-          <p style={styles.muted}>{evaluations.length} evaluation{evaluations.length !== 1 ? 's' : ''}</p>
-        </div>
-        {canEdit && <button style={styles.primaryBtn} onClick={() => setEditing({ _isNew: true, quarter: currentQ, year: String(currentYear), ratings: { punctuality: 3, quality: 3, teamwork: 3, safety: 3, initiative: 3 } })}>+ New Evaluation</button>}
+      <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', marginBottom:18 }}>
+        <div><h2 className="serif" style={styles.h2}>Quarterly Evaluation</h2><p style={styles.muted}>{evaluations.length} evaluation{evaluations.length!==1?'s':''}</p></div>
+        {canEdit && <button style={styles.primaryBtn} onClick={()=>setEditing({ _isNew:true, quarter:currentQ, year:String(currentYear), ratings:{ punctuality:3, quality:3, teamwork:3, safety:3, initiative:3 } })}>+ New Evaluation</button>}
       </div>
-      <select value={filterEmp} onChange={e => setFilterEmp(e.target.value)} style={{ ...styles.input, width: 240, marginBottom: 16 }}>
+      <select value={filterEmp} onChange={e=>setFilterEmp(e.target.value)} style={{ ...styles.input, width:240, marginBottom:16 }}>
         <option value="">All Employees</option>
-        {employees.map(e => <option key={e.id} value={e.id}>{e.name}</option>)}
+        {employees.map(e=><option key={e.id} value={e.id}>{e.name}</option>)}
       </select>
-
-      <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
-        {sorted.map(ev => {
-          const emp = employees.find(e => e.id === ev.employeeId);
-          const ratings = ev.ratings || {};
-          const ratingVals = Object.values(ratings).filter(v => typeof v === 'number');
-          const avgRating = ratingVals.length ? (ratingVals.reduce((a, b) => a + b, 0) / ratingVals.length).toFixed(1) : '—';
-          const overall = parseFloat(avgRating);
+      <div style={{ display:'flex', flexDirection:'column', gap:12 }}>
+        {sorted.map(ev=>{
+          const emp = employees.find(e=>e.id===ev.employeeId);
+          const ratings = ev.ratings||{};
+          const vals = Object.values(ratings).filter(v=>typeof v==='number');
+          const avg = vals.length?(vals.reduce((a,b)=>a+b,0)/vals.length).toFixed(1):'—';
           return (
-            <div key={ev.id} style={{ background: '#fff', border: '1px solid #EAE6DB', borderRadius: 12, padding: '16px 18px' }}>
-              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 10 }}>
+            <div key={ev.id} style={{ background:'#fff', border:'1px solid #EAE6DB', borderRadius:12, padding:'16px 18px' }}>
+              <div style={{ display:'flex', justifyContent:'space-between', alignItems:'flex-start', marginBottom:10 }}>
                 <div>
-                  <div style={{ fontWeight: 600, fontSize: 15, color: '#1E2A4A' }}>{emp?.name || '?'}</div>
-                  <div style={{ fontSize: 12.5, color: '#888', marginTop: 2 }}>{ev.quarter} {ev.year}</div>
+                  <div style={{ fontWeight:600, fontSize:15, color:'#1E2A4A' }}>{emp?.name||'?'}</div>
+                  <div style={{ fontSize:12.5, color:'#888', marginTop:2 }}>{ev.quarter} {ev.year}</div>
                 </div>
-                <div style={{ display: 'flex', gap: 10, alignItems: 'center' }}>
-                  <div style={{ textAlign: 'center' }}>
-                    <div style={{ fontSize: 22, fontWeight: 700, color: RATING_COLOR[Math.round(overall)] || '#888' }}>{avgRating}</div>
-                    <div style={{ fontSize: 10, color: '#aaa' }}>avg / 5</div>
+                <div style={{ display:'flex', gap:10, alignItems:'center' }}>
+                  <div style={{ textAlign:'center' }}>
+                    <div style={{ fontSize:22, fontWeight:700, color:RATING_COLOR[Math.round(parseFloat(avg))]||'#888' }}>{avg}</div>
+                    <div style={{ fontSize:10, color:'#aaa' }}>avg / 5</div>
                   </div>
                   {canEdit && <>
-                    <button style={{ ...styles.ghostBtn, fontSize: 12 }} onClick={() => setEditing(ev)}>Edit</button>
-                    <button style={{ ...styles.ghostBtn, fontSize: 12, color: '#B5453A' }} onClick={() => del(ev.id)}>×</button>
+                    <button style={{ ...styles.ghostBtn, fontSize:12 }} onClick={()=>setEditing(ev)}>Edit</button>
+                    <button style={{ ...styles.ghostBtn, fontSize:12, color:'#B5453A' }} onClick={()=>del(ev.id)}>×</button>
                   </>}
                 </div>
               </div>
-              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(5, 1fr)', gap: 8, marginBottom: 10 }}>
-                {[['punctuality','Punctuality'],['quality','Quality'],['teamwork','Teamwork'],['safety','Safety'],['initiative','Initiative']].map(([k, label]) => (
-                  <div key={k} style={{ textAlign: 'center', background: '#FAF8F4', borderRadius: 8, padding: '8px 4px' }}>
-                    <div style={{ fontSize: 18, fontWeight: 700, color: RATING_COLOR[ratings[k]] || '#aaa' }}>{ratings[k] || '—'}</div>
-                    <div style={{ fontSize: 10, color: '#888', marginTop: 2 }}>{label}</div>
+              <div style={{ display:'grid', gridTemplateColumns:'repeat(5,1fr)', gap:8, marginBottom:10 }}>
+                {[['punctuality','Punctuality'],['quality','Quality'],['teamwork','Teamwork'],['safety','Safety'],['initiative','Initiative']].map(([k,l])=>(
+                  <div key={k} style={{ textAlign:'center', background:'#FAF8F4', borderRadius:8, padding:'8px 4px' }}>
+                    <div style={{ fontSize:18, fontWeight:700, color:RATING_COLOR[ratings[k]]||'#aaa' }}>{ratings[k]||'—'}</div>
+                    <div style={{ fontSize:10, color:'#888', marginTop:2 }}>{l}</div>
                   </div>
                 ))}
               </div>
-              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 8, fontSize: 12, color: '#555' }}>
-                <div>📅 Attendance: <strong style={{ color: ev.attPct >= 80 ? '#1A7A3E' : '#C9A24B' }}>{ev.attPct ?? '—'}%</strong></div>
-                <div>📋 DSR days: <strong>{ev.dsrCount ?? '—'}</strong></div>
-                <div>📝 Status: <strong>{ev.status || 'draft'}</strong></div>
+              <div style={{ display:'grid', gridTemplateColumns:'repeat(3,1fr)', gap:8, fontSize:12, color:'#555' }}>
+                <div>📅 Attendance: <strong style={{ color:ev.attPct>=80?'#1A7A3E':'#C9A24B' }}>{ev.attPct??'—'}%</strong></div>
+                <div>📋 Active days: <strong>{ev.dsrCount??'—'}</strong></div>
+                <div>📝 Status: <strong>{ev.status||'draft'}</strong></div>
               </div>
-              {ev.comments && <div style={{ fontSize: 12, color: '#666', marginTop: 8, fontStyle: 'italic', borderTop: '1px solid #F0EDE6', paddingTop: 8 }}>{ev.comments}</div>}
+              {ev.comments && <div style={{ fontSize:12, color:'#666', marginTop:8, fontStyle:'italic', borderTop:'1px solid #F0EDE6', paddingTop:8 }}>{ev.comments}</div>}
             </div>
           );
         })}
-        {sorted.length === 0 && <div style={{ color: '#aaa', padding: 24 }}>No evaluations recorded.</div>}
+        {sorted.length===0 && <div style={{ color:'#aaa', padding:24 }}>No evaluations recorded.</div>}
       </div>
-      {editing && (
-        <QuarterlyEvalForm
-          evaluation={editing} employees={employees} computeStats={computeStats}
-          onSave={save} onClose={() => setEditing(null)}
-        />
-      )}
+      {editing && <QuarterlyEvalForm evaluation={editing} employees={employees} computeStats={computeStats} onSave={save} onClose={()=>setEditing(null)} />}
     </div>
   );
 }
@@ -9468,116 +9930,70 @@ function QuarterlyEvalView({ evaluations, setEvaluations, employees, siteAttenda
 function QuarterlyEvalForm({ evaluation, employees, computeStats, onSave, onClose }) {
   const currentYear = new Date().getFullYear();
   const [form, setForm] = useState({
-    employeeId: '', quarter: 'Q1', year: String(currentYear), status: 'draft',
-    ratings: { punctuality: 3, quality: 3, teamwork: 3, safety: 3, initiative: 3 },
-    attPct: null, dsrCount: null, comments: '',
+    employeeId:'', quarter:'Q1', year:String(currentYear), status:'draft',
+    ratings:{ punctuality:3, quality:3, teamwork:3, safety:3, initiative:3 },
+    attPct:null, dsrCount:null, comments:'',
     ...evaluation,
   });
-  function set(k, v) { setForm(f => ({ ...f, [k]: v })); }
-  function setRating(k, v) { setForm(f => ({ ...f, ratings: { ...f.ratings, [k]: v } })); }
-  // Auto-compute when employee/quarter/year changes
-  useEffect(() => {
+  function set(k,v) { setForm(f=>({...f,[k]:v})); }
+  function setRating(k,v) { setForm(f=>({...f,ratings:{...f.ratings,[k]:v}})); }
+  useEffect(()=>{
     if (form.employeeId && form.quarter && form.year) {
       const stats = computeStats(form.employeeId, form.quarter, form.year);
-      setForm(f => ({ ...f, attPct: stats.attPct, dsrCount: stats.dsrCount, totalDays: stats.totalDays }));
+      setForm(f=>({...f, attPct:stats.attPct, dsrCount:stats.dsrCount, totalDays:stats.totalDays}));
     }
   }, [form.employeeId, form.quarter, form.year]);
-  const RATING_LABELS = { 1: 'Poor', 2: 'Below avg', 3: 'Average', 4: 'Good', 5: 'Excellent' };
-  const CRITERIA = [
-    ['punctuality', 'Punctuality & Attendance'],
-    ['quality', 'Quality of Work'],
-    ['teamwork', 'Teamwork & Cooperation'],
-    ['safety', 'Safety Compliance'],
-    ['initiative', 'Initiative & Attitude'],
-  ];
-  const avgRating = (Object.values(form.ratings).reduce((a, b) => a + b, 0) / Object.values(form.ratings).length).toFixed(1);
+  const RATING_LABELS = { 1:'Poor', 2:'Below avg', 3:'Average', 4:'Good', 5:'Excellent' };
+  const CRITERIA = [['punctuality','Punctuality & Attendance'],['quality','Quality of Work'],['teamwork','Teamwork & Cooperation'],['safety','Safety Compliance'],['initiative','Initiative & Attitude']];
+  const avgRating = (Object.values(form.ratings).reduce((a,b)=>a+b,0)/Object.values(form.ratings).length).toFixed(1);
   return (
-    <Modal title={form._isNew ? 'New Quarterly Evaluation' : 'Edit Evaluation'} onClose={onClose} width={580}>
-      <div style={{ display: 'grid', gridTemplateColumns: '2fr 1fr 1fr', gap: 12, marginBottom: 16 }}>
+    <Modal title={form._isNew?'New Quarterly Evaluation':'Edit Evaluation'} onClose={onClose} width={560}>
+      <div style={{ display:'grid', gridTemplateColumns:'2fr 1fr 1fr', gap:12, marginBottom:16 }}>
         <div style={styles.formGroup}>
           <label style={styles.label}>Employee *</label>
-          <select value={form.employeeId} onChange={e => set('employeeId', e.target.value)} style={styles.input}>
+          <select value={form.employeeId} onChange={e=>set('employeeId',e.target.value)} style={styles.input}>
             <option value="">— Select —</option>
-            {employees.map(e => <option key={e.id} value={e.id}>{e.name}</option>)}
+            {employees.map(e=><option key={e.id} value={e.id}>{e.name}</option>)}
           </select>
         </div>
-        <div style={styles.formGroup}>
-          <label style={styles.label}>Quarter</label>
-          <select value={form.quarter} onChange={e => set('quarter', e.target.value)} style={styles.input}>
-            {['Q1','Q2','Q3','Q4'].map(q => <option key={q} value={q}>{q}</option>)}
-          </select>
-        </div>
-        <div style={styles.formGroup}>
-          <label style={styles.label}>Year</label>
-          <select value={form.year} onChange={e => set('year', e.target.value)} style={styles.input}>
-            {[currentYear, currentYear-1, currentYear-2].map(y => <option key={y} value={y}>{y}</option>)}
-          </select>
-        </div>
+        <div style={styles.formGroup}><label style={styles.label}>Quarter</label><select value={form.quarter} onChange={e=>set('quarter',e.target.value)} style={styles.input}>{['Q1','Q2','Q3','Q4'].map(q=><option key={q} value={q}>{q}</option>)}</select></div>
+        <div style={styles.formGroup}><label style={styles.label}>Year</label><select value={form.year} onChange={e=>set('year',e.target.value)} style={styles.input}>{[currentYear,currentYear-1,currentYear-2].map(y=><option key={y} value={y}>{y}</option>)}</select></div>
       </div>
-
-      {/* Auto-computed stats */}
       {form.employeeId && (
-        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 10, marginBottom: 16 }}>
-          {[['Attendance %', form.attPct !== null ? `${form.attPct}%` : '—', form.attPct >= 80 ? '#1A7A3E' : '#C9A24B'],
-            ['DSR Days', form.dsrCount ?? '—', '#1E2A4A'],
-            ['Working Days', form.totalDays ?? '—', '#555']].map(([label, val, color]) => (
-            <div key={label} style={{ background: '#FAF8F4', borderRadius: 8, padding: '10px 14px', textAlign: 'center' }}>
-              <div style={{ fontSize: 20, fontWeight: 700, color }}>{val}</div>
-              <div style={{ fontSize: 11, color: '#888', marginTop: 2 }}>{label}</div>
+        <div style={{ display:'grid', gridTemplateColumns:'repeat(3,1fr)', gap:10, marginBottom:16 }}>
+          {[['Attendance %',form.attPct!==null?`${form.attPct}%`:'—',form.attPct>=80?'#1A7A3E':'#C9A24B'],['Active Days',form.dsrCount??'—','#1E2A4A'],['Working Days',form.totalDays??'—','#555']].map(([l,v,c])=>(
+            <div key={l} style={{ background:'#FAF8F4', borderRadius:8, padding:'10px 14px', textAlign:'center' }}>
+              <div style={{ fontSize:20, fontWeight:700, color:c }}>{v}</div>
+              <div style={{ fontSize:11, color:'#888', marginTop:2 }}>{l}</div>
             </div>
           ))}
         </div>
       )}
-
-      {/* Ratings */}
-      <div style={{ marginBottom: 16 }}>
-        <div style={{ fontWeight: 600, fontSize: 13, color: '#1E2A4A', marginBottom: 10 }}>
-          Performance Ratings &nbsp;
-          <span style={{ fontSize: 11, color: '#888', fontWeight: 400 }}>(1 = Poor → 5 = Excellent)</span>
-        </div>
-        {CRITERIA.map(([k, label]) => (
-          <div key={k} style={{ display: 'grid', gridTemplateColumns: '2fr 1fr auto', gap: 12, alignItems: 'center', marginBottom: 10 }}>
-            <label style={{ fontSize: 13, color: '#444' }}>{label}</label>
-            <input type="range" min={1} max={5} value={form.ratings[k] || 3}
-              onChange={e => setRating(k, +e.target.value)}
-              style={{ accentColor: '#1E2A4A' }} />
-            <span style={{ fontSize: 13, fontWeight: 700, color: '#1E2A4A', width: 80, textAlign: 'right' }}>
-              {form.ratings[k]}/5 — {RATING_LABELS[form.ratings[k]]}
-            </span>
+      <div style={{ marginBottom:16 }}>
+        <div style={{ fontWeight:600, fontSize:13, color:'#1E2A4A', marginBottom:10 }}>Performance Ratings <span style={{ fontSize:11, color:'#888', fontWeight:400 }}>(1=Poor → 5=Excellent)</span></div>
+        {CRITERIA.map(([k,label])=>(
+          <div key={k} style={{ display:'grid', gridTemplateColumns:'2fr 1fr auto', gap:12, alignItems:'center', marginBottom:10 }}>
+            <label style={{ fontSize:13, color:'#444' }}>{label}</label>
+            <input type="range" min={1} max={5} value={form.ratings[k]||3} onChange={e=>setRating(k,+e.target.value)} style={{ accentColor:'#1E2A4A' }} />
+            <span style={{ fontSize:13, fontWeight:700, color:'#1E2A4A', width:100, textAlign:'right' }}>{form.ratings[k]}/5 — {RATING_LABELS[form.ratings[k]]}</span>
           </div>
         ))}
-        <div style={{ textAlign: 'right', fontSize: 13, color: '#1E2A4A', fontWeight: 600, marginTop: 4 }}>
-          Overall average: {avgRating} / 5
-        </div>
+        <div style={{ textAlign:'right', fontSize:13, color:'#1E2A4A', fontWeight:600 }}>Overall: {avgRating} / 5</div>
       </div>
-
-      <div style={styles.formGroup}>
-        <label style={styles.label}>Comments / Recommendations</label>
-        <textarea value={form.comments || ''} onChange={e => set('comments', e.target.value)}
-          style={{ ...styles.input, height: 64 }} placeholder="Strengths, areas for improvement, promotion/training recommendations…" />
+      <div style={styles.formGroup}><label style={styles.label}>Comments / Recommendations</label><textarea value={form.comments||''} onChange={e=>set('comments',e.target.value)} style={{ ...styles.input, height:64 }} /></div>
+      <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:12, marginBottom:16 }}>
+        <div style={styles.formGroup}><label style={styles.label}>Evaluator</label><input value={form.evaluator||''} onChange={e=>set('evaluator',e.target.value)} style={styles.input} /></div>
+        <div style={styles.formGroup}><label style={styles.label}>Status</label><select value={form.status} onChange={e=>set('status',e.target.value)} style={styles.input}>{['draft','submitted','acknowledged'].map(s=><option key={s} value={s}>{s}</option>)}</select></div>
       </div>
-      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12, marginBottom: 16 }}>
-        <div style={styles.formGroup}>
-          <label style={styles.label}>Evaluator</label>
-          <input value={form.evaluator || ''} onChange={e => set('evaluator', e.target.value)} style={styles.input} placeholder="Manager / Admin name" />
-        </div>
-        <div style={styles.formGroup}>
-          <label style={styles.label}>Status</label>
-          <select value={form.status} onChange={e => set('status', e.target.value)} style={styles.input}>
-            {['draft','submitted','acknowledged'].map(s => <option key={s} value={s}>{s}</option>)}
-          </select>
-        </div>
-      </div>
-      <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 10 }}>
+      <div style={{ display:'flex', justifyContent:'flex-end', gap:10 }}>
         <button style={styles.ghostBtn} onClick={onClose}>Cancel</button>
-        <button style={styles.primaryBtn} onClick={() => {
-          if (!form.employeeId) return alert('Select an employee');
-          onSave(form);
-        }}>Save Evaluation</button>
+        <button style={styles.primaryBtn} onClick={()=>{ if(!form.employeeId) return alert('Select an employee'); onSave(form); }}>Save Evaluation</button>
       </div>
     </Modal>
   );
 }
+
+
 
 // ─── Root App ─────────────────────────────────────────────────────────────────
 export default function App() {
@@ -9619,7 +10035,8 @@ export default function App() {
   const [qualityDocs,      _setQD]     = useState({ isoPrinciples: [], deptProcedures: [], inprocessQA: [] });
   const [pdvs,             _setPdvs]   = useState([]);
   const [siteProjects,     _setSP]     = useState([]);
-  const [dsrReports,       _setDSR]    = useState([]);
+  const [siteActivities,   _setSActs]  = useState([]);
+  const [progressUpdates,  _setDSR]    = useState([]);
   const [clientMaterials,  _setCM]     = useState([]);
   const [siteAttendance,   _setSA]     = useState([]);
   const [evaluations,      _setEvls]   = useState([]);
@@ -9682,7 +10099,8 @@ export default function App() {
       _setQD(data.qualityDocs || { isoPrinciples: [], deptProcedures: [], inprocessQA: [] });
       _setPdvs(data.pdvs || []);
       _setSP(data.siteProjects || []);
-      _setDSR(data.dsrReports || []);
+      _setSActs(data.siteActivities || []);
+      _setDSR(data.progressUpdates || []);
       _setCM(data.clientMaterials || []);
       _setSA(data.siteAttendance || []);
       _setEvls(data.evaluations || []);
@@ -9740,7 +10158,8 @@ export default function App() {
   const setQualityDocs      = mkSet(_setQD,    'qualityDocs');
   const setPdvs             = mkSet(_setPdvs,  'pdvs');
   const setSiteProjects     = mkSet(_setSP,    'siteProjects');
-  const setDsrReports       = mkSet(_setDSR,   'dsrReports');
+  const setSiteActivities   = mkSet(_setSActs, 'siteActivities');
+  const setProgressUpdates  = mkSet(_setDSR,   'progressUpdates');
   const setClientMaterials  = mkSet(_setCM,    'clientMaterials');
   const setSiteAttendance   = mkSet(_setSA,    'siteAttendance');
   const setEvaluations      = mkSet(_setEvls,  'evaluations');
@@ -10176,15 +10595,19 @@ export default function App() {
       case 'scopeofwork':
         return <ScopeOfWorkView scopeOfWork={scopeOfWork} setScopeOfWork={setScopeOfWork} userRole={userRole} />;
       case 'siteprojects':
-        return <SiteProjectsView projects={siteProjects} setProjects={setSiteProjects} employees={employees} userRole={userRole} />;
-      case 'dsrreports':
-        return <DSRView dsrReports={dsrReports} setDsrReports={setDsrReports} projects={siteProjects} employees={employees} clientMaterials={clientMaterials} userRole={userRole} />;
+        return <MEPProjectsView siteProjects={siteProjects} setSiteProjects={setSiteProjects} employees={employees} siteActivities={siteActivities} progressUpdates={progressUpdates} userRole={userRole} />;
+      case 'activityplanner':
+        return <ActivityPlannerView siteActivities={siteActivities} setSiteActivities={setSiteActivities} siteProjects={siteProjects} progressUpdates={progressUpdates} userRole={userRole} />;
+      case 'dailyupdates':
+        return <DailyUpdateView progressUpdates={progressUpdates} setProgressUpdates={setProgressUpdates} siteActivities={siteActivities} siteProjects={siteProjects} employees={employees} userRole={userRole} />;
+      case 'progressboard':
+        return <ProgressBoardView siteProjects={siteProjects} siteActivities={siteActivities} progressUpdates={progressUpdates} />;
       case 'clientmaterials':
-        return <ClientMaterialView clientMaterials={clientMaterials} setClientMaterials={setClientMaterials} projects={siteProjects} employees={employees} userRole={userRole} />;
+        return <ClientMaterialView clientMaterials={clientMaterials} setClientMaterials={setClientMaterials} siteProjects={siteProjects} employees={employees} userRole={userRole} />;
       case 'siteattendance':
-        return <SiteAttendanceView siteAttendance={siteAttendance} setSiteAttendance={setSiteAttendance} projects={siteProjects} employees={employees} userRole={userRole} />;
+        return <SiteAttendanceView siteAttendance={siteAttendance} setSiteAttendance={setSiteAttendance} siteProjects={siteProjects} employees={employees} userRole={userRole} />;
       case 'evaluation':
-        return <QuarterlyEvalView evaluations={evaluations} setEvaluations={setEvaluations} employees={employees} siteAttendance={siteAttendance} dsrReports={dsrReports} projects={siteProjects} userRole={userRole} />;
+        return <QuarterlyEvalView evaluations={evaluations} setEvaluations={setEvaluations} employees={employees} siteAttendance={siteAttendance} progressUpdates={progressUpdates} siteProjects={siteProjects} userRole={userRole} />;
       case 'isoprinciples':
         return <ISOPrinciplesView qualityDocs={qualityDocs} setQualityDocs={setQualityDocs} userRole={userRole} />;
       case 'deptprocedures':
