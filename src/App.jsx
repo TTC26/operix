@@ -673,6 +673,7 @@ function VendorModal({ vendor, onSave, onClose, businessInfo = {} }) {
 
 function ItemsList({ items, setEditing, setItems, businessInfo }) {
   const fmt = makeFmt(businessInfo);
+  const cc = COUNTRY_CONFIG[businessInfo?.country || 'india'] || COUNTRY_CONFIG.india;
   return (
     <div style={styles.page}>
       <div style={styles.pageHeader}>
@@ -686,7 +687,7 @@ function ItemsList({ items, setEditing, setItems, businessInfo }) {
           <div key={it.id} style={styles.recordRow}>
             <div style={{ flex: 1 }}>
               <div style={styles.docRowTitle}>{it.name}</div>
-              <div style={styles.docRowSub}>HSN {it.hsn || '—'} · Tax {it.gst}%</div>
+              <div style={styles.docRowSub}>{cc.splitTax && <>HSN {it.hsn || '—'} · </>}Tax {it.gst}%</div>
             </div>
             <div style={{ textAlign: 'right', marginRight: 8 }}>
               <div style={{ fontSize: 11, color: '#888780' }}>Buy: <span style={{ color: '#B5453A', fontWeight: 600 }}>{fmt(it.purchaseRate ?? it.rate ?? 0)}</span></div>
@@ -702,6 +703,7 @@ function ItemsList({ items, setEditing, setItems, businessInfo }) {
 }
 
 function ItemModal({ item, onSave, onClose, businessInfo = {} }) {
+  const cc = COUNTRY_CONFIG[businessInfo?.country || 'india'] || COUNTRY_CONFIG.india;
   const [form, setForm] = useState({ openingStock: 0, minStock: 0, unit: '', ...item });
   const set = (k, v) => setForm(p => ({ ...p, [k]: v }));
   const cc = COUNTRY_CONFIG[businessInfo.country || 'india'] || COUNTRY_CONFIG.other;
@@ -712,10 +714,10 @@ function ItemModal({ item, onSave, onClose, businessInfo = {} }) {
         <input value={form.name} onChange={e => set('name', e.target.value)} style={styles.input} />
       </div>
       <div style={{ display: 'flex', gap: 12 }}>
-        <div style={{ ...styles.formGroup, flex: 1 }}>
+        {cc.splitTax && <div style={{ ...styles.formGroup, flex: 1 }}>
           <label style={styles.label}>HSN/SAC code</label>
           <input value={form.hsn} onChange={e => set('hsn', e.target.value)} style={styles.input} />
-        </div>
+        </div>}
         <div style={{ ...styles.formGroup, flex: 1 }}>
           <label style={styles.label}>Unit (pcs/kg/m…)</label>
           <input value={form.unit || ''} onChange={e => set('unit', e.target.value)} style={styles.input} placeholder="pcs" />
@@ -3071,7 +3073,7 @@ function DocEditor({ doc, setDoc, customers, vendors, items, businessInfo, userR
             <thead>
               <tr>
                 <th style={styles.th}>Item</th>
-                {doc.type !== 'packing_list' && <th style={styles.th}>HSN</th>}
+                {doc.type !== 'packing_list' && cc.splitTax && <th style={styles.th}>HSN</th>}
                 <th style={{ ...styles.th, textAlign: 'right' }}>Qty</th>
                 {doc.type === 'packing_list' ? (<>
                   <th style={{ ...styles.th, textAlign: 'right' }}>Pkgs</th>
@@ -3098,7 +3100,7 @@ function DocEditor({ doc, setDoc, customers, vendors, items, businessInfo, userR
                       </select>}
                       <input value={it.name} onChange={(e) => updateItem(it.id, 'name', e.target.value)} style={{ ...styles.inlineInput, ...(isEditable ? styles.inlineInputEditable : {}) }} placeholder="Item description" readOnly={!isEditable} />
                     </td>
-                    {doc.type !== 'packing_list' && (
+                    {doc.type !== 'packing_list' && cc.splitTax && (
                       <td style={styles.td}>
                         <div style={{ display: 'flex', alignItems: 'center', gap: 2 }}>
                           <input value={it.hsn} onChange={(e) => updateItem(it.id, 'hsn', e.target.value)} style={{ ...styles.inlineInput, width: 60, ...(isEditable ? styles.inlineInputEditable : {}) }} readOnly={!isEditable} />
