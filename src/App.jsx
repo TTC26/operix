@@ -1941,7 +1941,6 @@ function Sidebar({ view, setView, setActiveDoc, startNewDoc, syncStatus, user, o
         {!showService && <NavBtn id="channelpartners" label="Channel Partners" icon={Briefcase} />}
         {showProduction && <NavBtn id="serviceorders" label="SAS" icon={Briefcase} />}
         <CreateBtn docKey="quotation" />
-        {showService && <CreateBtn docKey="invoice" bizType="service" />}
       </Section>
 
       {/* Accounts */}
@@ -2332,7 +2331,7 @@ function DocEditor({ doc, setDoc, customers, vendors, items, businessInfo, userR
     setDoc((d) => ({ ...d, customerId: id, customerSnapshot: c || null, placeOfSupply: c ? c.state : d.placeOfSupply }));
   }
 
-  const sameDocs = documents.filter(d => d.type === doc.type && d.id !== doc.id)
+  const sameDocs = documents.filter(d => d.type === doc.type && d.id !== doc.id && (d.bizType || 'trading') === (doc.bizType || 'trading'))
     .sort((a, b) => (b.number || '').localeCompare(a.number || ''));
 
   return (
