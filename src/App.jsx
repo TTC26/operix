@@ -1965,7 +1965,7 @@ function Sidebar({ view, setView, setActiveDoc, startNewDoc, syncStatus, user, o
       {/* Stores — hidden for service companies */}
       {showTrade && (
         <Section sectionKey="stores" label="Stores">
-          <NavBtn id="items"       label="Item Master"    icon={Package} />
+          {!showService && <NavBtn id="items" label="Item Master" icon={Package} />}
           <CreateBtn docKey="delivery" />
           <CreateBtn docKey="packing_list" />
           <NavBtn id="stock"       label="Stock Position" icon={ClipboardList} />
@@ -2255,11 +2255,108 @@ function HsnSearchModal({ onSelect, onClose }) {
 
 // ─── DocEditor ─────────────────────────────────────────────────
 
-function DocEditor({ doc, setDoc, customers, vendors, items, businessInfo, userRole, onSave, onCancel, onAddCustomer, onAddVendor, onConvert, onOpenDoc, documents = [] }) {
+// ─── MEP Invoice Picker ──────────────────────────────────────────────────────
+function MEPInvoicePicker({ siteProjects, siteActivities, progressUpdates, onClose, onLoad }) {
+  const [selProject, setSelProject] = React.useState(siteProjects[0]?.id || '');
+  const [selected, setSelected] = React.useState({});
+  const project = siteProjects.find(p => p.id === selProject);
+  const acts = siteActivities.filter(a => a.projectId === selProject && (a.contractValue||0) > 0);
+
+  function getProgress(actId) {
+    const logs = progressUpdates.filter(u => u.activityId === actId);
+    if (!logs.length) return 0;
+    return Math.max(...logs.map(u => parseFloat(u.cumProgress)||0));
+  }
+
+  function toggle(id) { setSelected(p => ({ ...p, [id]: !p[id] })); }
+  function selectAll() {
+    const all = {};
+    acts.forEach(a => { all[a.id] = true; });
+    setSelected(all);
+  }
+
+  function handleLoad() {
+    const villas = project?.villas || [];
+    const lineItems = acts.filter(a => selected[a.id]).map(a => {
+      const villa = villas.find(v => v.id === a.villaId);
+      const pct = getProgress(a.id);
+      const amount = ((a.contractValue || 0) * pct / 100);
+      return {
+        id: crypto.randomUUID(),
+        itemId: '',
+        name: `${villa ? villa.name + ' — ' : ''}${a.discipline} — ${a.name} (${pct}% complete)`,
+        hsn: '', qty: 1, rate: Math.round(amount * 100) / 100,
+        unit: 'nos', discount: 0, tax: 0,
+        packages: 1, netWeight: 0, grossWeight: 0, dimensions: '',
+      };
+    });
+    onLoad(lineItems);
+  }
+
+  return (
+    <Modal onClose={onClose} title="📋 Load Activities into Invoice" width={580}>
+      <div style={{ marginBottom: 12 }}>
+        <label style={styles.label}>Project</label>
+        <select value={selProject} onChange={e => { setSelProject(e.target.value); setSelected({}); }} style={styles.input}>
+          {siteProjects.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
+        </select>
+      </div>
+      {acts.length === 0 ? (
+        <div style={{ color: '#aaa', fontSize: 13, padding: '12px 0' }}>
+          No activities with Contract Value set for this project.<br />
+          Go to <strong>Activity Planner → Edit activity</strong> and set the Contract Value first.
+        </div>
+      ) : (
+        <>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
+            <span style={{ fontSize: 12, color: '#888' }}>{acts.length} activities with contract value</span>
+            <button onClick={selectAll} style={styles.ghostBtn}>Select all</button>
+          </div>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 6, maxHeight: 320, overflowY: 'auto' }}>
+            {acts.map(a => {
+              const pct = getProgress(a.id);
+              const amount = ((a.contractValue || 0) * pct / 100);
+              const villa = (project?.villas||[]).find(v => v.id === a.villaId);
+              return (
+                <div key={a.id} onClick={() => toggle(a.id)}
+                  style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '8px 12px', borderRadius: 8,
+                    border: selected[a.id] ? '2px solid #1E7A9A' : '1px solid #EAE6DB',
+                    background: selected[a.id] ? '#E0F2F9' : '#FAFAF8', cursor: 'pointer' }}>
+                  <div style={{ width: 18, height: 18, borderRadius: 4, border: selected[a.id] ? '2px solid #1E7A9A' : '2px solid #ccc',
+                    background: selected[a.id] ? '#1E7A9A' : '#fff', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
+                    {selected[a.id] && <span style={{ color: '#fff', fontSize: 12 }}>✓</span>}
+                  </div>
+                  <div style={{ flex: 1 }}>
+                    <div style={{ fontWeight: 600, fontSize: 13 }}>{villa ? villa.name + ' — ' : ''}{a.discipline} — {a.name}</div>
+                    <div style={{ fontSize: 11, color: '#888' }}>{a.phase} · {pct}% complete · Contract: {(a.contractValue||0).toLocaleString()}</div>
+                  </div>
+                  <div style={{ textAlign: 'right', fontWeight: 700, fontSize: 13, color: '#1E2A4A' }}>
+                    {amount.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+          <div style={{ marginTop: 14, display: 'flex', justifyContent: 'flex-end', gap: 10 }}>
+            <button onClick={onClose} style={styles.ghostBtn}>Cancel</button>
+            <button onClick={handleLoad} disabled={!Object.values(selected).some(Boolean)}
+              style={{ ...styles.primaryBtn, background: '#1E7A9A', opacity: Object.values(selected).some(Boolean) ? 1 : 0.5 }}>
+              ✓ Add {Object.values(selected).filter(Boolean).length} line item(s)
+            </button>
+          </div>
+        </>
+      )}
+    </Modal>
+  );
+}
+
+
+function DocEditor({ doc, setDoc, customers, vendors, items, businessInfo, userRole, onSave, onCancel, onAddCustomer, onAddVendor, onConvert, onOpenDoc, documents = [], siteActivities = [], siteProjects = [], progressUpdates = [] }) {
   // All hooks MUST come before any conditional returns (React Rules of Hooks)
   const [rejectMode, setRejectMode] = useState(false);
   const [rejectionNote, setRejectionNote] = useState('');
   const [hsnSearchRow, setHsnSearchRow] = useState(null); // rowId being searched
+  const [mepPickerOpen, setMepPickerOpen] = useState(false);
   const bizBadge = BIZ_BADGE[doc.bizType];
   const showBizBadge = !!bizBadge;
 
@@ -2638,15 +2735,29 @@ function DocEditor({ doc, setDoc, customers, vendors, items, businessInfo, userR
                   Line items <span style={{ background: '#EAE6DB', borderRadius: 10, padding: '1px 8px', fontSize: 11, fontWeight: 600, marginLeft: 6 }}>{doc.items.length}</span>
                 </label>
                 {isEditable && (
-                  <button onClick={addRow} style={{ ...styles.primaryBtn, fontSize: 12, padding: '5px 12px' }}>
-                    <Plus size={13} /> Add item
-                  </button>
+                  <div style={{ display:'flex', gap:8, alignItems:'center' }}>
+                    {doc.bizType !== 'service' && (
+                      <button onClick={addRow} style={{ ...styles.primaryBtn, fontSize: 12, padding: '5px 12px' }}>
+                        <Plus size={13} /> Add item
+                      </button>
+                    )}
+                    {doc.bizType === 'service' && ['invoice','quotation'].includes(doc.type) && (
+                      <button onClick={() => setMepPickerOpen(true)} style={{ ...styles.primaryBtn, fontSize: 12, padding: '5px 14px', background: '#1E7A9A' }}>
+                        📋 Load from activities
+                      </button>
+                    )}
+                    {doc.bizType === 'service' && !['invoice','quotation'].includes(doc.type) && (
+                      <button onClick={addRow} style={{ ...styles.primaryBtn, fontSize: 12, padding: '5px 12px' }}>
+                        <Plus size={13} /> Add item
+                      </button>
+                    )}
+                  </div>
                 )}
               </div>
               <div style={{ display: 'flex', flexDirection: 'column', gap: 6, maxHeight: 260, overflowY: 'auto' }}>
                 {doc.items.map((it, i) => (
                   <div key={it.id} style={{ background: '#FAFAF8', borderRadius: 6, padding: '6px 8px', fontSize: 12 }}>
-                    {isEditable && items.length > 0 && (
+                    {isEditable && items.length > 0 && doc.bizType !== 'service' && (
                       <select
                         value={it.itemId || ''}
                         onChange={(e) => selectItem(it.id, e.target.value)}
@@ -3266,6 +3377,18 @@ function DocEditor({ doc, setDoc, customers, vendors, items, businessInfo, userR
         <HsnSearchModal
           onSelect={(code) => { updateItem(hsnSearchRow, 'hsn', code); setHsnSearchRow(null); }}
           onClose={() => setHsnSearchRow(null)}
+        />
+      )}
+      {mepPickerOpen && (
+        <MEPInvoicePicker
+          siteProjects={siteProjects}
+          siteActivities={siteActivities}
+          progressUpdates={progressUpdates}
+          onClose={() => setMepPickerOpen(false)}
+          onLoad={(lineItems) => {
+            setDoc(d => ({ ...d, items: [...d.items.filter(i=>i.name), ...lineItems] }));
+            setMepPickerOpen(false);
+          }}
         />
       )}
     </div>
@@ -9340,6 +9463,10 @@ function ActivityForm({ activity, project, onSave, onClose }) {
           <input type="number" min={0} max={100} value={form.weight||0} onChange={e=>set('weight',+e.target.value)} style={styles.input} />
         </div>
         <div style={styles.formGroup}>
+          <label style={styles.label}>Contract Value (for invoicing)</label>
+          <input type="number" min={0} value={form.contractValue||''} onChange={e=>set('contractValue',+e.target.value)} style={styles.input} placeholder="0.00" />
+        </div>
+        <div style={styles.formGroup}>
           <label style={styles.label}>Planned Qty</label>
           <input value={form.plannedQty||''} onChange={e=>set('plannedQty',e.target.value)} style={styles.input} placeholder="e.g. 100" />
         </div>
@@ -10538,6 +10665,9 @@ export default function App() {
           onCancel={() => { setActiveDoc(null); setView('documents'); }}
           onAddCustomer={(c) => setEditingCustomer(c || { name: '' })}
           onAddVendor={(v) => setEditingVendor(v || { name: '' })}
+          siteActivities={siteActivities}
+          siteProjects={siteProjects}
+          progressUpdates={progressUpdates}
           onConvert={convertDoc}
           onOpenDoc={(docId) => { const found = documents.find(d => d.id === docId); if (found) openDoc(found); }}
           documents={documents}
