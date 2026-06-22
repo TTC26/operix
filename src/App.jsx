@@ -9661,6 +9661,7 @@ function MEPReportsView({ siteProjects, siteActivities, progressUpdates, employe
   const [fromDate, setFromDate] = useState(() => { const d=new Date(); d.setDate(1); return d.toISOString().slice(0,10); });
   const [toDate, setToDate] = useState(new Date().toISOString().slice(0,10));
   const [selEmp, setSelEmp] = useState(employees[0]?.id || '');
+  const [orientation, setOrientation] = useState('landscape'); // landscape | portrait
 
   const acts = siteActivities.filter(a => a.projectId === selProject);
   const project = siteProjects.find(p => p.id === selProject);
@@ -9773,7 +9774,7 @@ function MEPReportsView({ siteProjects, siteActivities, progressUpdates, employe
       <meta charset="utf-8"/>
       <title>${title}</title>
       <style>
-        @page { size: A4 landscape; margin: 15mm; }
+        @page { size: A4 ${orientation}; margin: 15mm; }
         body { font-family: Arial, sans-serif; font-size: 11px; color: #222; }
         h1 { font-size: 16px; color: #1E2A4A; margin: 0 0 4px; }
         h3 { font-size: 13px; color: #1E2A4A; margin: 16px 0 6px; border-bottom: 1px solid #ccc; padding-bottom: 4px; }
@@ -9805,7 +9806,18 @@ function MEPReportsView({ siteProjects, siteActivities, progressUpdates, employe
           <h2 className="serif" style={styles.h2}>MEP Reports</h2>
           <p style={styles.muted}>Manhour, manpower & material reports for selected period</p>
         </div>
-        <button onClick={handlePrint} style={{ ...styles.primaryBtn, gap:6 }}>🖨 Print / PDF</button>
+        <div style={{ display:'flex', alignItems:'center', gap:8 }}>
+          <div style={{ display:'flex', border:'1px solid #DDD8CC', borderRadius:8, overflow:'hidden', fontSize:12 }}>
+            {[['landscape','⬜ Landscape'],['portrait','📄 Portrait']].map(([val,lbl])=>(
+              <button key={val} onClick={()=>setOrientation(val)}
+                style={{ padding:'7px 12px', background: orientation===val ? '#1E2A4A' : '#fff',
+                  color: orientation===val ? '#fff' : '#555', border:'none', cursor:'pointer', fontWeight: orientation===val ? 600 : 400 }}>
+                {lbl}
+              </button>
+            ))}
+          </div>
+          <button onClick={handlePrint} style={{ ...styles.primaryBtn, gap:6 }}>🖨 Print / PDF</button>
+        </div>
       </div>
 
       {/* Filters */}
