@@ -9563,7 +9563,7 @@ function DailyUpdateModal({ activityId, activity, project, progressUpdates, setP
     };
     setProgressUpdates(prev => [...prev, rec]);
     setSaved(true);
-    setTimeout(() => onClose(), 1000);
+    setTimeout(() => { if (typeof onClose === 'function') onClose(); }, 900);
   }
 
   const bom = activity?.bom || [];
@@ -9645,7 +9645,7 @@ function DailyUpdateModal({ activityId, activity, project, progressUpdates, setP
       <div style={{ display:'flex', justifyContent:'flex-end', gap:10, marginTop:8 }}>
         {!saved && <button onClick={onClose} style={styles.ghostBtn}>Cancel</button>}
         <button onClick={handleSave} disabled={saved}
-          style={{ ...styles.primaryBtn, background: saved ? '#1A7A3E' : undefined, transition: 'background 0.3s' }}>
+          style={{ ...styles.primaryBtn, background: saved ? '#1A7A3E' : '#1E2A4A', color:'#fff', opacity: saved ? 0.85 : 1 }}>
           {saved ? '✓ Saved! Updating...' : 'Save Daily Update'}
         </button>
       </div>
@@ -9705,6 +9705,99 @@ function MEPReportsView({ siteProjects, siteActivities, progressUpdates, employe
   const selectedEmp = employees.find(e=>e.id===selEmp);
   const empTotalHours = empLogs.reduce((s,r)=>s+r.hours,0);
 
+
+  function handlePrint() {
+    const reportTitles = {
+      manhour_summary: 'Manhour Summary Report',
+      emp_report: `Employee Report — ${selectedEmp?.name || ''}`,
+      material_report: 'Material Consumption Report',
+    };
+    const title = reportTitles[reportType] || 'MEP Report';
+    const period = `${fromDate} to ${toDate}`;
+    const projName = project?.name || '';
+
+    let tableHTML = '';
+
+    if (reportType === 'manhour_summary') {
+      const rows = manhourRows.map(({act,logs,totalMH,totalMP,latestPct,villa}) => `
+        <tr>
+          <td>${villa?.name||'Project-wide'}</td>
+          <td><b>${act.discipline}</b></td>
+          <td>${act.name}</td>
+          <td>${act.phase||''}</td>
+          <td style="text-align:center">${logs.length}</td>
+          <td style="text-align:center">${totalMP}</td>
+          <td style="text-align:center;font-weight:700">${totalMH.toFixed(1)}</td>
+          <td style="text-align:center;font-weight:700;color:${latestPct===100?'#1A7A3E':'#C9A24B'}">${latestPct}%</td>
+        </tr>`).join('');
+      const totMH = manhourRows.reduce((s,r)=>s+r.totalMH,0).toFixed(1);
+      const totMP = manhourRows.reduce((s,r)=>s+r.totalMP,0);
+      tableHTML = `
+        <table>
+          <thead><tr>${['Villa/Unit','Discipline','Activity','Phase','Days Worked','Total MP-days','Total Manhours','Progress %'].map(h=>`<th>${h}</th>`).join('')}</tr></thead>
+          <tbody>${rows}</tbody>
+          <tfoot><tr><td colspan="5" style="text-align:right"><b>TOTAL</b></td><td style="text-align:center"><b>${totMP}</b></td><td style="text-align:center"><b>${totMH}</b></td><td></td></tr></tfoot>
+        </table>
+        <h3>Daily Log Detail</h3>
+        ${manhourRows.map(({act,logs,villa})=>`
+          <h4>${villa?.name?villa.name+' — ':''} ${act.discipline} · ${act.name}</h4>
+          <table>
+            <thead><tr>${['Date','MP Count','Manhours','Progress %','Notes'].map(h=>`<th>${h}</th>`).join('')}</tr></thead>
+            <tbody>${logs.sort((a,b)=>a.date.localeCompare(b.date)).map(u=>`
+              <tr><td>${u.date}</td><td style="text-align:center">${u.mpCount||'—'}</td><td style="text-align:center">${u.totalManhours||'—'}</td><td style="text-align:center">${u.cumProgress}%</td><td>${u.notes||'—'}</td></tr>`).join('')}
+            </tbody>
+          </table>`).join('')}`;
+    } else if (reportType === 'emp_report') {
+      const rows = empLogs.map(r=>`
+        <tr>
+          <td>${r.date}</td><td>${r.villa||'Project-wide'}</td><td>${r.discipline}</td>
+          <td>${r.actName}</td><td style="text-align:center;font-weight:700">${r.hours}</td><td>${r.notes||'—'}</td>
+        </tr>`).join('');
+      tableHTML = `
+        <p><b>Total Days Worked:</b> ${empLogs.length} &nbsp;&nbsp; <b>Total Manhours:</b> ${empTotalHours.toFixed(1)}</p>
+        <table>
+          <thead><tr>${['Date','Villa/Unit','Discipline','Activity','Hours','Notes'].map(h=>`<th>${h}</th>`).join('')}</tr></thead>
+          <tbody>${rows}</tbody>
+          <tfoot><tr><td colspan="4" style="text-align:right"><b>TOTAL HOURS</b></td><td style="text-align:center"><b>${empTotalHours.toFixed(1)}</b></td><td></td></tr></tfoot>
+        </table>`;
+    } else {
+      tableHTML = matRows.map(({act,villa,mats})=>`
+        <h4>${villa?.name?villa.name+' — ':''} ${act.discipline} · ${act.name}</h4>
+        <table>
+          <thead><tr><th>Material</th><th>Total Qty</th><th>Unit</th></tr></thead>
+          <tbody>${mats.map(m=>`<tr><td>${m.name}</td><td style="text-align:center;font-weight:700">${m.qty.toFixed(2)}</td><td>${m.unit}</td></tr>`).join('')}</tbody>
+        </table>`).join('');
+    }
+
+    const html = `<!DOCTYPE html><html><head>
+      <meta charset="utf-8"/>
+      <title>${title}</title>
+      <style>
+        @page { size: A4 landscape; margin: 15mm; }
+        body { font-family: Arial, sans-serif; font-size: 11px; color: #222; }
+        h1 { font-size: 16px; color: #1E2A4A; margin: 0 0 4px; }
+        h3 { font-size: 13px; color: #1E2A4A; margin: 16px 0 6px; border-bottom: 1px solid #ccc; padding-bottom: 4px; }
+        h4 { font-size: 12px; color: #1E2A4A; margin: 12px 0 4px; }
+        .meta { color: #666; font-size: 11px; margin-bottom: 14px; }
+        table { width: 100%; border-collapse: collapse; margin-bottom: 12px; }
+        th { background: #1E2A4A; color: #fff; padding: 6px 8px; text-align: left; font-size: 11px; }
+        td { padding: 5px 8px; border-bottom: 1px solid #e0ddd5; font-size: 11px; }
+        tfoot td { background: #f5f3ee; font-weight: 700; }
+        tr:nth-child(even) td { background: #faf9f6; }
+        p { margin: 4px 0 10px; }
+      </style>
+    </head><body>
+      <h1>${title}</h1>
+      <div class="meta">Project: <b>${projName}</b> &nbsp;|&nbsp; Period: <b>${period}</b> &nbsp;|&nbsp; Printed: ${new Date().toLocaleDateString()}</div>
+      ${tableHTML || '<p>No data available for the selected period.</p>'}
+    </body></html>`;
+
+    const w = window.open('', '_blank', 'width=1000,height=700');
+    w.document.write(html);
+    w.document.close();
+    setTimeout(() => { w.focus(); w.print(); }, 500);
+  }
+
   return (
     <div style={styles.page}>
       <div style={{ display:'flex', justifyContent:'space-between', alignItems:'flex-start', marginBottom:16, flexWrap:'wrap', gap:10 }}>
@@ -9712,7 +9805,7 @@ function MEPReportsView({ siteProjects, siteActivities, progressUpdates, employe
           <h2 className="serif" style={styles.h2}>MEP Reports</h2>
           <p style={styles.muted}>Manhour, manpower & material reports for selected period</p>
         </div>
-        <button onClick={()=>window.print()} style={{ ...styles.ghostBtn, gap:6 }}>🖨 Print / PDF</button>
+        <button onClick={handlePrint} style={{ ...styles.primaryBtn, gap:6 }}>🖨 Print / PDF</button>
       </div>
 
       {/* Filters */}
