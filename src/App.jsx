@@ -1800,7 +1800,7 @@ const SECTION_VIEWS = {
   quality:     ['isoprinciples', 'deptprocedures', 'inprocessqa', 'qatesting'],
   hr:          ['employees', 'payroll'],
   scope:       ['scopeofwork'],
-  site:        ['siteprojects', 'activityplanner', 'dailyupdates', 'progressboard', 'clientmaterials', 'siteattendance', 'evaluation'],
+  site:        ['siteprojects', 'activityplanner', 'dailyupdates', 'progressboard', 'clientmaterials', 'siteattendance', 'evaluation', 'mepreports'],
   admin:       ['staff', 'contracts', 'termslibrary'],
 };
 
@@ -9243,17 +9243,24 @@ function MEPProjectForm({ project, employees, onSave, onClose }) {
 }
 
 // ── Activity Planner (WBS + BOM) ────────────────────────────────────────────────
-function ActivityPlannerView({ siteActivities, setSiteActivities, siteProjects, progressUpdates, userRole }) {
+// ─── MEP Gantt Chart + Activity Planner ──────────────────────────────────────
+function ActivityPlannerView({ siteActivities, setSiteActivities, siteProjects, progressUpdates, setProgressUpdates, userRole, employees = [] }) {
   const [selProject, setSelProject] = useState(siteProjects[0]?.id || '');
   const [editing, setEditing] = useState(null);
   const [expandedBOM, setExpandedBOM] = useState({});
+  const [viewMode, setViewMode] = useState('gantt'); // 'gantt' | 'table'
+  const [updateModal, setUpdateModal] = useState(null); // activityId
+  const [ganttStart, setGanttStart] = useState(() => {
+    const d = new Date(); d.setDate(1); return d.toISOString().slice(0,10);
+  });
+  const [ganttDays, setGanttDays] = useState(60);
   const canEdit = userRole === 'admin' || userRole === 'manager';
-  const project = siteProjects.find(p=>p.id===selProject);
-  const acts = siteActivities.filter(a=>a.projectId===selProject).sort((a,b)=>{
+  const project = siteProjects.find(p => p.id === selProject);
+  const acts = siteActivities.filter(a => a.projectId === selProject).sort((a,b) => {
     const vA = (project?.villas||[]).findIndex(v=>v.id===a.villaId);
     const vB = (project?.villas||[]).findIndex(v=>v.id===b.villaId);
-    if (vA!==vB) return vA-vB;
-    return (a.sequence||0)-(b.sequence||0);
+    if (vA !== vB) return vA - vB;
+    return (a.sequence||0) - (b.sequence||0);
   });
 
   function save(form) {
@@ -9262,116 +9269,632 @@ function ActivityPlannerView({ siteActivities, setSiteActivities, siteProjects, 
     setEditing(null);
   }
   function del(id) { if (confirm('Delete activity?')) setSiteActivities(prev=>prev.filter(a=>a.id!==id)); }
-  function lockBOM(id) {
-    setSiteActivities(prev=>prev.map(a=>a.id===id?{...a,bomLocked:true}:a));
-  }
+  function lockBOM(id) { setSiteActivities(prev=>prev.map(a=>a.id===id?{...a,bomLocked:true}:a)); }
   function toggleBOM(id) { setExpandedBOM(p=>({...p,[id]:!p[id]})); }
+
+  function getProgress(actId) {
+    const logs = progressUpdates.filter(u => u.activityId === actId);
+    if (!logs.length) return 0;
+    return Math.max(...logs.map(u => parseFloat(u.cumProgress)||0));
+  }
+
+  // Gantt helpers
+  const gStart = new Date(ganttStart);
+  const DAY_W = 28; // px per day
+
+  function dayOffset(dateStr) {
+    if (!dateStr) return null;
+    const d = new Date(dateStr);
+    return Math.round((d - gStart) / 86400000);
+  }
+
+  function formatGanttHeader() {
+    const headers = [];
+    let cur = new Date(gStart);
+    let wk = 0;
+    while (wk < ganttDays) {
+      const mo = cur.toLocaleString('default',{month:'short'});
+      const days = [];
+      while (wk < ganttDays && (days.length === 0 || cur.getDate() !== 1)) {
+        days.push({ d: cur.getDate(), dow: cur.toLocaleString('default',{weekday:'narrow'}), isWeekend: cur.getDay()===0||cur.getDay()===6 });
+        cur = new Date(cur); cur.setDate(cur.getDate()+1); wk++;
+      }
+      headers.push({ month: mo, days });
+    }
+    return headers;
+  }
+  const ganttHeaders = formatGanttHeader();
 
   if (!siteProjects.length) return (
     <div style={styles.page}>
       <h2 className="serif" style={styles.h2}>Activity Planner</h2>
-      <p style={{ color:'#aaa', marginTop:16 }}>Create a project first, then come back to add activities.</p>
+      <p style={{ color:'#aaa', marginTop:16 }}>Create a project first, then add activities.</p>
     </div>
   );
 
-  // Group by villa
   const villas = project?.villas || [];
-  const byVilla = villas.reduce((acc,v)=>{ acc[v.id]=acts.filter(a=>a.villaId===v.id); return acc; },{});
-  const unassigned = acts.filter(a=>!a.villaId);
-
-  const totalWeight = acts.reduce((s,a)=>s+(parseFloat(a.weight)||0),0);
 
   return (
     <div style={styles.page}>
-      <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', marginBottom:14 }}>
+      {/* Header */}
+      <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', marginBottom:14, flexWrap:'wrap', gap:8 }}>
         <div>
           <h2 className="serif" style={styles.h2}>Activity Planner</h2>
-          <p style={styles.muted}>{acts.length} activities · total weight: {totalWeight.toFixed(0)}%</p>
+          <p style={styles.muted}>{acts.length} activities · {project?.name}</p>
         </div>
-        <div style={{ display:'flex', gap:10 }}>
-          <select value={selProject} onChange={e=>setSelProject(e.target.value)} style={{ ...styles.input, width:220 }}>
+        <div style={{ display:'flex', gap:8, alignItems:'center', flexWrap:'wrap' }}>
+          <select value={selProject} onChange={e=>setSelProject(e.target.value)} style={{ ...styles.input, width:200 }}>
             {siteProjects.map(p=><option key={p.id} value={p.id}>{p.name}</option>)}
           </select>
-          {canEdit && <button style={styles.primaryBtn} onClick={()=>setEditing({ _isNew:true, villaId:'', discipline:(project?.disciplines||MEP_DISCIPLINES)[0], phase: MEP_PHASES[0], weight:5, bom:[], bomLocked:false })}>+ Add Activity</button>}
+          <div style={{ display:'flex', border:'1px solid #DDD8CE', borderRadius:8, overflow:'hidden' }}>
+            {[['gantt','📊 Gantt'],['table','📋 Table']].map(([k,l])=>(
+              <button key={k} onClick={()=>setViewMode(k)} style={{ padding:'6px 14px', border:'none', cursor:'pointer', fontSize:12, fontWeight:600, background: viewMode===k ? '#1E2A4A' : '#fff', color: viewMode===k ? '#fff' : '#555' }}>{l}</button>
+            ))}
+          </div>
+          {canEdit && <button style={styles.primaryBtn} onClick={()=>setEditing({ _isNew:true, villaId:'', discipline:(project?.disciplines||MEP_DISCIPLINES)[0], phase:MEP_PHASES[0], weight:5, bom:[], bomLocked:false })}>+ Add Activity</button>}
         </div>
       </div>
 
-      {/* Activities table */}
-      {[...villas.map(v=>({ v, items: byVilla[v.id]||[] })), ...(unassigned.length?[{v:{id:'__none',name:'Project-wide / Unassigned'}, items:unassigned}]:[])].map(({v, items})=>(
-        <div key={v.id} style={{ marginBottom:20 }}>
-          <div style={{ ...styles.dashSection, fontSize:12, color:'#1E2A4A', marginBottom:8 }}>
-            🏠 {v.name} &nbsp;<span style={{ color:'#aaa', fontWeight:400 }}>({items.length} activities)</span>
+      {/* GANTT VIEW */}
+      {viewMode === 'gantt' && (
+        <div>
+          {/* Gantt controls */}
+          <div style={{ display:'flex', gap:8, marginBottom:10, alignItems:'center', flexWrap:'wrap' }}>
+            <label style={{ fontSize:12, color:'#888' }}>Start:</label>
+            <input type="date" value={ganttStart} onChange={e=>setGanttStart(e.target.value)} style={{ ...styles.input, width:140, fontSize:12, padding:'4px 8px' }} />
+            <label style={{ fontSize:12, color:'#888' }}>Show:</label>
+            {[30,60,90,120].map(d=>(
+              <button key={d} onClick={()=>setGanttDays(d)} style={{ padding:'4px 10px', border:'1px solid #DDD8CE', borderRadius:6, fontSize:12, cursor:'pointer', background: ganttDays===d ? '#1E2A4A' : '#fff', color: ganttDays===d ? '#fff' : '#555' }}>{d}d</button>
+            ))}
+            <span style={{ fontSize:11, color:'#aaa', marginLeft:8 }}>Click activity bar to log daily update</span>
           </div>
-          {items.length===0 && <div style={{ fontSize:12, color:'#aaa', paddingLeft:8, marginBottom:8 }}>No activities yet.</div>}
-          <div style={{ overflowX:'auto' }}>
-            <table style={{ ...styles.table, fontSize:12.5 }}>
-              <thead>
-                <tr style={{ background:'#F5F3EE' }}>
-                  {['Discipline','Phase','Activity','Planned Start','Planned End','Dur (d)','Wt%','Progress','BOM',''].map(h=>(
-                    <th key={h} style={{ ...styles.th, whiteSpace:'nowrap' }}>{h}</th>
-                  ))}
-                </tr>
-              </thead>
-              <tbody>
-                {items.map(act=>{
-                  const pct = getActivityProgress(act.id, progressUpdates);
-                  const bomExpanded = expandedBOM[act.id];
+
+          {/* Gantt table */}
+          <div style={{ overflowX:'auto', border:'1px solid #EAE6DB', borderRadius:10 }}>
+            <div style={{ display:'flex', minWidth: 380 + ganttDays * DAY_W }}>
+              {/* Left fixed panel */}
+              <div style={{ width:380, flexShrink:0, borderRight:'2px solid #DDD8CE' }}>
+                {/* Header row */}
+                <div style={{ display:'grid', gridTemplateColumns:'120px 90px 1fr', background:'#1E2A4A', color:'#fff', fontSize:11, fontWeight:700, padding:'0 0' }}>
+                  <div style={{ padding:'8px 10px', borderRight:'1px solid #3B4F7A' }}>Discipline</div>
+                  <div style={{ padding:'8px 10px', borderRight:'1px solid #3B4F7A' }}>Progress</div>
+                  <div style={{ padding:'8px 10px' }}>Activity</div>
+                </div>
+                {/* Activity rows */}
+                {acts.map(act => {
+                  const pct = getProgress(act.id);
+                  const villa = villas.find(v=>v.id===act.villaId);
                   return (
-                    <React.Fragment key={act.id}>
-                      <tr style={{ borderTop:'1px solid #EAE6DB' }}>
-                        <td style={styles.td}><span style={{ fontWeight:600, color:'#1E2A4A' }}>{act.discipline}</span></td>
-                        <td style={styles.td}><span style={{ fontSize:11, color:'#888' }}>{act.phase}</span></td>
-                        <td style={styles.td}>{act.name}</td>
-                        <td style={{ ...styles.td, color:'#555' }}>{act.plannedStart||'—'}</td>
-                        <td style={{ ...styles.td, color:'#555' }}>{act.plannedEnd||'—'}</td>
-                        <td style={{ ...styles.td, textAlign:'center' }}>{act.duration||'—'}</td>
-                        <td style={{ ...styles.td, textAlign:'center' }}>{act.weight||0}%</td>
-                        <td style={{ ...styles.td, minWidth:100 }}>
-                          <div style={{ display:'flex', alignItems:'center', gap:6 }}>
-                            <div style={{ flex:1, background:'#EAE6DB', borderRadius:3, height:5 }}>
-                              <div style={{ width:`${pct}%`, background:pct===100?'#1A7A3E':'#C9A24B', borderRadius:3, height:5 }} />
-                            </div>
-                            <span style={{ fontSize:11, fontWeight:600, color:pct===100?'#1A7A3E':'#555', width:28 }}>{pct}%</span>
-                          </div>
-                        </td>
-                        <td style={styles.td}>
-                          <button onClick={()=>toggleBOM(act.id)} style={{ ...styles.ghostBtn, fontSize:11, padding:'2px 8px' }}>
-                            {(act.bom||[]).length} items {bomExpanded?'▲':'▼'}
-                          </button>
-                          {act.bomLocked && <span style={{ fontSize:10, color:'#1A7A3E', marginLeft:4 }}>🔒</span>}
-                        </td>
-                        <td style={styles.td}>
-                          {canEdit && (
-                            <div style={{ display:'flex', gap:4 }}>
-                              <button style={{ ...styles.ghostBtn, fontSize:11, padding:'2px 7px' }} onClick={()=>setEditing(act)}>Edit</button>
-                              <button style={{ ...styles.ghostBtn, fontSize:11, padding:'2px 7px', color:'#B5453A' }} onClick={()=>del(act.id)}>×</button>
-                            </div>
-                          )}
-                        </td>
-                      </tr>
-                      {bomExpanded && (
-                        <tr>
-                          <td colSpan={10} style={{ padding:'0 0 8px 16px', background:'#FDFCF9' }}>
-                            <BOMInlineEditor activity={act} onUpdate={updated=>setSiteActivities(prev=>prev.map(a=>a.id===act.id?updated:a))} canEdit={canEdit&&!act.bomLocked} />
-                            {canEdit && !act.bomLocked && (
-                              <button style={{ ...styles.ghostBtn, fontSize:11, color:'#1A7A3E', marginTop:6 }} onClick={()=>lockBOM(act.id)}>
-                                🔒 Lock BOM (after order approval)
-                              </button>
-                            )}
-                          </td>
-                        </tr>
-                      )}
-                    </React.Fragment>
+                    <div key={act.id} style={{ display:'grid', gridTemplateColumns:'120px 90px 1fr', borderBottom:'1px solid #F0EDE6', background:'#FAFAF8', minHeight:36 }}>
+                      <div style={{ padding:'6px 10px', borderRight:'1px solid #EAE6DB', fontSize:11 }}>
+                        <div style={{ fontWeight:600, color:'#1E2A4A', fontSize:11 }}>{act.discipline}</div>
+                        {villa && <div style={{ fontSize:10, color:'#aaa' }}>{villa.name}</div>}
+                      </div>
+                      <div style={{ padding:'6px 10px', borderRight:'1px solid #EAE6DB' }}>
+                        <div style={{ background:'#EAE6DB', borderRadius:3, height:6, marginTop:4 }}>
+                          <div style={{ width:`${pct}%`, background: pct===100?'#1A7A3E':'#C9A24B', borderRadius:3, height:6 }} />
+                        </div>
+                        <div style={{ fontSize:10, color:'#555', marginTop:2, fontWeight:600 }}>{pct}%</div>
+                      </div>
+                      <div style={{ padding:'6px 8px', fontSize:11 }}>
+                        <div style={{ fontWeight:600, color:'#1E2A4A', lineHeight:1.3 }}>{act.name}</div>
+                        <div style={{ fontSize:10, color:'#aaa' }}>{act.phase}</div>
+                      </div>
+                    </div>
                   );
                 })}
-              </tbody>
-            </table>
+              </div>
+
+              {/* Right Gantt panel */}
+              <div style={{ flex:1, overflowX:'auto' }}>
+                {/* Month + day headers */}
+                <div style={{ background:'#1E2A4A' }}>
+                  {/* Month row */}
+                  <div style={{ display:'flex', borderBottom:'1px solid #3B4F7A' }}>
+                    {ganttHeaders.map((mo,i) => (
+                      <div key={i} style={{ width: mo.days.length * DAY_W, flexShrink:0, padding:'4px 6px', fontSize:11, fontWeight:700, color:'#C9A24B', borderRight:'1px solid #3B4F7A' }}>{mo.month}</div>
+                    ))}
+                  </div>
+                  {/* Day row */}
+                  <div style={{ display:'flex' }}>
+                    {ganttHeaders.flatMap(mo => mo.days).map((d,i) => (
+                      <div key={i} style={{ width:DAY_W, flexShrink:0, padding:'3px 0', textAlign:'center', fontSize:9, color: d.isWeekend ? '#C9A24B' : '#9BA3C7', borderRight:'1px solid #2D3F6A', fontWeight: d.isWeekend ? 700 : 400 }}>{d.d}</div>
+                    ))}
+                  </div>
+                </div>
+
+                {/* Activity bars */}
+                {acts.map(act => {
+                  const pct = getProgress(act.id);
+                  const startOff = dayOffset(act.plannedStart);
+                  const endOff = dayOffset(act.plannedEnd);
+                  const barLeft = startOff !== null ? Math.max(0, startOff) * DAY_W : null;
+                  const barWidth = (startOff !== null && endOff !== null) ? Math.max(DAY_W, (endOff - startOff + 1) * DAY_W) : null;
+                  return (
+                    <div key={act.id} style={{ height:36, borderBottom:'1px solid #F0EDE6', position:'relative', background: '#FAFAF8', display:'flex', alignItems:'center', width: ganttDays * DAY_W }}
+                      onClick={() => setUpdateModal(act.id)}>
+                      {/* Weekend shading */}
+                      {Array.from({length: ganttDays}).map((_,i) => {
+                        const d = new Date(gStart); d.setDate(d.getDate()+i);
+                        return d.getDay()===0||d.getDay()===6 ? <div key={i} style={{ position:'absolute', left:i*DAY_W, width:DAY_W, top:0, bottom:0, background:'rgba(201,162,75,0.06)' }} /> : null;
+                      })}
+                      {/* Gantt bar */}
+                      {barLeft !== null && barWidth !== null && (
+                        <div style={{ position:'absolute', left:barLeft, width:barWidth, height:18, borderRadius:4, background:'#DDD8CE', overflow:'hidden', cursor:'pointer' }} title={`${act.name} — click to update`}>
+                          <div style={{ width:`${pct}%`, height:'100%', background: pct===100?'#1A7A3E':'#1E7A9A', borderRadius:4 }} />
+                          <span style={{ position:'absolute', left:6, top:2, fontSize:10, fontWeight:700, color:'#fff', whiteSpace:'nowrap', overflow:'hidden', textOverflow:'ellipsis', maxWidth:barWidth-12 }}>{act.name} {pct>0?`${pct}%`:''}</span>
+                        </div>
+                      )}
+                      {barLeft === null && (
+                        <div style={{ position:'absolute', left:8, fontSize:10, color:'#ccc', fontStyle:'italic' }}>No dates set — click to update</div>
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
           </div>
         </div>
-      ))}
+      )}
 
-      {editing && (
-        <ActivityForm activity={editing} project={project} onSave={save} onClose={()=>setEditing(null)} />
+      {/* TABLE VIEW */}
+      {viewMode === 'table' && (
+        <div>
+          {[...villas.map(v=>({ v, items: acts.filter(a=>a.villaId===v.id) })), ...(acts.filter(a=>!a.villaId).length?[{v:{id:'__none',name:'Project-wide'},items:acts.filter(a=>!a.villaId)}]:[])].map(({v,items})=>(
+            <div key={v.id} style={{ marginBottom:20 }}>
+              <div style={{ ...styles.dashSection, fontSize:12, marginBottom:8 }}>🏠 {v.name} ({items.length})</div>
+              <div style={{ overflowX:'auto' }}>
+                <table style={{ ...styles.table, fontSize:12 }}>
+                  <thead>
+                    <tr style={{ background:'#F5F3EE' }}>
+                      {['Discipline','Phase','Activity','Start','End','Dur','Wt%','Progress','Contract Val','BOM',''].map(h=>(
+                        <th key={h} style={{ ...styles.th, whiteSpace:'nowrap' }}>{h}</th>
+                      ))}
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {items.map(act => {
+                      const pct = getProgress(act.id, progressUpdates);
+                      return (
+                        <React.Fragment key={act.id}>
+                          <tr style={{ borderTop:'1px solid #EAE6DB' }}>
+                            <td style={styles.td}><span style={{ fontWeight:600, color:'#1E2A4A' }}>{act.discipline}</span></td>
+                            <td style={styles.td}><span style={{ fontSize:11, color:'#888' }}>{act.phase}</span></td>
+                            <td style={styles.td}>{act.name}</td>
+                            <td style={{ ...styles.td, color:'#555' }}>{act.plannedStart||'—'}</td>
+                            <td style={{ ...styles.td, color:'#555' }}>{act.plannedEnd||'—'}</td>
+                            <td style={{ ...styles.td, textAlign:'center' }}>{act.duration||'—'}</td>
+                            <td style={{ ...styles.td, textAlign:'center' }}>{act.weight||0}%</td>
+                            <td style={{ ...styles.td, minWidth:100 }}>
+                              <div style={{ display:'flex', alignItems:'center', gap:6 }}>
+                                <div style={{ flex:1, background:'#EAE6DB', borderRadius:3, height:5 }}>
+                                  <div style={{ width:`${pct}%`, background:pct===100?'#1A7A3E':'#C9A24B', borderRadius:3, height:5 }} />
+                                </div>
+                                <span style={{ fontSize:11, fontWeight:600, color:pct===100?'#1A7A3E':'#555', width:28 }}>{pct}%</span>
+                              </div>
+                            </td>
+                            <td style={{ ...styles.td, textAlign:'right' }}>{act.contractValue ? act.contractValue.toLocaleString() : '—'}</td>
+                            <td style={styles.td}>
+                              <button onClick={()=>toggleBOM(act.id)} style={{ ...styles.ghostBtn, fontSize:11, padding:'2px 8px' }}>{(act.bom||[]).length} items {expandedBOM[act.id]?'▲':'▼'}</button>
+                              {act.bomLocked && <span style={{ fontSize:10, color:'#1A7A3E', marginLeft:4 }}>🔒</span>}
+                            </td>
+                            <td style={styles.td}>
+                              {canEdit && (
+                                <div style={{ display:'flex', gap:4 }}>
+                                  <button style={{ ...styles.ghostBtn, fontSize:11, padding:'2px 7px' }} onClick={()=>setUpdateModal(act.id)}>📝 Update</button>
+                                  <button style={{ ...styles.ghostBtn, fontSize:11, padding:'2px 7px' }} onClick={()=>setEditing(act)}>Edit</button>
+                                  <button style={{ ...styles.ghostBtn, fontSize:11, padding:'2px 7px', color:'#B5453A' }} onClick={()=>del(act.id)}>×</button>
+                                </div>
+                              )}
+                            </td>
+                          </tr>
+                          {expandedBOM[act.id] && (
+                            <tr><td colSpan={11} style={{ padding:'0 0 8px 16px', background:'#FDFCF9' }}>
+                              <BOMInlineEditor activity={act} onUpdate={updated=>setSiteActivities(prev=>prev.map(a=>a.id===act.id?updated:a))} canEdit={canEdit&&!act.bomLocked} />
+                              {canEdit && !act.bomLocked && <button style={{ ...styles.ghostBtn, fontSize:11, color:'#1A7A3E', marginTop:6 }} onClick={()=>lockBOM(act.id)}>🔒 Lock BOM</button>}
+                            </td></tr>
+                          )}
+                        </React.Fragment>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+
+      {editing && <ActivityForm activity={editing} project={project} onSave={save} onClose={()=>setEditing(null)} />}
+      {updateModal && (
+        <DailyUpdateModal
+          activityId={updateModal}
+          activity={acts.find(a=>a.id===updateModal)}
+          project={project}
+          progressUpdates={progressUpdates}
+          setProgressUpdates={setProgressUpdates}
+          employees={employees}
+          onClose={()=>setUpdateModal(null)}
+        />
+      )}
+    </div>
+  );
+}
+
+// ─── Daily Update Modal (from Gantt click) ───────────────────────────────────
+function DailyUpdateModal({ activityId, activity, project, progressUpdates, setProgressUpdates, employees, onClose }) {
+  const today = new Date().toISOString().slice(0,10);
+  const lastLog = progressUpdates.filter(u=>u.activityId===activityId).sort((a,b)=>b.date.localeCompare(a.date))[0];
+  const lastPct = lastLog ? parseFloat(lastLog.cumProgress)||0 : 0;
+
+  const [form, setForm] = useState({
+    date: today,
+    cumProgress: lastPct,
+    mpCount: '',
+    totalManhours: '',
+    empHours: [],
+    materialConsumed: [],
+    notes: '',
+  });
+  const set = (k,v) => setForm(p=>({...p,[k]:v}));
+
+  function setEmpHour(empId, hours) {
+    setForm(p => {
+      const existing = p.empHours.filter(e=>e.empId!==empId);
+      return { ...p, empHours: hours ? [...existing, {empId, hours:parseFloat(hours)||0}] : existing };
+    });
+  }
+
+  function addMaterial() { setForm(p=>({...p, materialConsumed:[...p.materialConsumed,{id:crypto.randomUUID(),name:'',qty:'',unit:'nos'}]})); }
+  function updateMat(id,k,v) { setForm(p=>({...p,materialConsumed:p.materialConsumed.map(m=>m.id===id?{...m,[k]:v}:m)})); }
+  function removeMat(id) { setForm(p=>({...p,materialConsumed:p.materialConsumed.filter(m=>m.id!==id)})); }
+
+  function handleSave() {
+    if (!form.date) return alert('Select date');
+    const rec = { id: crypto.randomUUID(), activityId, projectId: project?.id||'', ...form };
+    setProgressUpdates(prev => [...prev, rec]);
+    onClose();
+  }
+
+  const bom = activity?.bom || [];
+  const villas = project?.villas||[];
+  const villa = villas.find(v=>v.id===activity?.villaId);
+
+  return (
+    <Modal onClose={onClose} title={`📝 Daily Update — ${activity?.name||''}`} width={560}>
+      <div style={{ fontSize:12, color:'#888', marginBottom:12 }}>
+        {villa ? `${villa.name} · ` : ''}{activity?.discipline} · {activity?.phase}
+        {lastLog && <span style={{ marginLeft:8, color:'#C9A24B' }}>Last update: {lastLog.date} ({lastPct}%)</span>}
+      </div>
+
+      <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:10, marginBottom:12 }}>
+        <div style={styles.formGroup}>
+          <label style={styles.label}>Date *</label>
+          <input type="date" value={form.date} onChange={e=>set('date',e.target.value)} style={styles.input} />
+        </div>
+        <div style={styles.formGroup}>
+          <label style={styles.label}>Cumulative Progress % <span style={{ color:'#C9A24B' }}>(was {lastPct}%)</span></label>
+          <input type="number" min={lastPct} max={100} value={form.cumProgress} onChange={e=>set('cumProgress',Math.min(100,Math.max(lastPct,+e.target.value)))} style={styles.input} />
+        </div>
+        <div style={styles.formGroup}>
+          <label style={styles.label}>Manpower on site (headcount)</label>
+          <input type="number" min={0} value={form.mpCount} onChange={e=>set('mpCount',e.target.value)} style={styles.input} placeholder="e.g. 5" />
+        </div>
+        <div style={styles.formGroup}>
+          <label style={styles.label}>Total Manhours today</label>
+          <input type="number" min={0} step="0.5" value={form.totalManhours} onChange={e=>set('totalManhours',e.target.value)} style={styles.input} placeholder="e.g. 40" />
+        </div>
+      </div>
+
+      {/* Per-employee hours */}
+      {employees.length > 0 && (
+        <div style={{ marginBottom:12 }}>
+          <div style={{ ...styles.label, marginBottom:6 }}>Employee-wise hours</div>
+          <div style={{ display:'flex', flexDirection:'column', gap:4, maxHeight:140, overflowY:'auto' }}>
+            {employees.map(emp => {
+              const eh = form.empHours.find(e=>e.empId===emp.id);
+              return (
+                <div key={emp.id} style={{ display:'flex', alignItems:'center', gap:10 }}>
+                  <span style={{ fontSize:12, flex:1, color:'#555' }}>{emp.name}</span>
+                  <input type="number" min={0} step="0.5" value={eh?.hours||''} onChange={e=>setEmpHour(emp.id,e.target.value)}
+                    style={{ ...styles.input, width:80, padding:'4px 8px', fontSize:12 }} placeholder="hrs" />
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      )}
+
+      {/* Material consumed */}
+      <div style={{ marginBottom:12 }}>
+        <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', marginBottom:6 }}>
+          <div style={styles.label}>Materials consumed today</div>
+          <button onClick={addMaterial} style={{ ...styles.ghostBtn, fontSize:11 }}>+ Add</button>
+        </div>
+        {bom.length > 0 && form.materialConsumed.length === 0 && (
+          <div style={{ fontSize:11, color:'#aaa', marginBottom:6 }}>
+            BOM items: {bom.map(b=>b.material).join(', ')} — click + Add to log consumption
+          </div>
+        )}
+        {form.materialConsumed.map(m => (
+          <div key={m.id} style={{ display:'grid', gridTemplateColumns:'1fr 80px 70px auto', gap:6, marginBottom:4, alignItems:'center' }}>
+            <input value={m.name} onChange={e=>updateMat(m.id,'name',e.target.value)} style={{ ...styles.input, fontSize:12, padding:'4px 8px' }} placeholder="Material name" list={`bom-${activityId}`} />
+            <input type="number" min={0} value={m.qty} onChange={e=>updateMat(m.id,'qty',e.target.value)} style={{ ...styles.input, fontSize:12, padding:'4px 8px' }} placeholder="Qty" />
+            <input value={m.unit} onChange={e=>updateMat(m.id,'unit',e.target.value)} style={{ ...styles.input, fontSize:12, padding:'4px 8px' }} placeholder="Unit" />
+            <button onClick={()=>removeMat(m.id)} style={{ ...styles.iconBtn, color:'#B5453A' }}>×</button>
+          </div>
+        ))}
+        <datalist id={`bom-${activityId}`}>{bom.map(b=><option key={b.id} value={b.material}/>)}</datalist>
+      </div>
+
+      <div style={styles.formGroup}>
+        <label style={styles.label}>Notes / work done today</label>
+        <textarea value={form.notes} onChange={e=>set('notes',e.target.value)} style={{ ...styles.input, minHeight:60, resize:'vertical' }} placeholder="Describe work completed today..." />
+      </div>
+
+      <div style={{ display:'flex', justifyContent:'flex-end', gap:10, marginTop:8 }}>
+        <button onClick={onClose} style={styles.ghostBtn}>Cancel</button>
+        <button onClick={handleSave} style={styles.primaryBtn}>Save Daily Update</button>
+      </div>
+    </Modal>
+  );
+}
+
+
+// ─── MEP Reports View ─────────────────────────────────────────────────────────
+function MEPReportsView({ siteProjects, siteActivities, progressUpdates, employees }) {
+  const [selProject, setSelProject] = useState(siteProjects[0]?.id || '');
+  const [reportType, setReportType] = useState('manhour_summary'); // manhour_summary | emp_report | material_report
+  const [fromDate, setFromDate] = useState(() => { const d=new Date(); d.setDate(1); return d.toISOString().slice(0,10); });
+  const [toDate, setToDate] = useState(new Date().toISOString().slice(0,10));
+  const [selEmp, setSelEmp] = useState(employees[0]?.id || '');
+
+  const acts = siteActivities.filter(a => a.projectId === selProject);
+  const project = siteProjects.find(p => p.id === selProject);
+
+  const filteredUpdates = progressUpdates.filter(u =>
+    u.projectId === selProject && u.date >= fromDate && u.date <= toDate
+  );
+
+  // Manhour summary: per activity — date, mp count, manhours, progress
+  const manhourRows = acts.map(act => {
+    const logs = filteredUpdates.filter(u => u.activityId === act.id);
+    const totalMH = logs.reduce((s,u) => s + (parseFloat(u.totalManhours)||0), 0);
+    const totalMP = logs.reduce((s,u) => s + (parseFloat(u.mpCount)||0), 0);
+    const latestPct = logs.length ? Math.max(...logs.map(u=>parseFloat(u.cumProgress)||0)) : 0;
+    const villa = (project?.villas||[]).find(v=>v.id===act.villaId);
+    return { act, logs, totalMH, totalMP, latestPct, villa };
+  }).filter(r => r.logs.length > 0);
+
+  // Employee report: all logs for selected employee
+  const empLogs = filteredUpdates.filter(u =>
+    (u.empHours||[]).some(e => e.empId === selEmp)
+  ).map(u => {
+    const eh = (u.empHours||[]).find(e=>e.empId===selEmp);
+    const act = siteActivities.find(a=>a.id===u.activityId);
+    const villa = (project?.villas||[]).find(v=>v.id===act?.villaId);
+    return { date:u.date, actName:act?.name||'—', villa:villa?.name||'', discipline:act?.discipline||'', hours:eh?.hours||0, notes:u.notes||'' };
+  }).sort((a,b)=>a.date.localeCompare(b.date));
+
+  // Material report: per activity → per material consumed in period
+  const matRows = acts.map(act => {
+    const logs = filteredUpdates.filter(u => u.activityId === act.id);
+    const mats = {};
+    logs.forEach(u => (u.materialConsumed||[]).forEach(m => {
+      if (!m.name) return;
+      if (!mats[m.name]) mats[m.name] = { unit: m.unit, qty: 0 };
+      mats[m.name].qty += parseFloat(m.qty)||0;
+    }));
+    const villa = (project?.villas||[]).find(v=>v.id===act.villaId);
+    return { act, villa, mats: Object.entries(mats).map(([name,v])=>({name,...v})) };
+  }).filter(r => r.mats.length > 0);
+
+  const selectedEmp = employees.find(e=>e.id===selEmp);
+  const empTotalHours = empLogs.reduce((s,r)=>s+r.hours,0);
+
+  return (
+    <div style={styles.page}>
+      <div style={{ display:'flex', justifyContent:'space-between', alignItems:'flex-start', marginBottom:16, flexWrap:'wrap', gap:10 }}>
+        <div>
+          <h2 className="serif" style={styles.h2}>MEP Reports</h2>
+          <p style={styles.muted}>Manhour, manpower & material reports for selected period</p>
+        </div>
+        <button onClick={()=>window.print()} style={{ ...styles.ghostBtn, gap:6 }}>🖨 Print / PDF</button>
+      </div>
+
+      {/* Filters */}
+      <div style={{ display:'flex', gap:10, flexWrap:'wrap', marginBottom:16, padding:'12px 16px', background:'#F5F3EE', borderRadius:10 }}>
+        <div style={styles.formGroup}>
+          <label style={styles.label}>Project</label>
+          <select value={selProject} onChange={e=>setSelProject(e.target.value)} style={{ ...styles.input, width:180 }}>
+            {siteProjects.map(p=><option key={p.id} value={p.id}>{p.name}</option>)}
+          </select>
+        </div>
+        <div style={styles.formGroup}>
+          <label style={styles.label}>Report type</label>
+          <select value={reportType} onChange={e=>setReportType(e.target.value)} style={{ ...styles.input, width:200 }}>
+            <option value="manhour_summary">Manhour Summary (all activities)</option>
+            <option value="emp_report">Employee Report (one person)</option>
+            <option value="material_report">Material Consumption</option>
+          </select>
+        </div>
+        {reportType === 'emp_report' && (
+          <div style={styles.formGroup}>
+            <label style={styles.label}>Employee</label>
+            <select value={selEmp} onChange={e=>setSelEmp(e.target.value)} style={{ ...styles.input, width:160 }}>
+              {employees.map(e=><option key={e.id} value={e.id}>{e.name}</option>)}
+            </select>
+          </div>
+        )}
+        <div style={styles.formGroup}>
+          <label style={styles.label}>From</label>
+          <input type="date" value={fromDate} onChange={e=>setFromDate(e.target.value)} style={{ ...styles.input, width:140 }} />
+        </div>
+        <div style={styles.formGroup}>
+          <label style={styles.label}>To</label>
+          <input type="date" value={toDate} onChange={e=>setToDate(e.target.value)} style={{ ...styles.input, width:140 }} />
+        </div>
+      </div>
+
+      {/* ── MANHOUR SUMMARY ── */}
+      {reportType === 'manhour_summary' && (
+        <div>
+          <div style={{ ...styles.dashSection, marginBottom:12 }}>Manhour Summary · {fromDate} to {toDate}</div>
+          {manhourRows.length === 0
+            ? <div style={styles.emptyBox}>No updates logged in this period.</div>
+            : <>
+              <table style={{ ...styles.table, fontSize:12, width:'100%' }}>
+                <thead>
+                  <tr style={{ background:'#1E2A4A', color:'#fff' }}>
+                    {['Villa/Unit','Discipline','Activity','Phase','Days worked','Total MP-days','Total Manhours','Progress %'].map(h=>(
+                      <th key={h} style={{ ...styles.th, color:'#fff', whiteSpace:'nowrap', padding:'8px 10px' }}>{h}</th>
+                    ))}
+                  </tr>
+                </thead>
+                <tbody>
+                  {manhourRows.map(({act,logs,totalMH,totalMP,latestPct,villa})=>(
+                    <tr key={act.id} style={{ borderBottom:'1px solid #EAE6DB' }}>
+                      <td style={styles.td}>{villa?.name||'Project-wide'}</td>
+                      <td style={styles.td}><span style={{ fontWeight:600, color:'#1E2A4A' }}>{act.discipline}</span></td>
+                      <td style={styles.td}>{act.name}</td>
+                      <td style={styles.td}><span style={{ fontSize:11, color:'#888' }}>{act.phase}</span></td>
+                      <td style={{ ...styles.td, textAlign:'center' }}>{logs.length}</td>
+                      <td style={{ ...styles.td, textAlign:'center' }}>{totalMP}</td>
+                      <td style={{ ...styles.td, textAlign:'center', fontWeight:700, color:'#1E2A4A' }}>{totalMH.toFixed(1)}</td>
+                      <td style={{ ...styles.td, textAlign:'center' }}>
+                        <span style={{ fontWeight:700, color:latestPct===100?'#1A7A3E':'#C9A24B' }}>{latestPct}%</span>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+                <tfoot>
+                  <tr style={{ background:'#F5F3EE', fontWeight:700 }}>
+                    <td colSpan={5} style={{ ...styles.td, textAlign:'right', color:'#888' }}>TOTAL</td>
+                    <td style={{ ...styles.td, textAlign:'center' }}>{manhourRows.reduce((s,r)=>s+r.totalMP,0)}</td>
+                    <td style={{ ...styles.td, textAlign:'center', color:'#1E2A4A' }}>{manhourRows.reduce((s,r)=>s+r.totalMH,0).toFixed(1)}</td>
+                    <td style={styles.td}></td>
+                  </tr>
+                </tfoot>
+              </table>
+              {/* Daily breakdown */}
+              <div style={{ marginTop:20 }}>
+                <div style={{ ...styles.dashSection, marginBottom:8 }}>Daily Log Detail</div>
+                {manhourRows.map(({act,logs,villa})=>(
+                  <div key={act.id} style={{ marginBottom:16 }}>
+                    <div style={{ fontWeight:700, fontSize:12, color:'#1E2A4A', marginBottom:4 }}>
+                      {villa?.name ? villa.name+' — ' : ''}{act.discipline} · {act.name}
+                    </div>
+                    <table style={{ ...styles.table, fontSize:11, width:'100%' }}>
+                      <thead>
+                        <tr style={{ background:'#F5F3EE' }}>
+                          {['Date','MP count','Manhours','Progress %','Notes'].map(h=>(
+                            <th key={h} style={{ ...styles.th, padding:'5px 8px' }}>{h}</th>
+                          ))}
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {logs.sort((a,b)=>a.date.localeCompare(b.date)).map(u=>(
+                          <tr key={u.id} style={{ borderBottom:'1px solid #F0EDE6' }}>
+                            <td style={{ ...styles.td, padding:'5px 8px' }}>{u.date}</td>
+                            <td style={{ ...styles.td, padding:'5px 8px', textAlign:'center' }}>{u.mpCount||'—'}</td>
+                            <td style={{ ...styles.td, padding:'5px 8px', textAlign:'center', fontWeight:600 }}>{u.totalManhours||'—'}</td>
+                            <td style={{ ...styles.td, padding:'5px 8px', textAlign:'center', color:'#C9A24B', fontWeight:600 }}>{u.cumProgress}%</td>
+                            <td style={{ ...styles.td, padding:'5px 8px', color:'#666' }}>{u.notes||'—'}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                ))}
+              </div>
+            </>
+          }
+        </div>
+      )}
+
+      {/* ── EMPLOYEE REPORT ── */}
+      {reportType === 'emp_report' && (
+        <div>
+          <div style={{ ...styles.dashSection, marginBottom:12 }}>
+            {selectedEmp?.name || 'Employee'} — Work Report · {fromDate} to {toDate}
+          </div>
+          {empLogs.length === 0
+            ? <div style={styles.emptyBox}>No hours logged for this employee in the selected period.</div>
+            : <>
+              <div style={{ display:'flex', gap:16, marginBottom:12 }}>
+                <div style={{ ...styles.statCard, flex:1 }}>
+                  <div style={{ fontSize:11, color:'#888' }}>Total days worked</div>
+                  <div style={{ fontSize:22, fontWeight:700, color:'#1E2A4A' }}>{empLogs.length}</div>
+                </div>
+                <div style={{ ...styles.statCard, flex:1 }}>
+                  <div style={{ fontSize:11, color:'#888' }}>Total manhours</div>
+                  <div style={{ fontSize:22, fontWeight:700, color:'#1E7A9A' }}>{empTotalHours.toFixed(1)}</div>
+                </div>
+              </div>
+              <table style={{ ...styles.table, fontSize:12, width:'100%' }}>
+                <thead>
+                  <tr style={{ background:'#1E2A4A', color:'#fff' }}>
+                    {['Date','Villa/Unit','Discipline','Activity','Hours','Notes'].map(h=>(
+                      <th key={h} style={{ ...styles.th, color:'#fff', padding:'8px 10px' }}>{h}</th>
+                    ))}
+                  </tr>
+                </thead>
+                <tbody>
+                  {empLogs.map((r,i)=>(
+                    <tr key={i} style={{ borderBottom:'1px solid #EAE6DB' }}>
+                      <td style={styles.td}>{r.date}</td>
+                      <td style={styles.td}>{r.villa||'Project-wide'}</td>
+                      <td style={styles.td}>{r.discipline}</td>
+                      <td style={styles.td}>{r.actName}</td>
+                      <td style={{ ...styles.td, fontWeight:700, color:'#1E2A4A', textAlign:'center' }}>{r.hours}</td>
+                      <td style={{ ...styles.td, color:'#666' }}>{r.notes||'—'}</td>
+                    </tr>
+                  ))}
+                </tbody>
+                <tfoot>
+                  <tr style={{ background:'#F5F3EE', fontWeight:700 }}>
+                    <td colSpan={4} style={{ ...styles.td, textAlign:'right', color:'#888' }}>TOTAL HOURS</td>
+                    <td style={{ ...styles.td, textAlign:'center', color:'#1E2A4A', fontSize:14 }}>{empTotalHours.toFixed(1)}</td>
+                    <td style={styles.td}></td>
+                  </tr>
+                </tfoot>
+              </table>
+            </>
+          }
+        </div>
+      )}
+
+      {/* ── MATERIAL REPORT ── */}
+      {reportType === 'material_report' && (
+        <div>
+          <div style={{ ...styles.dashSection, marginBottom:12 }}>Material Consumption · {fromDate} to {toDate}</div>
+          {matRows.length === 0
+            ? <div style={styles.emptyBox}>No material consumption logged in this period.</div>
+            : matRows.map(({act,villa,mats})=>(
+              <div key={act.id} style={{ marginBottom:16 }}>
+                <div style={{ fontWeight:700, fontSize:12, color:'#1E2A4A', marginBottom:6 }}>
+                  {villa?.name ? villa.name+' — ' : ''}{act.discipline} · {act.name}
+                </div>
+                <table style={{ ...styles.table, fontSize:12, width:'100%' }}>
+                  <thead>
+                    <tr style={{ background:'#F5F3EE' }}>
+                      {['Material','Total Qty','Unit'].map(h=><th key={h} style={{ ...styles.th, padding:'6px 10px' }}>{h}</th>)}
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {mats.map((m,i)=>(
+                      <tr key={i} style={{ borderBottom:'1px solid #F0EDE6' }}>
+                        <td style={styles.td}>{m.name}</td>
+                        <td style={{ ...styles.td, fontWeight:700, color:'#1E2A4A', textAlign:'center' }}>{m.qty.toFixed(2)}</td>
+                        <td style={styles.td}>{m.unit}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            ))
+          }
+        </div>
       )}
     </div>
   );
@@ -10959,6 +11482,7 @@ export default function App() {
         return <ClientMaterialView clientMaterials={clientMaterials} setClientMaterials={setClientMaterials} siteProjects={siteProjects} employees={employees} userRole={userRole} />;
       case 'siteattendance':
         return <SiteAttendanceView siteAttendance={siteAttendance} setSiteAttendance={setSiteAttendance} siteProjects={siteProjects} employees={employees} userRole={userRole} />;
+      case 'mepreports':      return <MEPReportsView siteProjects={siteProjects} siteActivities={siteActivities} progressUpdates={progressUpdates} employees={employees} />;
       case 'evaluation':
         return <QuarterlyEvalView evaluations={evaluations} setEvaluations={setEvaluations} employees={employees} siteAttendance={siteAttendance} progressUpdates={progressUpdates} siteProjects={siteProjects} userRole={userRole} />;
       case 'isoprinciples':
