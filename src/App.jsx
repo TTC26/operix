@@ -9547,7 +9547,7 @@ function DailyUpdateModal({ activityId, activity, project, progressUpdates, setP
     });
   }
 
-  function addMaterial() { setForm(p=>({...p, materialConsumed:[...p.materialConsumed,{id:crypto.randomUUID(),name:'',qty:'',unit:'nos'}]})); }
+  function addMaterial() { setForm(p=>({...p, materialConsumed:[...p.materialConsumed,{id:Date.now().toString(36)+Math.random().toString(36).slice(2),name:'',qty:'',unit:'nos'}]})); }
   function updateMat(id,k,v) { setForm(p=>({...p,materialConsumed:p.materialConsumed.map(m=>m.id===id?{...m,[k]:v}:m)})); }
   function removeMat(id) { setForm(p=>({...p,materialConsumed:p.materialConsumed.filter(m=>m.id!==id)})); }
 
