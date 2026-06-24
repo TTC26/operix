@@ -295,6 +295,154 @@ function Modal({ children, onClose, title, wide }) {
   );
 }
 
+
+// ─── Onboarding Setup ──────────────────────────────────────────────────────────
+function OnboardingSetup({ setBusinessInfo }) {
+  const [step, setStep] = React.useState(1);
+  const [country, setCountry] = React.useState('india');
+  const [countrySearch, setCountrySearch] = React.useState('');
+  const [activeTypes, setActiveTypes] = React.useState(['trading']);
+
+  function finish() {
+    const cc = COUNTRY_CONFIG[country] || COUNTRY_CONFIG.other;
+    setBusinessInfo(p => ({
+      ...p,
+      country,
+      taxRate: (p && p.taxRate != null) ? p.taxRate : cc.defaultTaxRate,
+      activeTypes,
+      companyType: activeTypes[0],
+    }));
+  }
+
+  const BIZ_TYPES = [
+    { id: 'trading',       icon: '🛒', label: 'Trading / Distribution', desc: 'Buy & sell goods — quotations, invoices, purchase orders, delivery notes, stock management' },
+    { id: 'manufacturing', icon: '🏭', label: 'Manufacturing',          desc: 'Produce goods — BOM, raw materials, production orders, quality assurance' },
+    { id: 'service',       icon: '🔧', label: 'Services / MEP',         desc: 'Project-based work — site projects, activity planning, manpower, attendance, MEP reports' },
+  ];
+
+  const filteredCountries = Object.entries(COUNTRY_CONFIG).filter(([id, cfg]) =>
+    !countrySearch ||
+    (cfg.label || '').toLowerCase().includes(countrySearch.toLowerCase()) ||
+    id.toLowerCase().includes(countrySearch.toLowerCase())
+  );
+
+  const cardStyle = {
+    minHeight: '100vh', background: 'linear-gradient(135deg, #1E2A4A 0%, #2D3E6A 100%)',
+    display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 24,
+    fontFamily: "'Inter', sans-serif",
+  };
+  const panelStyle = {
+    width: '100%', maxWidth: 540, background: '#FAF8F4', borderRadius: 20,
+    padding: '40px 44px', boxShadow: '0 24px 80px rgba(0,0,0,0.35)',
+  };
+  const btnPrimary = {
+    width: '100%', padding: '13px', background: '#1E2A4A', color: '#fff',
+    border: 'none', borderRadius: 10, fontSize: 15, fontWeight: 600, cursor: 'pointer',
+  };
+  const btnGhost = {
+    flex: 1, padding: '13px', background: '#fff', color: '#1E2A4A',
+    border: '1px solid #DDD8CE', borderRadius: 10, fontSize: 14, fontWeight: 600, cursor: 'pointer',
+  };
+
+  return (
+    <div style={cardStyle}>
+      <div style={panelStyle}>
+        {/* Logo row */}
+        <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 32 }}>
+          <div style={{ width: 38, height: 38, borderRadius: 10, background: '#C9A24B', color: '#1E2A4A', display: 'flex', alignItems: 'center', justifyContent: 'center', fontWeight: 700, fontFamily: 'Georgia, serif', fontSize: 20 }}>O</div>
+          <div>
+            <div style={{ fontFamily: 'Georgia, serif', fontWeight: 700, fontSize: 18, color: '#1E2A4A' }}>Welcome to Operix</div>
+            <div style={{ fontSize: 12, color: '#888' }}>Set up your business profile to get started</div>
+          </div>
+        </div>
+
+        {/* Progress bar */}
+        <div style={{ display: 'flex', gap: 8, marginBottom: 32 }}>
+          {[1, 2].map(s => (
+            <div key={s} style={{ flex: 1, height: 4, borderRadius: 2, background: s <= step ? '#1E2A4A' : '#EAE6DB' }} />
+          ))}
+        </div>
+
+        {step === 1 && (
+          <>
+            <div style={{ fontFamily: 'Georgia, serif', fontSize: 20, fontWeight: 700, color: '#1E2A4A', marginBottom: 6 }}>Where is your business based?</div>
+            <div style={{ fontSize: 13, color: '#888', marginBottom: 20 }}>Sets your currency, tax system, and document format.</div>
+
+            <input
+              value={countrySearch}
+              onChange={e => setCountrySearch(e.target.value)}
+              placeholder="Search country..."
+              style={{ width: '100%', border: '1px solid #DDD8CE', borderRadius: 8, padding: '9px 14px', fontSize: 13, marginBottom: 10, outline: 'none', boxSizing: 'border-box' }}
+            />
+            <div style={{ border: '1px solid #EAE6DB', borderRadius: 10, maxHeight: 280, overflowY: 'auto', background: '#fff' }}>
+              {filteredCountries.map(([id, cfg]) => (
+                <div key={id} onClick={() => setCountry(id)} style={{
+                  display: 'flex', alignItems: 'center', gap: 12, padding: '10px 14px',
+                  cursor: 'pointer', borderBottom: '1px solid #F5F3EE',
+                  background: country === id ? '#EFF4FF' : 'transparent',
+                }}>
+                  <span style={{ fontSize: 20 }}>{cfg.flag}</span>
+                  <div style={{ flex: 1 }}>
+                    <div style={{ fontWeight: country === id ? 700 : 500, fontSize: 13, color: '#1E2A4A' }}>{cfg.label}</div>
+                    <div style={{ fontSize: 11, color: '#888' }}>{(cfg.currency || '').trim()}{cfg.hasTax ? ` · ${cfg.taxLabel} ${cfg.defaultTaxRate}%` : ' · No tax'}</div>
+                  </div>
+                  {country === id && <span style={{ color: '#1E2A4A', fontWeight: 800 }}>✓</span>}
+                </div>
+              ))}
+            </div>
+
+            <button onClick={() => setStep(2)} style={{ ...btnPrimary, marginTop: 24 }}>
+              Continue →
+            </button>
+          </>
+        )}
+
+        {step === 2 && (
+          <>
+            <div style={{ fontFamily: 'Georgia, serif', fontSize: 20, fontWeight: 700, color: '#1E2A4A', marginBottom: 6 }}>What does your business do?</div>
+            <div style={{ fontSize: 13, color: '#888', marginBottom: 20 }}>Select one or more. You can adjust this later in Settings.</div>
+
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+              {BIZ_TYPES.map(t => {
+                const on = activeTypes.includes(t.id);
+                return (
+                  <div key={t.id} onClick={() => {
+                    const next = on ? activeTypes.filter(x => x !== t.id) : [...activeTypes, t.id];
+                    if (next.length) setActiveTypes(next);
+                  }} style={{
+                    display: 'flex', alignItems: 'flex-start', gap: 14, padding: '14px 16px',
+                    border: on ? '2px solid #1E2A4A' : '2px solid #EAE6DB',
+                    borderRadius: 12, cursor: 'pointer', background: on ? '#F0EFE9' : '#fff',
+                  }}>
+                    <div style={{ width: 22, height: 22, borderRadius: 5, border: on ? '2px solid #1E2A4A' : '2px solid #BDB9B0', background: on ? '#1E2A4A' : '#fff', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0, marginTop: 2 }}>
+                      {on && <span style={{ color: '#fff', fontSize: 13, fontWeight: 700 }}>✓</span>}
+                    </div>
+                    <div>
+                      <div style={{ fontWeight: 600, fontSize: 14, color: '#1E2A4A', marginBottom: 3 }}>{t.icon} {t.label}</div>
+                      <div style={{ fontSize: 12, color: '#888780', lineHeight: 1.5 }}>{t.desc}</div>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+
+            <div style={{ display: 'flex', gap: 10, marginTop: 28 }}>
+              <button onClick={() => setStep(1)} style={btnGhost}>← Back</button>
+              <button
+                onClick={finish}
+                disabled={!activeTypes.length}
+                style={{ flex: 2, padding: '13px', background: activeTypes.length ? '#1E2A4A' : '#9AA5C0', color: '#fff', border: 'none', borderRadius: 10, fontSize: 15, fontWeight: 600, cursor: activeTypes.length ? 'pointer' : 'not-allowed' }}
+              >
+                Launch Operix 🚀
+              </button>
+            </div>
+          </>
+        )}
+      </div>
+    </div>
+  );
+}
+
 // ─── Auth ──────────────────────────────────────────────────────
 
 function AuthScreen() {
@@ -858,7 +1006,7 @@ function TemplateMiniPreview({ template, name }) {
 }
 
 
-function SettingsView({ businessInfo, setBusinessInfo, onExportData, onSaved }) {
+function SettingsView({ businessInfo, setBusinessInfo, onExportData, onSaved, userRole = 'admin' }) {
   const [form, setForm] = useState(businessInfo);
   const [saved, setSaved] = useState(false);
   useEffect(() => setForm(businessInfo), [businessInfo]);
@@ -973,6 +1121,7 @@ function SettingsView({ businessInfo, setBusinessInfo, onExportData, onSaved }) 
           <div style={{ ...styles.muted, fontSize:11.5, marginTop:4 }}>PNG or JPG · Max 1.5 MB · Full A4-width footer image (2480 × 200 px recommended). Appears at the bottom of printed documents.</div>
         </div>
 
+        {userRole === 'admin' && (<>
         <div style={{ ...styles.sectionDivider, marginTop: 8 }}>Region &amp; Tax</div>
 
         <div style={styles.formGroup}>
@@ -1093,6 +1242,7 @@ function SettingsView({ businessInfo, setBusinessInfo, onExportData, onSaved }) 
             </button>
           </div>
         </div>
+        </>)}
 
         <div style={styles.formGroup}>
           <label style={styles.label}>Print template</label>
@@ -11591,6 +11741,7 @@ export default function App() {
   const [authReady,        setAuthReady]       = useState(false);
   const [userRole,         setUserRole]        = useState('admin');
   const [syncStatus,       setSyncStatus]      = useState('synced');
+  const [biReady,          setBiReady]         = useState(false);
   const [editingCustomer,  setEditingCustomer] = useState(null);
   const [editingVendor,    setEditingVendor]   = useState(null);
   const [editingItem,      setEditingItem]     = useState(null);
@@ -11661,6 +11812,7 @@ export default function App() {
     if (!ownerUid) return;
     const unsub = subscribeCompanyData(ownerUid, (data) => {
       setSyncStatus('synced');
+      setBiReady(true);
       _setBi(data.businessInfo || {});
       _setDocs(data.documents || []);
       _setCusts(data.customers || []);
@@ -11903,6 +12055,10 @@ export default function App() {
   );
   if (!user) return <AuthScreen />;
   if (user && !user.emailVerified) return <VerifyEmailScreen user={user} onLogout={handleLogout} />;
+  // Onboarding: new owner who hasn't set country yet
+  if (biReady && ownerUid && user?.uid === ownerUid && userRole === 'admin' && !businessInfo.country) {
+    return <OnboardingSetup setBusinessInfo={setBusinessInfo} />;
+  }
 
   // ── Content router ───────────────────────────────────────────────────────────
   function renderContent() {
@@ -11993,7 +12149,7 @@ export default function App() {
       case 'staff':
         return <StaffPage ownerUid={ownerUid} employees={employees} />;
       case 'settings':
-        return <SettingsView businessInfo={businessInfo} setBusinessInfo={setBusinessInfo} onExportData={exportAllData} onSaved={() => setView('dashboard')} />;
+        return <SettingsView businessInfo={businessInfo} setBusinessInfo={setBusinessInfo} onExportData={exportAllData} onSaved={() => setView('dashboard')} userRole={userRole} />;
       case 'pettycash':
         return (
           <PettyCashList
