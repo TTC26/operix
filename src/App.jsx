@@ -878,6 +878,15 @@ function SettingsView({ businessInfo, setBusinessInfo, onExportData, onSaved }) 
     reader.readAsDataURL(file);
   }
 
+  function handleLetterheadFooterUpload(e) {
+    const file = e.target.files[0];
+    if (!file) return;
+    if (file.size > 1500 * 1024) { alert('Please choose an image under 1.5 MB.'); return; }
+    const reader = new FileReader();
+    reader.onload = () => setForm(p => ({ ...p, letterheadFooter: reader.result }));
+    reader.readAsDataURL(file);
+  }
+
   function handleLogoUpload(e) {
     const file = e.target.files[0];
     if (!file) return;
@@ -950,6 +959,18 @@ function SettingsView({ businessInfo, setBusinessInfo, onExportData, onSaved }) 
           <input type="file" accept="image/*" onChange={handleLetterheadUpload} style={styles.input} />
           {form.letterhead && <button onClick={()=>setForm(p=>({...p,letterhead:''}))} style={{ ...styles.ghostBtn, marginTop:6, fontSize:12 }}>Remove Letterhead</button>}
           <div style={{ ...styles.muted, fontSize:11.5, marginTop:4 }}>PNG or JPG · Max 1.5 MB · Full A4-width header image (2480 × 350 px recommended). Used when printing contracts with letterhead.</div>
+        </div>
+
+        <div style={styles.formGroup}>
+          <label style={styles.label}>Letterhead Footer Image</label>
+          {form.letterheadFooter && (
+            <div style={{ marginBottom: 8, border:'1px solid #EAE6DB', borderRadius:8, overflow:'hidden', maxWidth:400 }}>
+              <img src={form.letterheadFooter} alt="Letterhead footer preview" style={{ width:'100%', maxHeight:100, objectFit:'contain', background:'#fff' }} />
+            </div>
+          )}
+          <input type="file" accept="image/*" onChange={handleLetterheadFooterUpload} style={styles.input} />
+          {form.letterheadFooter && <button onClick={()=>setForm(p=>({...p,letterheadFooter:''}))} style={{ ...styles.ghostBtn, marginTop:6, fontSize:12 }}>Remove Footer</button>}
+          <div style={{ ...styles.muted, fontSize:11.5, marginTop:4 }}>PNG or JPG · Max 1.5 MB · Full A4-width footer image (2480 × 200 px recommended). Appears at the bottom of printed documents.</div>
         </div>
 
         <div style={{ ...styles.sectionDivider, marginTop: 8 }}>Region &amp; Tax</div>
@@ -2846,7 +2867,7 @@ function DocEditor({ doc, setDoc, customers, vendors, items, businessInfo, userR
         <div style={styles.preview} className="print-area">
           {useLH && businessInfo?.letterhead && (
             <div style={{ marginBottom: 16, paddingBottom: 12, borderBottom: '2px solid #1E2A4A' }}>
-              <img src={businessInfo.letterhead} alt="letterhead" style={{ width: '100%', display: 'block' }} />
+              <img src={businessInfo.letterhead} alt="letterhead" style={{ width: '100%', maxHeight: '200px', objectFit: 'contain', objectPosition: 'top', display: 'block' }} />
             </div>
           )}
           {/* ── DRAFT watermark — visible on screen + print when not approved ── */}
@@ -3416,6 +3437,11 @@ function DocEditor({ doc, setDoc, customers, vendors, items, businessInfo, userR
               </div>
             </div>
           </div>
+          {useLH && businessInfo?.letterheadFooter && (
+            <div style={{ marginTop: 28, paddingTop: 12, borderTop: '2px solid #1E2A4A' }}>
+              <img src={businessInfo.letterheadFooter} alt="letterhead footer" style={{ width:'100%', maxHeight:'120px', objectFit:'contain', objectPosition:'bottom', display:'block' }} />
+            </div>
+          )}
           </>)}
         </div>
       </div>
@@ -3697,7 +3723,7 @@ function StatementPanel({ rows, openingBalance, businessInfo, onClose }) {
         <button style={styles.primaryBtn} onClick={() => window.print()}><Printer size={15} /> Print</button>
       </div>
       <div className="print-area" style={{ position: 'fixed', inset: 0, background: '#fff', zIndex: 999, overflowY: 'auto', padding: '40px 56px' }}>
-        {useLH && businessInfo?.letterhead && <div style={{ textAlign:'center', marginBottom:16, paddingBottom:12, borderBottom:'2px solid #1E2A4A' }}><img src={businessInfo.letterhead} alt="letterhead" style={{ width:'100%', display:'block' }} /></div>}
+        {useLH && businessInfo?.letterhead && <div style={{ textAlign:'center', marginBottom:16, paddingBottom:12, borderBottom:'2px solid #1E2A4A' }}><img src={businessInfo.letterhead} alt="letterhead" style={{ width:'100%', maxHeight:'200px', objectFit:'contain', objectPosition:'top', display:'block' }} /></div>}
         {/* Header */}
         <div style={{ borderBottom: '2px solid #1E2A4A', paddingBottom: 12, marginBottom: 20, display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
           {!useLH && <div>
@@ -3741,6 +3767,11 @@ function StatementPanel({ rows, openingBalance, businessInfo, onClose }) {
         <div style={{ marginTop: 20, textAlign: 'right', fontSize: 14, fontWeight: 700, color: '#1E2A4A', borderTop: '2px solid #1E2A4A', paddingTop: 10 }}>
           Closing Balance: {fmtStmt(ledger.length ? ledger[ledger.length - 1].runningBalance : openingBalance)}
         </div>
+        {useLH && businessInfo?.letterheadFooter && (
+          <div style={{ marginTop: 20, paddingTop: 12, borderTop: '2px solid #1E2A4A' }}>
+            <img src={businessInfo.letterheadFooter} alt="letterhead footer" style={{ width:'100%', maxHeight:'120px', objectFit:'contain', objectPosition:'bottom', display:'block' }} />
+          </div>
+        )}
       </div>
     </div>
   );
@@ -4045,7 +4076,7 @@ function VoucherPrintHeader({ businessInfo, useLH }) {
   if (useLH && businessInfo?.letterhead) {
     return (
       <div style={{ textAlign: 'center', marginBottom: 16, paddingBottom: 12, borderBottom: '2px solid #1E2A4A' }}>
-        <img src={businessInfo.letterhead} alt="letterhead" style={{ width: '100%', display: 'block' }} />
+        <img src={businessInfo.letterhead} alt="letterhead" style={{ width: '100%', maxHeight: '200px', objectFit: 'contain', objectPosition: 'top', display: 'block' }} />
       </div>
     );
   }
@@ -4510,7 +4541,6 @@ function BinCard({ items, stockLedger, businessInfo }) {
           <div style={{ fontSize: 13, color: '#888780' }}>Stock movement card per item</div>
         </div>
         {businessInfo?.letterhead && <button onClick={() => setUseLHBin(v => !v)} style={{ ...styles.ghostBtn, ...(useLHBin ? { background: '#EEF2FF', color: '#3D52A0', fontWeight: 600 } : {}) }}>📃 {useLHBin ? 'Letterhead ON' : 'Use Letterhead'}</button>}
-        {businessInfo?.letterhead && <button onClick={() => setUseLHBin(v=>!v)} style={{ ...styles.ghostBtn, ...(useLHBin?{background:'#EEF2FF',color:'#3D52A0',fontWeight:600}:{}) }}>📃 {useLHBin?'Letterhead ON':'Use Letterhead'}</button>}
         <button onClick={() => window.print()} style={styles.primaryBtn}>🖨 Print</button>
       </div>
 
@@ -4524,7 +4554,7 @@ function BinCard({ items, stockLedger, businessInfo }) {
 
       {/* Print header */}
       <div className="print-only" style={{ marginBottom: 16 }}>
-        {useLHBin && businessInfo?.letterhead && <div style={{ textAlign:'center', marginBottom:12, paddingBottom:10, borderBottom:'2px solid #1E2A4A' }}><img src={businessInfo.letterhead} alt="letterhead" style={{ width:'100%', display:'block' }} /></div>}
+        {useLHBin && businessInfo?.letterhead && <div style={{ textAlign:'center', marginBottom:12, paddingBottom:10, borderBottom:'2px solid #1E2A4A' }}><img src={businessInfo.letterhead} alt="letterhead" style={{ width:'100%', maxHeight:'200px', objectFit:'contain', objectPosition:'top', display:'block' }} /></div>}
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
           {!useLHBin && <div>
             <div style={{ fontWeight: 700, fontSize: 18 }}>{businessInfo.name}</div>
@@ -4588,6 +4618,11 @@ function BinCard({ items, stockLedger, businessInfo }) {
           ))}
         </tbody>
       </table>
+      {useLHBin && businessInfo?.letterheadFooter && (
+        <div className="print-only" style={{ marginTop: 20, paddingTop: 12, borderTop: '2px solid #1E2A4A' }}>
+          <img src={businessInfo.letterheadFooter} alt="letterhead footer" style={{ width:'100%', maxHeight:'120px', objectFit:'contain', objectPosition:'bottom', display:'block' }} />
+        </div>
+      )}
       <style>{`.print-only { display: none; } @media print { .print-only { display: block !important; } }`}</style>
     </div>
   );
@@ -5344,7 +5379,7 @@ function PaySlipPrint({ run, businessInfo, onClose }) {
         <button style={styles.primaryBtn} onClick={() => window.print()}><Printer size={15}/> Print</button>
       </div>
       <div className="print-area" style={{ position: 'fixed', inset: 0, background: '#fff', zIndex: 999, overflowY: 'auto', padding: '40px 48px' }}>
-        {useLH && businessInfo?.letterhead && <div style={{ textAlign:'center', marginBottom:16, paddingBottom:12, borderBottom:'2px solid #1E2A4A' }}><img src={businessInfo.letterhead} alt="letterhead" style={{ width:'100%', display:'block' }} /></div>}
+        {useLH && businessInfo?.letterhead && <div style={{ textAlign:'center', marginBottom:16, paddingBottom:12, borderBottom:'2px solid #1E2A4A' }}><img src={businessInfo.letterhead} alt="letterhead" style={{ width:'100%', maxHeight:'200px', objectFit:'contain', objectPosition:'top', display:'block' }} /></div>}
         <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 20, borderBottom: '2px solid #1E2A4A', paddingBottom: 12 }}>
           {!useLH && <div>
             <div className="serif" style={{ fontWeight: 700, fontSize: 20, color: '#1E2A4A' }}>{businessInfo.name}</div>
@@ -5428,7 +5463,7 @@ function IndividualPaySlips({ run, businessInfo, onClose }) {
       <div className="print-area" style={{ position: 'fixed', inset: 0, background: '#fff', zIndex: 999, overflowY: 'auto' }}>
         {lines.map((l, i) => (
           <div key={i} style={{ padding: '36px 48px', pageBreakAfter: i < lines.length - 1 ? 'always' : 'auto', borderBottom: i < lines.length - 1 ? '3px dashed #EAE6DB' : 'none' }}>
-            {useLH && businessInfo?.letterhead && <div style={{ textAlign:'center', marginBottom:12, paddingBottom:10, borderBottom:'2px solid #1E2A4A' }}><img src={businessInfo.letterhead} alt="letterhead" style={{ width:'100%', display:'block' }} /></div>}
+            {useLH && businessInfo?.letterhead && <div style={{ textAlign:'center', marginBottom:12, paddingBottom:10, borderBottom:'2px solid #1E2A4A' }}><img src={businessInfo.letterhead} alt="letterhead" style={{ width:'100%', maxHeight:'200px', objectFit:'contain', objectPosition:'top', display:'block' }} /></div>}
             {/* Header */}
             <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 16, paddingBottom: 10 }}>
               {!useLH && <div>
@@ -5761,7 +5796,7 @@ function ServiceOrderPrint({ order, businessInfo, onClose }) {
           </div>
         </div>
         <div className="print-area" style={{ background: '#fff', padding: 32, fontFamily: 'Georgia, serif' }}>
-          {useLH && businessInfo?.letterhead && <div style={{ textAlign:'center', marginBottom:20, paddingBottom:14, borderBottom:'2px solid #1E2A4A' }}><img src={businessInfo.letterhead} alt="letterhead" style={{ width:'100%', display:'block' }} /></div>}
+          {useLH && businessInfo?.letterhead && <div style={{ textAlign:'center', marginBottom:20, paddingBottom:14, borderBottom:'2px solid #1E2A4A' }}><img src={businessInfo.letterhead} alt="letterhead" style={{ width:'100%', maxHeight:'200px', objectFit:'contain', objectPosition:'top', display:'block' }} /></div>}
           <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 28 }}>
             {!useLH && <div>
               <div style={{ fontSize: 22, fontWeight: 700 }}>{businessInfo.name || 'Company Name'}</div>
@@ -8036,7 +8071,7 @@ function blankContract() {
   };
 }
 
-function ContractList({ contracts, setContracts, customers, documents, termsLibrary, businessInfo, userRole }) {
+function ContractList({ contracts, setContracts, customers, vendors, documents, termsLibrary, businessInfo, userRole }) {
   const [editing, setEditing] = useState(null); // null | contract obj | 'new'
   const [printing, setPrinting] = useState(null);
   const [search, setSearch] = useState('');
@@ -8076,6 +8111,7 @@ function ContractList({ contracts, setContracts, customers, documents, termsLibr
     <ContractEditor
       contract={editing === 'new' ? { ...blankContract(), number: nextConNum(), _isNew: true } : editing}
       customers={customers}
+      vendors={vendors || []}
       documents={documents || []}
       termsLibrary={termsLibrary}
       businessInfo={businessInfo}
@@ -8141,7 +8177,7 @@ function ContractList({ contracts, setContracts, customers, documents, termsLibr
   );
 }
 
-function ContractEditor({ contract, customers, documents, termsLibrary, businessInfo, userRole, onSave, onBack }) {
+function ContractEditor({ contract, customers, vendors, documents, termsLibrary, businessInfo, userRole, onSave, onBack }) {
   const [form, setForm] = useState(contract);
   const set = (k, v) => setForm(p => ({ ...p, [k]: v }));
   const setScope = (section, field, val) => setForm(p => ({ ...p, scope: { ...p.scope, [section]: { ...p.scope[section], [field]: val } } }));
@@ -8200,13 +8236,15 @@ function ContractEditor({ contract, customers, documents, termsLibrary, business
       <div style={{ marginTop: 14 }}>
         <label style={labelStyle}>Customer / Client (Vendor)</label>
         <select value={form.customerId} onChange={e => {
-          const c = customers.find(x => x.id === e.target.value);
+          const allParties = [...(customers||[]), ...(vendors||[])];
+          const c = allParties.find(x => x.id === e.target.value);
           set('customerId', e.target.value);
           set('customerSnapshot', c || null);
           if (c?.taxId && !form.vendorGst) set('vendorGst', c.taxId);
         }} style={inputStyle}>
-          <option value="">— Select customer —</option>
-          {customers.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
+          <option value="">— Select customer / vendor —</option>
+          {(customers||[]).length > 0 && <optgroup label="Customers">{customers.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}</optgroup>}
+          {(vendors||[]).length > 0 && <optgroup label="Vendors">{vendors.map(v => <option key={v.id} value={v.id}>{v.name}</option>)}</optgroup>}
         </select>
       </div>
 
@@ -8218,7 +8256,7 @@ function ContractEditor({ contract, customers, documents, termsLibrary, business
           set('poRefNumber', po?.number || '');
         }} style={inputStyle}>
           <option value="">— None / not linked to a PO —</option>
-          {(documents||[]).filter(d => d.type === 'purchase_order' || d.type === 'po').map(po => (
+          {(documents||[]).filter(d => d.type === 'purchase' || d.type === 'purchase_order' || d.type === 'po').map(po => (
             <option key={po.id} value={po.id}>{po.number}{po.customerSnapshot?.name ? ` — ${po.customerSnapshot.name}` : ''}{po.date ? ` (${po.date})` : ''}</option>
           ))}
         </select>
@@ -8229,7 +8267,7 @@ function ContractEditor({ contract, customers, documents, termsLibrary, business
       <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:16 }}>
         <div style={{ background:'#F5F3EE', borderRadius:8, padding:'14px 16px' }}>
           <div style={{ fontWeight:700, fontSize:12, color:'#1E2A4A', marginBottom:10 }}>BUYER (Your Company)</div>
-          <div style={{ fontSize:12, color:'#555', marginBottom:6 }}><b>{businessInfo?.companyName || '—'}</b></div>
+          <div style={{ fontSize:12, color:'#555', marginBottom:6 }}><b>{businessInfo?.name || businessInfo?.companyName || '—'}</b></div>
           <div style={{ fontSize:11, color:'#888', marginBottom:8 }}>{businessInfo?.address || ''}</div>
           {(businessInfo?.country === 'india' || businessInfo?.country === 'India') && (
             <div style={styles.formGroup}>
@@ -8419,11 +8457,12 @@ function ContractPrint({ contract: c, businessInfo: bi, termsLibrary, onBack }) 
   const totalVal = c.contractValue || enabledScopes.reduce((s,sc)=>s+(parseFloat(c.scope?.[sc.key]?.value)||0),0);
 
   function handlePrint() {
-    const lhImg = useLH && bi?.letterhead ? `<img src="${bi.letterhead}" style="width:100%;display:block;margin-bottom:8px;" />` : '';
+    const lhImg = useLH && bi?.letterhead ? `<img src="${bi.letterhead}" style="width:100%;max-height:200px;object-fit:contain;object-position:top;display:block;margin-bottom:8px;" />` : '';
+    const lhFooterImg = useLH && bi?.letterheadFooter ? `<div style="margin-top:20px;padding-top:12px;border-top:2px solid #1E2A4A;"><img src="${bi.letterheadFooter}" style="width:100%;max-height:120px;object-fit:contain;object-position:bottom;display:block;" /></div>` : '';
     const companyHeader = !lhImg ? `
       <div style="text-align:center;border-bottom:2px solid #1E2A4A;padding-bottom:16px;margin-bottom:24px;">
         ${bi?.logo ? `<img src="${bi.logo}" style="height:60px;object-fit:contain;display:block;margin:0 auto 8px;" />` : ''}
-        <div style="font-size:20px;font-weight:700;color:#1E2A4A;">${bi?.companyName||''}</div>
+        <div style="font-size:20px;font-weight:700;color:#1E2A4A;">${bi?.name||bi?.companyName||''}</div>
         <div style="font-size:11px;color:#666;margin-top:4px;">${bi?.address||''}</div>
         ${isIndia && bi?.gstin ? `<div style="font-size:11px;color:#666;">GSTIN: ${bi.gstin}</div>` : ''}
       </div>` : '';
@@ -8442,7 +8481,7 @@ function ContractPrint({ contract: c, businessInfo: bi, termsLibrary, onBack }) 
         </tr>
         <tr>
           <td style="padding:10px 12px;border:1px solid #ddd;vertical-align:top;">
-            <b>${bi?.companyName||''}</b><br/>
+            <b>${bi?.name||bi?.companyName||''}</b><br/>
             <span style="color:#555;font-size:11px;">${bi?.address||''}</span><br/>
             ${isIndia ? `<span style="font-size:11px;">GSTIN: <b>${c.buyerGst||bi?.gstin||'—'}</b></span><br/>` : ''}
             <span style="font-size:11px;">Contact: ${c.buyerContactPerson||'—'}</span>
@@ -8510,7 +8549,7 @@ function ContractPrint({ contract: c, businessInfo: bi, termsLibrary, onBack }) 
     const sigBlock = `
       <div style="margin-top:48px;border-top:1px solid #ccc;padding-top:28px;display:grid;grid-template-columns:1fr 1fr;gap:60px;font-size:12px;">
         <div>
-          <div style="font-weight:700;color:#555;margin-bottom:36px">For ${bi?.companyName||'Buyer'}</div>
+          <div style="font-weight:700;color:#555;margin-bottom:36px">For ${bi?.name||bi?.companyName||'Buyer'}</div>
           <div style="border-top:1px solid #333;padding-top:6px;">
             <b>${c.signatoryOurName||'Authorised Signatory'}</b>
             ${c.signatoryOurDesignation ? `<div style="color:#888;font-size:11px">${c.signatoryOurDesignation}</div>` : ''}
@@ -8547,12 +8586,13 @@ function ContractPrint({ contract: c, businessInfo: bi, termsLibrary, onBack }) 
       <div style="background:#f7f6f3;border:1px solid #ddd;border-radius:4px;padding:10px 16px;margin-bottom:20px;font-size:14px;font-weight:700;color:#1E2A4A;">
         Subject: ${c.title}
       </div>
-      <p style="font-size:12px;margin-bottom:16px;">This Contract Agreement is entered into between <b>${bi?.companyName||'Buyer'}</b> (hereinafter referred to as the "Buyer") and <b>${c.customerSnapshot?.name||'the Vendor'}</b> (hereinafter referred to as the "Vendor"), both parties agreeing to the terms set forth below.</p>
+      <p style="font-size:12px;margin-bottom:16px;">This Contract Agreement is entered into between <b>${bi?.name||bi?.companyName||'Buyer'}</b> (hereinafter referred to as the "Buyer") and <b>${c.customerSnapshot?.name||'the Vendor'}</b> (hereinafter referred to as the "Vendor"), both parties agreeing to the terms set forth below.</p>
       ${preamble}
       ${scopeTable}
       ${milestoneTable}
       ${termsHTML}
       ${sigBlock}
+      ${lhFooterImg}
     </body></html>`;
 
     const w = window.open('', '_blank', 'width=900,height=750');
@@ -8866,13 +8906,13 @@ function PartnerAgreement({ partner: p, termsLibrary, businessInfo: bi, document
         {linkedDocs.length > 0 && <span style={{ fontSize: 13, color: '#888' }}>{linkedDocs.length} linked document{linkedDocs.length !== 1 ? 's' : ''}</span>}
       </div>
       <div className="print-area" style={{ maxWidth: 780, margin: '28px auto', background: '#fff', padding: '48px 56px', fontFamily: 'Georgia, serif', fontSize: 13, lineHeight: 1.8, color: '#222', boxShadow: '0 2px 20px rgba(0,0,0,0.08)' }}>
-        {useLHPartner && bi?.letterhead && <div style={{ textAlign:'center', marginBottom:20, paddingBottom:14, borderBottom:'2px solid #1E2A4A' }}><img src={bi.letterhead} alt="letterhead" style={{ width:'100%', display:'block' }} /></div>}
+        {useLHPartner && bi?.letterhead && <div style={{ textAlign:'center', marginBottom:20, paddingBottom:14, borderBottom:'2px solid #1E2A4A' }}><img src={bi.letterhead} alt="letterhead" style={{ width:'100%', maxHeight:'200px', objectFit:'contain', objectPosition:'top', display:'block' }} /></div>}
         <div style={{ textAlign: 'center', borderBottom: '2px solid #1E2A4A', paddingBottom: 24, marginBottom: 32 }}>
-          {!useLHPartner && bi.companyName && <div style={{ fontSize: 22, fontWeight: 700, color: '#1E2A4A' }}>{bi.companyName}</div>}
+          {!useLHPartner && (bi.name || bi.companyName) && <div style={{ fontSize: 22, fontWeight: 700, color: '#1E2A4A' }}>{bi.name || bi.companyName}</div>}
           <div style={{ fontSize: 18, fontWeight: 700, letterSpacing: 2, marginTop: 20, color: '#1E2A4A', textTransform: 'uppercase' }}>Dealership / Channel Partner Agreement</div>
           <div style={{ fontSize: 13, color: '#888', marginTop: 6 }}>{p.number} | {p.agreementDate}</div>
         </div>
-        <p style={{ marginBottom: 24 }}>This Agreement is made between <strong>{bi.companyName || 'the Company'}</strong> and <strong>{p.name}</strong> ({p.type}), referred to as "the Partner".</p>
+        <p style={{ marginBottom: 24 }}>This Agreement is made between <strong>{bi.name || bi.companyName || 'the Company'}</strong> and <strong>{p.name}</strong> ({p.type}), referred to as "the Partner".</p>
         <div style={{ marginBottom: 20 }}>
           <div style={{ fontWeight: 700, fontSize: 13, color: '#1E2A4A', marginBottom: 8, textTransform: 'uppercase' }}>Partner Details</div>
           <table style={{ width: '100%', fontSize: 13, borderCollapse: 'collapse' }}>
@@ -8906,13 +8946,18 @@ function PartnerAgreement({ partner: p, termsLibrary, businessInfo: bi, document
           </div>
         )}
         <div style={{ marginTop: 48, borderTop: '1px solid #DDD8CE', paddingTop: 32, display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 48 }}>
-          {['For ' + (bi.companyName || 'the Company'), 'For ' + p.name].map((label, i) => (
+          {['For ' + (bi.name || bi.companyName || 'the Company'), 'For ' + p.name].map((label, i) => (
             <div key={i}>
               <div style={{ fontWeight: 700, marginBottom: 40, fontSize: 13, color: '#555' }}>{label}</div>
               <div style={{ borderTop: '1px solid #333', paddingTop: 8, color: '#888', fontSize: 12 }}>Authorised Signatory | Date: ___________</div>
             </div>
           ))}
         </div>
+        {useLHPartner && bi?.letterheadFooter && (
+          <div style={{ marginTop: 28, paddingTop: 12, borderTop: '2px solid #1E2A4A' }}>
+            <img src={bi.letterheadFooter} alt="letterhead footer" style={{ width:'100%', maxHeight:'120px', objectFit:'contain', objectPosition:'bottom', display:'block' }} />
+          </div>
+        )}
       </div>
     </div>
   );
@@ -10163,8 +10208,11 @@ function MEPReportsView({ siteProjects, siteActivities, progressUpdates, employe
     }
 
     const lhHtml = useLHMep && businessInfo?.letterhead
-      ? `<div style="text-align:center;margin-bottom:14px;padding-bottom:10px;border-bottom:2px solid #1E2A4A;"><img src="${businessInfo.letterhead}" style="width:100%;display:block;" /></div>`
+      ? `<div style="text-align:center;margin-bottom:14px;padding-bottom:10px;border-bottom:2px solid #1E2A4A;"><img src="${businessInfo.letterhead}" style="width:100%;max-height:200px;object-fit:contain;object-position:top;display:block;" /></div>`
       : `<div style="font-size:15px;font-weight:700;color:#1E2A4A;margin-bottom:2px;">${businessInfo?.name||''}</div>`;
+    const lhFooterHtml = useLHMep && businessInfo?.letterheadFooter
+      ? `<div style="margin-top:20px;padding-top:12px;border-top:2px solid #1E2A4A;"><img src="${businessInfo.letterheadFooter}" style="width:100%;max-height:120px;object-fit:contain;object-position:bottom;display:block;" /></div>`
+      : '';
     const html = `<!DOCTYPE html><html><head>
       <meta charset="utf-8"/>
       <title>${title}</title>
@@ -10187,6 +10235,7 @@ function MEPReportsView({ siteProjects, siteActivities, progressUpdates, employe
       <h1>${title}</h1>
       <div class="meta">Project: <b>${projName}</b> &nbsp;|&nbsp; Period: <b>${period}</b> &nbsp;|&nbsp; Printed: ${new Date().toLocaleDateString()}</div>
       ${tableHTML || '<p>No data available for the selected period.</p>'}
+      ${lhFooterHtml}
     </body></html>`;
 
     const w = window.open('', '_blank', 'width=1000,height=700');
@@ -11953,6 +12002,7 @@ export default function App() {
             contracts={contracts}
             setContracts={setContracts}
             customers={customers}
+            vendors={vendors}
             documents={documents}
             termsLibrary={termsLibrary}
             businessInfo={businessInfo}
