@@ -4419,6 +4419,7 @@ function VoucherSignatory({ businessInfo, leftLabel }) {
 }
 
 function VoucherPrintModal({ voucher, businessInfo, onClose }) {
+  const [useLH, setUseLH] = React.useState(!!businessInfo?.letterhead);
   const isPayment = voucher.type === 'payment';
   const cc = COUNTRY_CONFIG[businessInfo.country || 'india'];
   const fmt = (n) => currency(n, cc.currency);
@@ -4437,19 +4438,12 @@ function VoucherPrintModal({ voucher, businessInfo, onClose }) {
       {/* Controls */}
       <div className="no-print" style={{ position: 'fixed', top: 16, right: 24, zIndex: 1001, display: 'flex', gap: 8 }}>
         <button style={styles.ghostBtn} onClick={onClose}><X size={15} /> Close</button>
-        <div style={{ display:'flex', gap:8 }}>
-          <button style={styles.secondaryBtn} onClick={() => downloadCSV('tax-report-' + from + '-to-' + to + '.csv',
-            ['Type','No','Date','Party','Taxable','Tax','Total'],
-            [...invRows.map(r=>['Sales',r.number,r.date,r.party,r.subtotal.toFixed(2),r.totalTax.toFixed(2),r.grandTotal.toFixed(2)]),
-             ...purRows.map(r=>['Purchase',r.number,r.date,r.party,r.subtotal.toFixed(2),r.totalTax.toFixed(2),r.grandTotal.toFixed(2)])])
-          }><Download size={15}/> Export CSV</button>
-          {businessInfo?.letterhead && <button onClick={() => setUseLHTax(v=>!v)} style={{ ...styles.ghostBtn, ...(useLHTax?{background:'#EEF2FF',color:'#3D52A0',fontWeight:600}:{}) }}>📃 {useLHTax?'Letterhead ON':'Use Letterhead'}</button>}
-          <button style={styles.primaryBtn} onClick={() => window.print()}><Printer size={15}/> Print / PDF</button>
-        </div>
+        {businessInfo?.letterhead && <button onClick={() => setUseLH(v=>!v)} style={{ ...styles.ghostBtn, ...(useLH?{background:'#EEF2FF',color:'#3D52A0',fontWeight:600}:{}) }}>📃 {useLH?'Letterhead ON':'Use Letterhead'}</button>}
+        <button style={styles.primaryBtn} onClick={() => window.print()}><Printer size={15}/> Print / PDF</button>
       </div>
       {/* Print area — only this shows on print */}
       <div className="print-area" style={{ position: 'fixed', inset: 0, background: '#fff', zIndex: 999, overflowY: 'auto', padding: '40px 56px' }}>
-        <VoucherPrintHeader businessInfo={businessInfo} useLH={useLHTax} />
+        <VoucherPrintHeader businessInfo={businessInfo} useLH={useLH} />
         {/* Title */}
         <div style={{ textAlign: 'right', marginBottom: 20 }}>
           <div style={{ fontSize: 17, fontWeight: 700, color: isPayment ? '#B91C1C' : '#1A7A3E', letterSpacing: '0.07em' }}>
@@ -8374,8 +8368,9 @@ function TemplateModal({ template, clauses, onSave, onClose }) {
 }
 
 // ─── Contracts ────────────────────────────────────────────────────────────────
-const CONTRACT_STATUSES = ['Draft', 'Sent', 'Under Review', 'Signed', 'Active', 'Completed', 'Terminated'];
-const CONTRACT_STATUS_COLOR = { Draft: '#888', Sent: '#2563EB', 'Under Review': '#D97706', Signed: '#7C3AED', Active: '#059669', Completed: '#1E2A4A', Terminated: '#B5453A' };
+const CONTRACT_STATUSES = ['draft', 'submitted', 'approved', 'rejected', 'Signed', 'Active', 'Completed', 'Terminated'];
+const CONTRACT_STATUS_COLOR = { draft: '#888', submitted: '#2563EB', approved: '#059669', rejected: '#B5453A', Signed: '#7C3AED', Active: '#059669', Completed: '#1E2A4A', Terminated: '#B5453A' };
+const CONTRACT_STATUS_LABEL = { draft: 'Draft', submitted: 'Forwarded', approved: 'Approved', rejected: 'Rejected' };
 const SCOPE_SECTIONS = [
   { key: 'supply',          label: 'Supply' },
   { key: 'installation',    label: 'Installation' },
@@ -8396,7 +8391,8 @@ function blankContract() {
     paymentMilestones: [],
     termsTemplateId: '',
     customTerms: '',
-    status: 'Draft',
+    status: 'draft',
+    rejectionNote: '',
     signatoryOurName: '', signatoryOurDesignation: '',
     signatoryClientName: '', signatoryClientDesignation: '',
     buyerContactPerson: '', buyerGst: '',
@@ -8431,6 +8427,10 @@ function ContractList({ contracts, setContracts, customers, vendors, documents, 
   function handleDelete(id) {
     if (!window.confirm('Delete this contract?')) return;
     setContracts(prev => prev.filter(c => c.id !== id));
+  }
+
+  function updateContractStatus(id, patch) {
+    setContracts(prev => prev.map(c => c.id === id ? { ...c, ...patch } : c));
   }
 
   const filtered = contracts.filter(c => {
@@ -8497,13 +8497,14 @@ function ContractList({ contracts, setContracts, customers, vendors, documents, 
             <div style={{ flex: 1 }}>
               <div style={{ display: 'flex', gap: 10, alignItems: 'center', marginBottom: 4 }}>
                 <span style={{ fontWeight: 700, fontSize: 15, color: '#1E2A4A' }}>{c.number}</span>
-                <span style={{ background: CONTRACT_STATUS_COLOR[c.status] || '#888', color: '#fff', borderRadius: 10, padding: '2px 10px', fontSize: 11, fontWeight: 700 }}>{c.status}</span>
+                <span style={{ background: CONTRACT_STATUS_COLOR[c.status] || '#888', color: '#fff', borderRadius: 10, padding: '2px 10px', fontSize: 11, fontWeight: 700 }}>{CONTRACT_STATUS_LABEL[c.status] || c.status}</span>
                 {scopeLabels && <span style={{ fontSize: 11, color: '#888', background: '#F0EDE6', borderRadius: 8, padding: '2px 8px' }}>{scopeLabels}</span>}
               </div>
               <div style={{ fontSize: 14, fontWeight: 600, color: '#333', marginBottom: 2 }}>{c.title}</div>
               <div style={{ fontSize: 12, color: '#888' }}>{cust?.name || '—'} &nbsp;·&nbsp; {c.date} &nbsp;·&nbsp; {fmt(c.contractValue || 0)}</div>
             </div>
-            <div style={{ display: 'flex', gap: 8 }}>
+            <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+              <ApprovalActions item={c} onUpdate={(patch) => updateContractStatus(c.id, patch)} userRole={userRole} compact />
               <button onClick={() => setPrinting(c)} style={{ border: '1px solid #DDD8CE', borderRadius: 6, padding: '6px 12px', background: '#fff', fontSize: 12, cursor: 'pointer' }}><Printer size={13} style={{ marginRight: 4 }} />Print</button>
               {canEdit && <button onClick={() => setEditing(c)} style={{ border: '1px solid #DDD8CE', borderRadius: 6, padding: '6px 12px', background: '#fff', fontSize: 12, cursor: 'pointer' }}>Edit</button>}
               {canEdit && <button onClick={() => handleDelete(c.id)} style={{ border: '1px solid #F3C5C5', borderRadius: 6, padding: '6px 10px', background: '#fff', fontSize: 12, color: '#B5453A', cursor: 'pointer' }}><Trash2 size={13} /></button>}
