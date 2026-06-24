@@ -4334,17 +4334,39 @@ function VoucherForm({ voucher, customers, vendors, onSave, onClose }) {
 // Injects CSS so letterpad header/footer are fixed on every printed page
 function LetterpadPrintStyle() {
   return (
-    <style>{`@media print {
-      .lh-pad-header {
-        position: fixed !important; top: 0 !important; left: 0 !important;
-        right: 0 !important; width: 100% !important; background: white !important; z-index: 9999 !important;
+    <style>{`
+      /* ── Screen: bleed header/footer full-width out of any padded container ── */
+      @media screen {
+        .lh-pad-header {
+          margin-left: -56px !important;
+          margin-right: -56px !important;
+          margin-top: -40px !important;
+          margin-bottom: 16px;
+        }
+        .lh-pad-footer {
+          margin-left: -56px !important;
+          margin-right: -56px !important;
+          margin-bottom: -40px !important;
+          margin-top: 16px;
+        }
+        /* ContractPrint: header/footer are ALREADY outside the padded inner div,
+           so all negative margin overrides must be fully reset */
+        .contract-print-area .lh-pad-header,
+        .contract-print-area .lh-pad-footer { margin: 0 !important; }
       }
-      .lh-pad-footer {
-        position: fixed !important; bottom: 0 !important; left: 0 !important;
-        right: 0 !important; width: 100% !important; background: white !important; z-index: 9999 !important;
+      /* ── Print: fixed position so they repeat on every page ── */
+      @media print {
+        .lh-pad-header {
+          position: fixed !important; top: 0 !important; left: 0 !important;
+          right: 0 !important; width: 100% !important; background: white !important; z-index: 9999 !important;
+        }
+        .lh-pad-footer {
+          position: fixed !important; bottom: 0 !important; left: 0 !important;
+          right: 0 !important; width: 100% !important; background: white !important; z-index: 9999 !important;
+        }
+        .print-area { padding-top: 215px !important; padding-bottom: 135px !important; }
       }
-      .print-area { padding-top: 215px !important; padding-bottom: 135px !important; }
-    }`}</style>
+    `}</style>
   );
 }
 
@@ -9013,7 +9035,7 @@ function ContractPrint({ contract: c, businessInfo: bi, termsLibrary, onBack }) 
         <button onClick={handlePrint} style={{ padding: '8px 20px', background: '#1E2A4A', color: '#fff', border: 'none', borderRadius: 8, fontSize: 13, fontWeight: 600, display:'flex', alignItems:'center', gap:6 }}>🖨 Print / PDF</button>
         {c.status === 'Draft' && <span style={{ background:'#FEE2E2', color:'#B91C1C', padding:'4px 12px', borderRadius:20, fontSize:12, fontWeight:700 }}>DRAFT status — change to Approved to remove watermark</span>}
       </div>
-      <div className="print-area" style={{ maxWidth: 780, margin: '28px auto', background: '#fff', fontFamily: 'Georgia, serif', fontSize: 13, lineHeight: 1.8, color: '#222', boxShadow: '0 2px 20px rgba(0,0,0,0.08)', overflow:'hidden' }}>
+      <div className="print-area contract-print-area" style={{ maxWidth: 780, margin: '28px auto', background: '#fff', fontFamily: 'Georgia, serif', fontSize: 13, lineHeight: 1.8, color: '#222', boxShadow: '0 2px 20px rgba(0,0,0,0.08)', overflow:'hidden' }}>
         {useLH && (effLHH||effLHF) && <LetterpadPrintStyle />}
         {effLHH && <div className="lh-pad-header" style={{ borderBottom:'2px solid #1E2A4A', background:'#fff' }}><img src={effLHH} alt="letterpad header" style={{ width:'100%', display:'block', objectFit:'contain', objectPosition:'top' }} /></div>}
         <div style={{ padding: '32px 56px' }}>
