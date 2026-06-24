@@ -1206,19 +1206,19 @@ function SettingsView({ businessInfo, setBusinessInfo, onExportData, onSaved, us
         </div>
 
         <div style={styles.formGroup}>
-          <label style={styles.label}>Letterhead Image (for Contract / PO printing)</label>
+          <label style={styles.label}>Header Image <span style={{ fontWeight:400, color:'#888', fontSize:11 }}>(used automatically on all printed documents)</span></label>
           {form.letterhead && (
             <div style={{ marginBottom: 8, border:'1px solid #EAE6DB', borderRadius:8, overflow:'hidden', maxWidth:400 }}>
               <img src={form.letterhead} alt="Letterhead preview" style={{ width:'100%', maxHeight:160, objectFit:'contain', background:'#fff' }} />
             </div>
           )}
           <input type="file" accept="image/*" onChange={handleLetterheadUpload} style={styles.input} />
-          {form.letterhead && <button onClick={()=>setForm(p=>({...p,letterhead:''}))} style={{ ...styles.ghostBtn, marginTop:6, fontSize:12 }}>Remove Letterhead</button>}
-          <div style={{ ...styles.muted, fontSize:11.5, marginTop:4 }}>PNG or JPG · Max 1.5 MB · Full A4-width header image (2480 × 350 px recommended). Used when printing contracts with letterhead.</div>
+          {form.letterhead && <button onClick={()=>setForm(p=>({...p,letterhead:''}))} style={{ ...styles.ghostBtn, marginTop:6, fontSize:12 }}>Remove Header</button>}
+          <div style={{ ...styles.muted, fontSize:11.5, marginTop:4 }}>PNG or JPG · Max 1.5 MB · Recommended 2480 × 350 px. Auto-applied to all document prints (invoices, PO, contracts, etc).</div>
         </div>
 
         <div style={styles.formGroup}>
-          <label style={styles.label}>Letterhead Footer Image</label>
+          <label style={styles.label}>Footer Image <span style={{ fontWeight:400, color:'#888', fontSize:11 }}>(used automatically on all printed documents)</span></label>
           {form.letterheadFooter && (
             <div style={{ marginBottom: 8, border:'1px solid #EAE6DB', borderRadius:8, overflow:'hidden', maxWidth:400 }}>
               <img src={form.letterheadFooter} alt="Letterhead footer preview" style={{ width:'100%', maxHeight:100, objectFit:'contain', background:'#fff' }} />
@@ -1226,7 +1226,7 @@ function SettingsView({ businessInfo, setBusinessInfo, onExportData, onSaved, us
           )}
           <input type="file" accept="image/*" onChange={handleLetterheadFooterUpload} style={styles.input} />
           {form.letterheadFooter && <button onClick={()=>setForm(p=>({...p,letterheadFooter:''}))} style={{ ...styles.ghostBtn, marginTop:6, fontSize:12 }}>Remove Footer</button>}
-          <div style={{ ...styles.muted, fontSize:11.5, marginTop:4 }}>PNG or JPG · Max 1.5 MB · Full A4-width footer image (2480 × 200 px recommended). Appears at the bottom of printed documents.</div>
+          <div style={{ ...styles.muted, fontSize:11.5, marginTop:4 }}>PNG or JPG · Max 1.5 MB · Recommended 2480 × 200 px. Auto-applied to the bottom of all document prints.</div>
         </div>
 
         {userRole === 'admin' && (<>
@@ -3130,7 +3130,7 @@ function DocEditor({ doc, setDoc, customers, vendors, items, businessInfo, userR
             </div>
           )}
           {/* ── DRAFT watermark — visible on screen + print when not approved ── */}
-          {doc.status !== 'approved' && (
+          {doc.status === 'draft' && (
             <div style={{
               position: 'absolute', top: 0, left: 0, right: 0, bottom: 0,
               pointerEvents: 'none', zIndex: 9, display: 'flex',
@@ -8791,10 +8791,8 @@ function ContractPrint({ contract: c, businessInfo: bi, termsLibrary, onBack }) 
   const fmt = makeFmt(bi);
   const [useLH, setUseLH] = React.useState(!!(bi?.letterhead || bi?.letterheadFooter));
   const [orient, setOrient] = React.useState('portrait');
-  const [localLHHeader, setLocalLHHeader] = React.useState(null);
-  const [localLHFooter, setLocalLHFooter] = React.useState(null);
-  const effLHH = localLHHeader || (useLH ? bi?.letterhead : null);
-  const effLHF = localLHFooter || (useLH ? bi?.letterheadFooter : null);
+  const effLHH = useLH ? bi?.letterhead : null;
+  const effLHF = useLH ? bi?.letterheadFooter : null;
   const isIndia = (bi?.country||'').toLowerCase() === 'india';
   const isDraft = c.status !== 'Approved';
 
@@ -8961,7 +8959,7 @@ function ContractPrint({ contract: c, businessInfo: bi, termsLibrary, onBack }) 
       <meta charset="utf-8"/>
       <title>Contract — ${c.number}</title>
       <style>
-        @page { size: A4 ${orient}; margin: ${lhImg ? '220px' : '15mm'} 15mm ${lhFooterImg ? '140px' : '15mm'}; }
+        @page { size: A4 ${orient}; margin: ${lhImg ? '220px' : '15mm'} 15mm ${lhFooterImg ? '140px' : '20mm'} 15mm; ${!lhFooterImg ? `@bottom-center { content: "Page " counter(page) " of " counter(pages); font-family: Arial, sans-serif; font-size: 9px; color: #888; }` : ''} }
         body { font-family: Georgia, serif; font-size: 13px; color: #222; line-height: 1.7; }
         h3 { font-size: 14px; font-weight: 700; color: #1E2A4A; border-bottom: 1px solid #ccc;
              padding-bottom: 6px; margin: 20px 0 12px; text-transform: uppercase; letter-spacing: 0.5px; }
@@ -9001,24 +8999,9 @@ function ContractPrint({ contract: c, businessInfo: bi, termsLibrary, onBack }) 
           <input type="checkbox" checked={useLH} onChange={e=>setUseLH(e.target.checked)} />
           Use letterpad
         </label>
-        {useLH && (
-          <div style={{ display:'flex', gap:12, alignItems:'center', background:'#F5F3EE', border:'1px solid #DDD8CE', borderRadius:8, padding:'6px 12px' }}>
-            <label style={{ fontSize:11, color:'#555', cursor:'pointer' }}>
-              Header image: <input type="file" accept="image/*" style={{ fontSize:11 }} onChange={e=>{
-                const f=e.target.files[0]; if(!f) return;
-                const r=new FileReader(); r.onload=()=>setLocalLHHeader(r.result); r.readAsDataURL(f);
-              }} />
-              {effLHH && <span style={{ color:'#1A7A3E', marginLeft:4 }}>✓</span>}
-            </label>
-            <label style={{ fontSize:11, color:'#555', cursor:'pointer' }}>
-              Footer image: <input type="file" accept="image/*" style={{ fontSize:11 }} onChange={e=>{
-                const f=e.target.files[0]; if(!f) return;
-                const r=new FileReader(); r.onload=()=>setLocalLHFooter(r.result); r.readAsDataURL(f);
-              }} />
-              {effLHF && <span style={{ color:'#1A7A3E', marginLeft:4 }}>✓</span>}
-            </label>
-          </div>
-        )}
+        {useLH && effLHH && <span style={{ fontSize:11, color:'#1A7A3E', background:'#EEF9F0', border:'1px solid #B7E5C6', borderRadius:6, padding:'4px 10px' }}>✓ Header from Settings</span>}
+        {useLH && effLHF && <span style={{ fontSize:11, color:'#1A7A3E', background:'#EEF9F0', border:'1px solid #B7E5C6', borderRadius:6, padding:'4px 10px' }}>✓ Footer from Settings</span>}
+        {useLH && !effLHH && !effLHF && <span style={{ fontSize:11, color:'#B45309', background:'#FEF3C7', border:'1px solid #FCD34D', borderRadius:6, padding:'4px 10px' }}>No header/footer saved — add in Settings</span>}
         <div style={{ display:'flex', border:'1px solid #DDD8CC', borderRadius:7, overflow:'hidden', fontSize:12 }}>
           {[['portrait','📄 Portrait'],['landscape','⬜ Landscape']].map(([v,l])=>(
             <button key={v} onClick={()=>setOrient(v)}
@@ -9028,11 +9011,12 @@ function ContractPrint({ contract: c, businessInfo: bi, termsLibrary, onBack }) 
           ))}
         </div>
         <button onClick={handlePrint} style={{ padding: '8px 20px', background: '#1E2A4A', color: '#fff', border: 'none', borderRadius: 8, fontSize: 13, fontWeight: 600, display:'flex', alignItems:'center', gap:6 }}>🖨 Print / PDF</button>
-        {isDraft && <span style={{ background:'#FEE2E2', color:'#B91C1C', padding:'4px 12px', borderRadius:20, fontSize:12, fontWeight:700 }}>DRAFT — will show watermark</span>}
+        {c.status === 'Draft' && <span style={{ background:'#FEE2E2', color:'#B91C1C', padding:'4px 12px', borderRadius:20, fontSize:12, fontWeight:700 }}>DRAFT status — change to Approved to remove watermark</span>}
       </div>
-      <div className="print-area" style={{ maxWidth: 780, margin: '28px auto', background: '#fff', padding: `${effLHH?'230px':'48px'} 56px ${effLHF?'150px':'48px'}`, fontFamily: 'Georgia, serif', fontSize: 13, lineHeight: 1.8, color: '#222', boxShadow: '0 2px 20px rgba(0,0,0,0.08)', position:'relative' }}>
+      <div className="print-area" style={{ maxWidth: 780, margin: '28px auto', background: '#fff', fontFamily: 'Georgia, serif', fontSize: 13, lineHeight: 1.8, color: '#222', boxShadow: '0 2px 20px rgba(0,0,0,0.08)', overflow:'hidden' }}>
         {useLH && (effLHH||effLHF) && <LetterpadPrintStyle />}
-        {effLHH && <div className="lh-pad-header" style={{ paddingBottom:12, borderBottom:'2px solid #1E2A4A', background:'#fff' }}><img src={effLHH} alt="letterpad header" style={{ width:'100%', maxHeight:'200px', objectFit:'contain', objectPosition:'top', display:'block' }} /></div>}
+        {effLHH && <div className="lh-pad-header" style={{ borderBottom:'2px solid #1E2A4A', background:'#fff' }}><img src={effLHH} alt="letterpad header" style={{ width:'100%', display:'block', objectFit:'contain', objectPosition:'top' }} /></div>}
+        <div style={{ padding: '32px 56px' }}>
         <div style={{ textAlign: 'center', borderBottom: '2px solid #1E2A4A', paddingBottom: 24, marginBottom: 32 }}>
           {!effLHH && bi.name && <div style={{ fontSize: 22, fontWeight: 700, color: '#1E2A4A' }}>{bi.name || bi.companyName}</div>}
           {!effLHH && bi.address && <div style={{ fontSize: 12, color: '#666', marginTop: 4 }}>{bi.address}</div>}
@@ -9129,7 +9113,6 @@ function ContractPrint({ contract: c, businessInfo: bi, termsLibrary, onBack }) 
             {terms.extra && <div style={{ marginTop: 12 }}>{terms.extra}</div>}
           </div>
         )}
-        {effLHF && <div className="lh-pad-footer" style={{ paddingTop:12, borderTop:'2px solid #1E2A4A', background:'#fff' }}><img src={effLHF} alt="letterpad footer" style={{ width:'100%', maxHeight:'120px', objectFit:'contain', objectPosition:'bottom', display:'block' }} /></div>}
         <div style={{ marginTop: 48, borderTop: '1px solid #DDD8CE', paddingTop: 32, display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 48 }}>
           {[{ label: 'For the ' + (c.buyerRole || 'Buyer') + ' (' + (bi.name || bi.companyName || '') + ')', name: c.signatoryOurName, desig: c.signatoryOurDesignation }, { label: 'For the ' + (c.supplierRole || 'Supplier') + ' (' + (c.customerSnapshot?.name || '') + ')', name: c.signatoryClientName, desig: c.signatoryClientDesignation }].map((sig, i) => (
             <div key={i}>
@@ -9141,6 +9124,8 @@ function ContractPrint({ contract: c, businessInfo: bi, termsLibrary, onBack }) 
             </div>
           ))}
         </div>
+        </div>{/* end inner content */}
+        {effLHF && <div className="lh-pad-footer" style={{ borderTop:'2px solid #1E2A4A', background:'#fff' }}><img src={effLHF} alt="letterpad footer" style={{ width:'100%', display:'block', objectFit:'contain', objectPosition:'bottom' }} /></div>}
       </div>
     </div>
   );
@@ -12638,8 +12623,4 @@ export default function App() {
             setEditingItem(null);
           }}
           onClose={() => setEditingItem(null)}
-        />
-      )}
-    </div>
-  );
-}
+     
