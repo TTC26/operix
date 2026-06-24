@@ -8380,6 +8380,7 @@ function blankContract() {
     vendorContactPerson: '', vendorGst: '', vendorAuthorized: '', vendorAuthorizedDesig: '',
     poRef: '', poRefNumber: '',
     buyerRole: 'Buyer', supplierRole: 'Supplier',
+    deliveryAddress: '',
     selectedClauseIds: [],
     notes: '',
   };
@@ -8660,6 +8661,12 @@ function ContractEditor({ contract, customers, vendors, documents, termsLibrary,
         </div>
       </div>
 
+      <div style={styles.formGroup}>
+        <label style={labelStyle}>Delivery / Site Address</label>
+        <input value={form.deliveryAddress || ''} onChange={e => set('deliveryAddress', e.target.value)}
+          placeholder="e.g. Plot 12, Industrial Estate, Chennai - 600002" style={inputStyle} />
+      </div>
+
       <div style={sectionHead}>Scope of Work</div>
       {SCOPE_SECTIONS.map(({ key, label }) => (
         <div key={key} style={{ background: form.scope[key]?.enabled ? '#FAFAF8' : '#F7F6F3', border: '1px solid #EAE6DB', borderRadius: 8, padding: '12px 16px', marginBottom: 10 }}>
@@ -8670,7 +8677,7 @@ function ContractEditor({ contract, customers, vendors, documents, termsLibrary,
           {form.scope[key]?.enabled && (
             <div style={{ display: 'grid', gridTemplateColumns: '1fr 110px 70px 150px', gap: 10 }}>
               <div><label style={labelStyle}>Description</label><input value={form.scope[key]?.description || ''} onChange={e => setScope(key, 'description', e.target.value)} placeholder={`Describe ${label.toLowerCase()} scope`} style={inputStyle} /></div>
-              <div><label style={labelStyle}>Value (ex-GST)</label><input type="number" value={form.scope[key]?.value || 0} onChange={e => setScope(key, 'value', parseFloat(e.target.value) || 0)} style={inputStyle} /></div>
+              <div><label style={labelStyle}>Value</label><input type="number" value={form.scope[key]?.value || 0} onChange={e => setScope(key, 'value', parseFloat(e.target.value) || 0)} style={inputStyle} /></div>
               <div><label style={labelStyle}>GST %</label><input type="number" value={form.scope[key]?.gstRate ?? 18} onChange={e => setScope(key, 'gstRate', parseFloat(e.target.value) || 0)} style={inputStyle} /></div>
               <div><label style={labelStyle}>Timeline</label><input value={form.scope[key]?.timeline || ''} onChange={e => setScope(key, 'timeline', e.target.value)} placeholder="e.g. 45 days" style={inputStyle} /></div>
             </div>
@@ -8687,9 +8694,9 @@ function ContractEditor({ contract, customers, vendors, documents, termsLibrary,
         const grandTotal = totalScopeValue + totalGst;
         return totalScopeValue > 0 ? (
           <div style={{ background:'#F5F3EE', border:'1px solid #EAE6DB', borderRadius:8, padding:'10px 16px', marginTop:4, marginBottom:4, fontSize:13 }}>
-            <div style={{ display:'flex', justifyContent:'space-between', color:'#555' }}><span>Subtotal (ex-GST)</span><strong>{makeFmt(businessInfo)(totalScopeValue)}</strong></div>
-            {isInd && totalGst > 0 && <div style={{ display:'flex', justifyContent:'space-between', color:'#888' }}><span>GST</span><span>{makeFmt(businessInfo)(totalGst)}</span></div>}
-            {isInd && <div style={{ display:'flex', justifyContent:'space-between', color:'#1E2A4A', fontWeight:700, fontSize:14, borderTop:'1px solid #DDD8CE', marginTop:6, paddingTop:6 }}><span>Grand Total</span><span>{makeFmt(businessInfo)(grandTotal)}</span></div>}
+            <div style={{ display:'flex', justifyContent:'space-between', color:'#555' }}><span>Total</span><strong>{makeFmt(businessInfo)(totalScopeValue)}</strong></div>
+            {isInd && <div style={{ display:'flex', justifyContent:'space-between', color:'#888' }}><span>GST</span><span>{makeFmt(businessInfo)(totalGst)}</span></div>}
+            <div style={{ display:'flex', justifyContent:'space-between', color:'#1E2A4A', fontWeight:700, fontSize:14, borderTop:'1px solid #DDD8CE', marginTop:6, paddingTop:6 }}><span>Grand Total (incl. GST)</span><span>{makeFmt(businessInfo)(grandTotal)}</span></div>
           </div>
         ) : null;
       })()}
@@ -8856,13 +8863,14 @@ function ContractPrint({ contract: c, businessInfo: bi, termsLibrary, onBack }) 
       return s+(v*r/100);
     },0);
     const scopeGrandTotal = scopeSubtotal + scopeGst;
+    const deliveryRow = c.deliveryAddress ? `<p style="font-size:12px;margin-bottom:16px;"><strong>Delivery / Site Address:</strong> ${c.deliveryAddress}</p>` : '';
     const scopeTable = enabledScopes.length > 0 ? `
       <h3>Scope of Work</h3>
       <table style="width:100%;border-collapse:collapse;font-size:12px;margin-bottom:20px;">
         <thead><tr style="background:#1E2A4A;color:#fff;">
           <th style="padding:7px 10px;text-align:left">Section</th>
           <th style="padding:7px 10px;text-align:left">Description</th>
-          <th style="padding:7px 10px;text-align:right">Value (ex-GST)</th>
+          <th style="padding:7px 10px;text-align:right">Value</th>
           ${isIndia ? '<th style="padding:7px 10px;text-align:center">GST%</th><th style="padding:7px 10px;text-align:right">GST Amt</th>' : ''}
           <th style="padding:7px 10px;text-align:center">Timeline</th>
         </tr></thead>
@@ -8880,16 +8888,17 @@ function ContractPrint({ contract: c, businessInfo: bi, termsLibrary, onBack }) 
             </tr>`;
           }).join('')}
           <tr style="background:#f0ede6;">
-            <td colspan="${isIndia?'2':'2'}" style="padding:7px 10px;text-align:right;font-weight:600">Subtotal (ex-GST)</td>
+            <td colspan="${isIndia?'5':'3'}" style="padding:7px 10px;text-align:right;font-weight:600">Total</td>
             <td style="padding:7px 10px;text-align:right;font-weight:600">${fmt(scopeSubtotal)}</td>
-            ${isIndia ? `<td></td><td style="padding:7px 10px;text-align:right;font-weight:600">${fmt(scopeGst)}</td>` : ''}
-            <td></td>
           </tr>
-          ${isIndia ? `<tr style="background:#1E2A4A;color:#fff;font-weight:700;">
-            <td colspan="2" style="padding:8px 10px;text-align:right">GRAND TOTAL (incl. GST)</td>
-            <td colspan="${isIndia?'3':'1'}" style="padding:8px 10px;text-align:right;font-size:13px">${fmt(scopeGrandTotal)}</td>
-            <td></td>
-          </tr>` : `<tr style="background:#1E2A4A;color:#fff;font-weight:700;"><td colspan="2" style="padding:8px 10px;text-align:right">Total Contract Value</td><td style="padding:8px 10px;text-align:right">${fmt(scopeSubtotal)}</td><td></td></tr>`}
+          ${isIndia ? `<tr style="background:#f5f3ee;">
+            <td colspan="5" style="padding:7px 10px;text-align:right;color:#555">GST</td>
+            <td style="padding:7px 10px;text-align:right;color:#555">${fmt(scopeGst)}</td>
+          </tr>` : ''}
+          <tr style="background:#1E2A4A;color:#fff;font-weight:700;">
+            <td colspan="${isIndia?'5':'3'}" style="padding:8px 10px;text-align:right">Grand Total (incl. GST)</td>
+            <td style="padding:8px 10px;text-align:right;font-size:13px">${fmt(scopeGrandTotal)}</td>
+          </tr>
         </tbody>
       </table>` : '';
 
@@ -8970,6 +8979,7 @@ function ContractPrint({ contract: c, businessInfo: bi, termsLibrary, onBack }) 
       </div>
       <p style="font-size:12px;margin-bottom:16px;">This Contract Agreement is entered into between <b>${bi?.name||bi?.companyName||'the Buyer'}</b> (hereinafter referred to as the "${c.buyerRole||'Buyer'}") and <b>${c.customerSnapshot?.name||'the Supplier'}</b> (hereinafter referred to as the "${c.supplierRole||'Supplier'}"), both parties agreeing to the terms set forth below.</p>
       ${preamble}
+      ${deliveryRow}
       ${scopeTable}
       ${milestoneTable}
       ${termsHTML}
@@ -9034,11 +9044,17 @@ function ContractPrint({ contract: c, businessInfo: bi, termsLibrary, onBack }) 
           <p>This Contract Agreement is entered into between <strong>{bi.name || bi.companyName || 'the Company'}</strong> (the "{c.buyerRole || 'Buyer'}") and <strong>{c.customerSnapshot?.name || '___________________'}</strong> (the "{c.supplierRole || 'Supplier'}").</p>
         </div>
         <div style={{ background: '#F7F6F3', border: '1px solid #DDD8CE', borderRadius: 6, padding: '14px 20px', marginBottom: 28, fontWeight: 700, fontSize: 15, color: '#1E2A4A' }}>Subject: {c.title}</div>
+        {c.deliveryAddress && (
+          <div style={{ marginBottom: 20, fontSize: 13 }}>
+            <span style={{ fontWeight: 700, color: '#1E2A4A' }}>Delivery / Site Address: </span>
+            <span style={{ color: '#555' }}>{c.deliveryAddress}</span>
+          </div>
+        )}
         {enabledScopes.length > 0 && (
           <div style={{ marginBottom: 28 }}>
             <div style={{ fontWeight: 700, fontSize: 14, marginBottom: 14, color: '#1E2A4A', textTransform: 'uppercase' }}>Scope of Work</div>
             <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
-              <thead><tr style={{ background: '#1E2A4A', color: '#fff' }}><th style={{ padding: '8px 12px', textAlign: 'left' }}>Section</th><th style={{ padding: '8px 12px', textAlign: 'left' }}>Description</th><th style={{ padding: '8px 12px', textAlign: 'right' }}>Value (ex-GST)</th>{isIndia && <><th style={{ padding: '8px 12px', textAlign: 'center' }}>GST%</th><th style={{ padding: '8px 12px', textAlign: 'right' }}>GST Amt</th></>}<th style={{ padding: '8px 12px', textAlign: 'center' }}>Timeline</th></tr></thead>
+              <thead><tr style={{ background: '#1E2A4A', color: '#fff' }}><th style={{ padding: '8px 12px', textAlign: 'left' }}>Section</th><th style={{ padding: '8px 12px', textAlign: 'left' }}>Description</th><th style={{ padding: '8px 12px', textAlign: 'right' }}>Value</th>{isIndia && <><th style={{ padding: '8px 12px', textAlign: 'center' }}>GST%</th><th style={{ padding: '8px 12px', textAlign: 'right' }}>GST Amt</th></>}<th style={{ padding: '8px 12px', textAlign: 'center' }}>Timeline</th></tr></thead>
               <tbody>
                 {enabledScopes.map(({ key, label }, i) => {
                     const val = parseFloat(c.scope[key]?.value)||0;
@@ -9058,18 +9074,20 @@ function ContractPrint({ contract: c, businessInfo: bi, termsLibrary, onBack }) 
                     const v=parseFloat(c.scope?.[sc.key]?.value)||0, r=parseFloat(c.scope?.[sc.key]?.gstRate)||0;
                     return s+(v*r/100);
                   },0);
+                  const numCols = isIndia ? 6 : 4;
                   return <>
                     <tr style={{ background: '#F0EDE6' }}>
-                      <td colSpan={2} style={{ padding: '8px 12px', fontWeight: 600 }}>Subtotal (ex-GST)</td>
+                      <td colSpan={numCols - 1} style={{ padding: '8px 12px', textAlign: 'right', fontWeight: 600 }}>Total</td>
                       <td style={{ padding: '8px 12px', textAlign: 'right', fontWeight: 600 }}>{fmt(subtotal)}</td>
-                      {isIndia && <><td /><td style={{ padding: '8px 12px', textAlign: 'right', fontWeight: 600 }}>{fmt(gstTotal)}</td></>}
-                      <td />
                     </tr>
-                    {isIndia && <tr style={{ background: '#1E2A4A', color: '#fff', fontWeight: 700 }}>
-                      <td colSpan={2} style={{ padding: '8px 12px' }}>GRAND TOTAL (incl. GST)</td>
-                      <td colSpan={isIndia ? 3 : 1} style={{ padding: '8px 12px', textAlign: 'right', fontSize: 14 }}>{fmt(subtotal+gstTotal)}</td>
-                      <td />
+                    {isIndia && <tr style={{ background: '#F5F3EE' }}>
+                      <td colSpan={numCols - 1} style={{ padding: '8px 12px', textAlign: 'right', color: '#555' }}>GST</td>
+                      <td style={{ padding: '8px 12px', textAlign: 'right', color: '#555' }}>{fmt(gstTotal)}</td>
                     </tr>}
+                    <tr style={{ background: '#1E2A4A', color: '#fff', fontWeight: 700 }}>
+                      <td colSpan={numCols - 1} style={{ padding: '8px 12px', textAlign: 'right' }}>Grand Total (incl. GST)</td>
+                      <td style={{ padding: '8px 12px', textAlign: 'right', fontSize: 14 }}>{fmt(subtotal+gstTotal)}</td>
+                    </tr>
                   </>;
                 })()}
               </tbody>
