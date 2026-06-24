@@ -2379,6 +2379,7 @@ function DocEditor({ doc, setDoc, customers, vendors, items, businessInfo, userR
   const [rejectionNote, setRejectionNote] = useState('');
   const [hsnSearchRow, setHsnSearchRow] = useState(null); // rowId being searched
   const [mepPickerOpen, setMepPickerOpen] = useState(false);
+  const [useLH, setUseLH] = useState(!!businessInfo?.letterhead);
   const bizBadge = BIZ_BADGE[doc.bizType];
   const showBizBadge = !!bizBadge;
 
@@ -2494,6 +2495,11 @@ function DocEditor({ doc, setDoc, customers, vendors, items, businessInfo, userR
               ])
             );
           }} style={styles.ghostBtn}><Download size={15} /> Export CSV</button>
+          {businessInfo?.letterhead && (
+            <button onClick={() => setUseLH(v => !v)} style={{ ...styles.ghostBtn, ...(useLH ? { background: '#EEF2FF', color: '#3D52A0', fontWeight: 600 } : {}) }}>
+              📃 {useLH ? 'Letterhead ON' : 'Use Letterhead'}
+            </button>
+          )}
           <button onClick={() => window.print()} style={styles.ghostBtn}><Printer size={15} /> Print / PDF</button>
 
           {/* ── PREPARER (any non-admin): draft or rejected → Save / Forward ── */}
@@ -2838,6 +2844,11 @@ function DocEditor({ doc, setDoc, customers, vendors, items, businessInfo, userR
         </div>
 
         <div style={styles.preview} className="print-area">
+          {useLH && businessInfo?.letterhead && (
+            <div style={{ textAlign:'center', marginBottom:16, paddingBottom:12, borderBottom:'2px solid #1E2A4A' }}>
+              <img src={businessInfo.letterhead} alt="letterhead" style={{ maxWidth:'100%', maxHeight:150, objectFit:'contain', display:'block', margin:'0 auto' }} />
+            </div>
+          )}
           {/* ── DRAFT watermark — visible on screen + print when not approved ── */}
           {doc.status !== 'approved' && (
             <div style={{
@@ -2860,9 +2871,9 @@ function DocEditor({ doc, setDoc, customers, vendors, items, businessInfo, userR
                 <img src={businessInfo.logo} alt="logo" style={logoStyle} />
               </div>
             ) : null;
-            const logo = logoWrap(false);
-            const logoDark = logoWrap(true);
-            const brandInfo = (
+            const logo = (useLH && businessInfo?.letterhead) ? null : logoWrap(false);
+            const logoDark = (useLH && businessInfo?.letterhead) ? null : logoWrap(true);
+            const brandInfo = (useLH && businessInfo?.letterhead) ? null : (
               <div>
                 <div className="serif" style={styles.previewBrand}>{businessInfo.name}</div>
                 <div style={styles.previewSmall}>{businessInfo.address}</div>
@@ -2894,12 +2905,12 @@ function DocEditor({ doc, setDoc, customers, vendors, items, businessInfo, userR
                   <div style={styles.previewHeader}>
                     <div style={{ ...styles.previewBrandRow, flex: 1, minWidth: 0 }}>
                       {logoDark}
-                      <div>
+                      {!(useLH && businessInfo?.letterhead) && <div>
                         <div className="serif" style={{ ...styles.previewBrand, color: '#fff' }}>{businessInfo.name}</div>
                         <div style={{ ...styles.previewSmall, color: 'rgba(255,255,255,0.8)' }}>{businessInfo.address}</div>
                         <div style={{ ...styles.previewSmall, color: 'rgba(255,255,255,0.8)' }}>{cc.taxIdLabel}: {businessInfo.gstin}</div>
                         <div style={{ ...styles.previewSmall, color: 'rgba(255,255,255,0.8)' }}>{businessInfo.phone} · {businessInfo.email}{businessInfo.website ? ' · ' + businessInfo.website : ''}</div>
-                      </div>
+                      </div>}
                     </div>
                     <div style={{ textAlign: 'right', flexShrink: 0, whiteSpace: 'nowrap', paddingLeft: 16 }}>
                       <div className="serif" style={{ ...styles.previewDocType, color: '#fff' }}>{t.label}</div>
@@ -2937,12 +2948,12 @@ function DocEditor({ doc, setDoc, customers, vendors, items, businessInfo, userR
                   <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
                     <div style={styles.previewBrandRow}>
                       {logoDark}
-                      <div>
+                      {!(useLH && businessInfo?.letterhead) && <div>
                         <div className="serif" style={{ ...styles.previewBrand, color: '#fff', fontSize: 21 }}>{businessInfo.name}</div>
                         <div style={{ ...styles.previewSmall, color: '#A9B8D4' }}>{businessInfo.address}</div>
                         <div style={{ ...styles.previewSmall, color: '#A9B8D4' }}>{cc.taxIdLabel}: {businessInfo.gstin}</div>
                         <div style={{ ...styles.previewSmall, color: '#A9B8D4' }}>{businessInfo.phone} · {businessInfo.email}{businessInfo.website ? ' · ' + businessInfo.website : ''}</div>
-                      </div>
+                      </div>}
                     </div>
                     <div style={{ textAlign: 'right', flexShrink: 0, whiteSpace: 'nowrap', paddingLeft: 16 }}>
                       <div style={{ background: t.color, borderRadius: 6, padding: '4px 14px', display: 'inline-block', marginBottom: 8 }}>
@@ -2985,12 +2996,12 @@ function DocEditor({ doc, setDoc, customers, vendors, items, businessInfo, userR
                   <div style={styles.previewHeader}>
                     <div style={styles.previewBrandRow}>
                       {logo}
-                      <div>
+                      {!(useLH && businessInfo?.letterhead) && <div>
                         <div className="serif" style={{ ...styles.previewBrand, color: '#1A4A33' }}>{businessInfo.name}</div>
                         <div style={{ ...styles.previewSmall, color: '#3A7A5A' }}>{businessInfo.address}</div>
                         <div style={{ ...styles.previewSmall, color: '#3A7A5A' }}>{cc.taxIdLabel}: {businessInfo.gstin}</div>
                         <div style={{ ...styles.previewSmall, color: '#3A7A5A' }}>{businessInfo.phone} · {businessInfo.email}{businessInfo.website ? ' · ' + businessInfo.website : ''}</div>
-                      </div>
+                      </div>}
                     </div>
                     <div style={{ textAlign: 'right', flexShrink: 0, whiteSpace: 'nowrap', paddingLeft: 16 }}>
                       <div className="serif" style={{ ...styles.previewDocType, color: '#1A7A3E' }}>{t.label}</div>
@@ -3018,15 +3029,15 @@ function DocEditor({ doc, setDoc, customers, vendors, items, businessInfo, userR
                   </div>
                   {/* Seller + Logo */}
                   <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', padding: '14px 18px', borderBottom: bdr }}>
-                    <div>
+                    {!(useLH && businessInfo?.letterhead) && <div>
                       <div style={{ fontWeight: 700, fontSize: 15 }}>{businessInfo.name}</div>
                       <div style={{ color: '#333' }}>{cc.taxIdLabel}: {businessInfo.gstin}</div>
                       <div style={{ color: '#333' }}>{businessInfo.address}</div>
                       {businessInfo.phone && <div style={{ color: '#333' }}>{businessInfo.phone}</div>}
                       {businessInfo.email && <div style={{ color: '#1A56DB', textDecoration: 'underline' }}>{businessInfo.email}</div>}
                       {businessInfo.website && <div style={{ color: '#1A56DB' }}>{businessInfo.website}</div>}
-                    </div>
-                    {businessInfo.logo && (
+                    </div>}
+                    {!(useLH && businessInfo?.letterhead) && businessInfo.logo && (
                       <div style={{ textAlign: 'center', flexShrink: 0, marginLeft: 20 }}>
                         <img src={businessInfo.logo} alt="logo" style={{ width: 84, height: 84, objectFit: 'contain', display: 'block' }} />
                         <div style={{ fontSize: 11, fontWeight: 600, marginTop: 4, maxWidth: 100 }}>{businessInfo.name}</div>
@@ -3652,6 +3663,7 @@ function PettyCashForm({ entry, onSave, onClose }) {
 }
 
 function StatementPanel({ rows, openingBalance, businessInfo, onClose }) {
+  const [useLH, setUseLH] = React.useState(!!businessInfo?.letterhead);
   // Build running balance
   let balance = parseFloat(openingBalance) || 0;
   const ledger = (rows || []).map(e => {
@@ -3668,15 +3680,17 @@ function StatementPanel({ rows, openingBalance, businessInfo, onClose }) {
         style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.55)', zIndex: 998 }} />
       <div className="no-print" style={{ position: 'fixed', top: 16, right: 24, zIndex: 1001, display: 'flex', gap: 8 }}>
         <button style={styles.ghostBtn} onClick={onClose}><X size={15} /> Close</button>
+        {businessInfo?.letterhead && <button onClick={() => setUseLH(v=>!v)} style={{ ...styles.ghostBtn, ...(useLH?{background:'#EEF2FF',color:'#3D52A0',fontWeight:600}:{}) }}>📃 {useLH?'Letterhead ON':'Use Letterhead'}</button>}
         <button style={styles.primaryBtn} onClick={() => window.print()}><Printer size={15} /> Print</button>
       </div>
       <div className="print-area" style={{ position: 'fixed', inset: 0, background: '#fff', zIndex: 999, overflowY: 'auto', padding: '40px 56px' }}>
+        {useLH && businessInfo?.letterhead && <div style={{ textAlign:'center', marginBottom:16, paddingBottom:12, borderBottom:'2px solid #1E2A4A' }}><img src={businessInfo.letterhead} alt="letterhead" style={{ maxWidth:'100%', maxHeight:140, objectFit:'contain', display:'block', margin:'0 auto' }} /></div>}
         {/* Header */}
         <div style={{ borderBottom: '2px solid #1E2A4A', paddingBottom: 12, marginBottom: 20, display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
-          <div>
+          {!useLH && <div>
             <div className="serif" style={{ fontSize: 20, fontWeight: 700, color: '#1E2A4A' }}>{businessInfo.name}</div>
             <div style={{ fontSize: 11, color: '#888780', marginTop: 2 }}>{businessInfo.address}</div>
-          </div>
+          </div>}
           <div style={{ textAlign: 'right' }}>
             <div style={{ fontSize: 15, fontWeight: 700, color: '#C9A24B', letterSpacing: '0.05em' }}>PETTY CASH STATEMENT</div>
             <div style={{ fontSize: 11, color: '#888780', marginTop: 3 }}>Printed: {new Date().toLocaleDateString('en-IN')}</div>
@@ -4013,8 +4027,15 @@ function VoucherForm({ voucher, customers, vendors, onSave, onClose }) {
   );
 }
 
-function VoucherPrintHeader({ businessInfo }) {
+function VoucherPrintHeader({ businessInfo, useLH }) {
   const cc = COUNTRY_CONFIG[businessInfo.country || 'india'];
+  if (useLH && businessInfo?.letterhead) {
+    return (
+      <div style={{ textAlign: 'center', marginBottom: 16, paddingBottom: 12, borderBottom: '2px solid #1E2A4A' }}>
+        <img src={businessInfo.letterhead} alt="letterhead" style={{ maxWidth: '100%', maxHeight: 140, objectFit: 'contain', display: 'block', margin: '0 auto' }} />
+      </div>
+    );
+  }
   return (
     <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', paddingBottom: 14, marginBottom: 16, borderBottom: '2px solid #1E2A4A' }}>
       <div style={{ display: 'flex', alignItems: 'flex-start', gap: 12 }}>
@@ -4074,12 +4095,13 @@ function VoucherPrintModal({ voucher, businessInfo, onClose }) {
             [...invRows.map(r=>['Sales',r.number,r.date,r.party,r.subtotal.toFixed(2),r.totalTax.toFixed(2),r.grandTotal.toFixed(2)]),
              ...purRows.map(r=>['Purchase',r.number,r.date,r.party,r.subtotal.toFixed(2),r.totalTax.toFixed(2),r.grandTotal.toFixed(2)])])
           }><Download size={15}/> Export CSV</button>
+          {businessInfo?.letterhead && <button onClick={() => setUseLHTax(v=>!v)} style={{ ...styles.ghostBtn, ...(useLHTax?{background:'#EEF2FF',color:'#3D52A0',fontWeight:600}:{}) }}>📃 {useLHTax?'Letterhead ON':'Use Letterhead'}</button>}
           <button style={styles.primaryBtn} onClick={() => window.print()}><Printer size={15}/> Print / PDF</button>
         </div>
       </div>
       {/* Print area — only this shows on print */}
       <div className="print-area" style={{ position: 'fixed', inset: 0, background: '#fff', zIndex: 999, overflowY: 'auto', padding: '40px 56px' }}>
-        <VoucherPrintHeader businessInfo={businessInfo} />
+        <VoucherPrintHeader businessInfo={businessInfo} useLH={useLHTax} />
         {/* Title */}
         <div style={{ textAlign: 'right', marginBottom: 20 }}>
           <div style={{ fontSize: 17, fontWeight: 700, color: isPayment ? '#B91C1C' : '#1A7A3E', letterSpacing: '0.07em' }}>
@@ -4124,6 +4146,7 @@ function VoucherPrintModal({ voucher, businessInfo, onClose }) {
 }
 
 function PartyStatementModal({ party, vouchers, businessInfo, onClose }) {
+  const [useLH, setUseLH] = React.useState(!!businessInfo?.letterhead);
   const cc = COUNTRY_CONFIG[businessInfo.country || 'india'];
   const fmt = (n) => currency(n, cc.currency);
   const partyVouchers = vouchers.filter(v => v.party === party).sort((a, b) => a.date > b.date ? 1 : -1);
@@ -4136,10 +4159,11 @@ function PartyStatementModal({ party, vouchers, businessInfo, onClose }) {
         style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.55)', zIndex: 998 }} />
       <div className="no-print" style={{ position: 'fixed', top: 16, right: 24, zIndex: 1001, display: 'flex', gap: 8 }}>
         <button style={styles.ghostBtn} onClick={onClose}><X size={15} /> Close</button>
+        {businessInfo?.letterhead && <button onClick={() => setUseLH(v=>!v)} style={{ ...styles.ghostBtn, ...(useLH?{background:'#EEF2FF',color:'#3D52A0',fontWeight:600}:{}) }}>📃 {useLH?'Letterhead ON':'Use Letterhead'}</button>}
         <button style={styles.primaryBtn} onClick={() => window.print()}><Printer size={15} /> Print</button>
       </div>
       <div className="print-area" style={{ position: 'fixed', inset: 0, background: '#fff', zIndex: 999, overflowY: 'auto', padding: '40px 56px' }}>
-        <VoucherPrintHeader businessInfo={businessInfo} />
+        <VoucherPrintHeader businessInfo={businessInfo} useLH={useLH} />
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-end', marginBottom: 20 }}>
           <div>
             <div style={{ fontSize: 10, color: '#888780', textTransform: 'uppercase', letterSpacing: 0.6, marginBottom: 3 }}>Party Statement</div>
@@ -4442,6 +4466,7 @@ function StockLedgerView({ items, stockLedger, setStockLedger, businessInfo }) {
 // HR / PAYROLL MODULE
 // ─────────────────────────────────────────────
 function BinCard({ items, stockLedger, businessInfo }) {
+  const [useLHBin, setUseLHBin] = React.useState(!!businessInfo?.letterhead);
   const [selectedItemId, setSelectedItemId] = useState(items[0]?.id || '');
   const item = items.find(i => i.id === selectedItemId);
 
@@ -4471,6 +4496,8 @@ function BinCard({ items, stockLedger, businessInfo }) {
           <h1 className="serif" style={styles.h1}>Bin Card</h1>
           <div style={{ fontSize: 13, color: '#888780' }}>Stock movement card per item</div>
         </div>
+        {businessInfo?.letterhead && <button onClick={() => setUseLHBin(v => !v)} style={{ ...styles.ghostBtn, ...(useLHBin ? { background: '#EEF2FF', color: '#3D52A0', fontWeight: 600 } : {}) }}>📃 {useLHBin ? 'Letterhead ON' : 'Use Letterhead'}</button>}
+        {businessInfo?.letterhead && <button onClick={() => setUseLHBin(v=>!v)} style={{ ...styles.ghostBtn, ...(useLHBin?{background:'#EEF2FF',color:'#3D52A0',fontWeight:600}:{}) }}>📃 {useLHBin?'Letterhead ON':'Use Letterhead'}</button>}
         <button onClick={() => window.print()} style={styles.primaryBtn}>🖨 Print</button>
       </div>
 
@@ -4484,11 +4511,12 @@ function BinCard({ items, stockLedger, businessInfo }) {
 
       {/* Print header */}
       <div className="print-only" style={{ marginBottom: 16 }}>
+        {useLHBin && businessInfo?.letterhead && <div style={{ textAlign:'center', marginBottom:12, paddingBottom:10, borderBottom:'2px solid #1E2A4A' }}><img src={businessInfo.letterhead} alt="letterhead" style={{ maxWidth:'100%', maxHeight:120, objectFit:'contain', display:'block', margin:'0 auto' }} /></div>}
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
-          <div>
+          {!useLHBin && <div>
             <div style={{ fontWeight: 700, fontSize: 18 }}>{businessInfo.name}</div>
             <div style={{ fontSize: 12, color: '#555' }}>{businessInfo.address}</div>
-          </div>
+          </div>}
           <div style={{ textAlign: 'right' }}>
             <div style={{ fontWeight: 700, fontSize: 16 }}>BIN CARD</div>
             <div style={{ fontSize: 12 }}>Printed: {new Date().toLocaleDateString('en-IN')}</div>
@@ -5289,6 +5317,7 @@ function PayrollModal({ employees, payrollRuns, businessInfo, onSave, onClose })
 // ─── Pay Slip Print ───────────────────────────────────────────────────────────
 // Summary payroll sheet — all employees in one table
 function PaySlipPrint({ run, businessInfo, onClose }) {
+  const [useLH, setUseLH] = React.useState(!!businessInfo?.letterhead);
   const cc = COUNTRY_CONFIG[businessInfo.country || 'india'];
   const fmt = (n) => currency(n, cc.currency);
   const lines = run?.lines || [];
@@ -5298,14 +5327,16 @@ function PaySlipPrint({ run, businessInfo, onClose }) {
       <div className="no-print" onClick={onClose} style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.4)', zIndex: 998 }} />
       <div className="no-print" style={{ position: 'fixed', top: 16, right: 24, zIndex: 1001, display: 'flex', gap: 8 }}>
         <button style={styles.ghostBtn} onClick={onClose}><X size={15}/> Close</button>
+        {businessInfo?.letterhead && <button onClick={() => setUseLH(v=>!v)} style={{ ...styles.ghostBtn, ...(useLH?{background:'#EEF2FF',color:'#3D52A0',fontWeight:600}:{}) }}>📃 {useLH?'Letterhead ON':'Use Letterhead'}</button>}
         <button style={styles.primaryBtn} onClick={() => window.print()}><Printer size={15}/> Print</button>
       </div>
       <div className="print-area" style={{ position: 'fixed', inset: 0, background: '#fff', zIndex: 999, overflowY: 'auto', padding: '40px 48px' }}>
+        {useLH && businessInfo?.letterhead && <div style={{ textAlign:'center', marginBottom:16, paddingBottom:12, borderBottom:'2px solid #1E2A4A' }}><img src={businessInfo.letterhead} alt="letterhead" style={{ maxWidth:'100%', maxHeight:140, objectFit:'contain', display:'block', margin:'0 auto' }} /></div>}
         <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 20, borderBottom: '2px solid #1E2A4A', paddingBottom: 12 }}>
-          <div>
+          {!useLH && <div>
             <div className="serif" style={{ fontWeight: 700, fontSize: 20, color: '#1E2A4A' }}>{businessInfo.name}</div>
             <div style={{ fontSize: 11, color: '#888' }}>{businessInfo.address}</div>
-          </div>
+          </div>}
           <div style={{ textAlign: 'right' }}>
             <div style={{ fontWeight: 700, fontSize: 15, color: '#C9A24B' }}>PAYROLL SUMMARY</div>
             <div style={{ fontSize: 12, color: '#888', marginTop: 3 }}>{period}</div>
@@ -5367,6 +5398,7 @@ function PaySlipPrint({ run, businessInfo, onClose }) {
 
 // Individual payslips — one per employee, page-break between each
 function IndividualPaySlips({ run, businessInfo, onClose }) {
+  const [useLH, setUseLH] = React.useState(!!businessInfo?.letterhead);
   const cc = COUNTRY_CONFIG[businessInfo.country || 'india'];
   const fmt = (n) => currency(n, cc.currency);
   const lines = run?.lines || [];
@@ -5377,17 +5409,19 @@ function IndividualPaySlips({ run, businessInfo, onClose }) {
       <div className="no-print" onClick={onClose} style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.4)', zIndex: 998 }} />
       <div className="no-print" style={{ position: 'fixed', top: 16, right: 24, zIndex: 1001, display: 'flex', gap: 8 }}>
         <button style={styles.ghostBtn} onClick={onClose}><X size={15}/> Close</button>
+        {businessInfo?.letterhead && <button onClick={() => setUseLH(v=>!v)} style={{ ...styles.ghostBtn, ...(useLH?{background:'#EEF2FF',color:'#3D52A0',fontWeight:600}:{}) }}>📃 {useLH?'Letterhead ON':'Use Letterhead'}</button>}
         <button style={styles.primaryBtn} onClick={() => window.print()}><Printer size={15}/> Print All ({lines.length})</button>
       </div>
       <div className="print-area" style={{ position: 'fixed', inset: 0, background: '#fff', zIndex: 999, overflowY: 'auto' }}>
         {lines.map((l, i) => (
           <div key={i} style={{ padding: '36px 48px', pageBreakAfter: i < lines.length - 1 ? 'always' : 'auto', borderBottom: i < lines.length - 1 ? '3px dashed #EAE6DB' : 'none' }}>
+            {useLH && businessInfo?.letterhead && <div style={{ textAlign:'center', marginBottom:12, paddingBottom:10, borderBottom:'2px solid #1E2A4A' }}><img src={businessInfo.letterhead} alt="letterhead" style={{ maxWidth:'100%', maxHeight:120, objectFit:'contain', display:'block', margin:'0 auto' }} /></div>}
             {/* Header */}
-            <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 16, borderBottom: '2px solid #1E2A4A', paddingBottom: 10 }}>
-              <div>
+            <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 16, paddingBottom: 10 }}>
+              {!useLH && <div>
                 <div className="serif" style={{ fontWeight: 700, fontSize: 18, color: '#1E2A4A' }}>{businessInfo.name}</div>
                 <div style={{ fontSize: 11, color: '#888' }}>{businessInfo.address}</div>
-              </div>
+              </div>}
               <div style={{ textAlign: 'right' }}>
                 <div style={{ fontWeight: 900, fontSize: 18, color: '#1E2A4A', letterSpacing: 2, textTransform: 'uppercase' }}>PAY SLIP</div>
                 <div style={{ fontSize: 12, color: '#555', marginTop: 2 }}>{period}</div>
@@ -5695,6 +5729,7 @@ function ServiceOrderForm({ order, customers, businessInfo, onSave, onCancel }) 
 }
 
 function ServiceOrderPrint({ order, businessInfo, onClose }) {
+  const [useLH, setUseLH] = React.useState(!!businessInfo?.letterhead);
   const cc = COUNTRY_CONFIG[businessInfo.country || 'india'];
   const fmt = (n) => currency(n, cc.currency);
   const subtotal = (order.services||[]).reduce((s,l)=>s+(parseFloat(l.qty)||0)*(parseFloat(l.rate)||0),0);
@@ -5707,17 +5742,19 @@ function ServiceOrderPrint({ order, businessInfo, onClose }) {
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16 }}>
           <div style={{ fontWeight: 700, fontSize: 16 }}>Service Order — {order.number}</div>
           <div style={{ display: 'flex', gap: 8 }}>
+            {businessInfo?.letterhead && <button onClick={() => setUseLH(v=>!v)} style={{ ...styles.ghostBtn, ...(useLH?{background:'#EEF2FF',color:'#3D52A0',fontWeight:600}:{}) }}>📃 {useLH?'Letterhead ON':'Use Letterhead'}</button>}
             <button style={styles.primaryBtn} onClick={() => window.print()}><Printer size={14}/> Print</button>
             <button style={styles.secondaryBtn} onClick={onClose}>Close</button>
           </div>
         </div>
         <div className="print-area" style={{ background: '#fff', padding: 32, fontFamily: 'Georgia, serif' }}>
+          {useLH && businessInfo?.letterhead && <div style={{ textAlign:'center', marginBottom:20, paddingBottom:14, borderBottom:'2px solid #1E2A4A' }}><img src={businessInfo.letterhead} alt="letterhead" style={{ maxWidth:'100%', maxHeight:140, objectFit:'contain', display:'block', margin:'0 auto' }} /></div>}
           <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 28 }}>
-            <div>
+            {!useLH && <div>
               <div style={{ fontSize: 22, fontWeight: 700 }}>{businessInfo.name || 'Company Name'}</div>
               <div style={{ fontSize: 12, color: '#555', maxWidth: 240 }}>{businessInfo.address}</div>
               {businessInfo.gstin && <div style={{ fontSize: 11 }}>GSTIN: {businessInfo.gstin}</div>}
-            </div>
+            </div>}
             <div style={{ textAlign: 'right' }}>
               <div style={{ fontSize: 20, fontWeight: 700, letterSpacing: 1 }}>SERVICE ORDER</div>
               <div style={{ fontSize: 13, marginTop: 4 }}>#{order.number}</div>
@@ -6276,6 +6313,7 @@ function VATReport({ documents, customers, businessInfo }) {
 // GENERIC TAX REPORT (Other countries)
 // ─────────────────────────────────────────────
 function TaxReport({ documents, customers, businessInfo }) {
+  const [useLHTax, setUseLHTax] = React.useState(!!businessInfo?.letterhead);
   const now = new Date();
   const [from, setFrom] = useState(now.toISOString().slice(0, 7) + '-01');
   const [to, setTo] = useState(now.toISOString().slice(0, 10));
@@ -7979,11 +8017,13 @@ function blankContract() {
     signatoryClientName: '', signatoryClientDesignation: '',
     buyerContactPerson: '', buyerGst: '',
     vendorContactPerson: '', vendorGst: '', vendorAuthorized: '', vendorAuthorizedDesig: '',
+    poRef: '', poRefNumber: '',
+    selectedClauseIds: [],
     notes: '',
   };
 }
 
-function ContractList({ contracts, setContracts, customers, termsLibrary, businessInfo, userRole }) {
+function ContractList({ contracts, setContracts, customers, documents, termsLibrary, businessInfo, userRole }) {
   const [editing, setEditing] = useState(null); // null | contract obj | 'new'
   const [printing, setPrinting] = useState(null);
   const [search, setSearch] = useState('');
@@ -8023,6 +8063,7 @@ function ContractList({ contracts, setContracts, customers, termsLibrary, busine
     <ContractEditor
       contract={editing === 'new' ? { ...blankContract(), number: nextConNum(), _isNew: true } : editing}
       customers={customers}
+      documents={documents || []}
       termsLibrary={termsLibrary}
       businessInfo={businessInfo}
       userRole={userRole}
@@ -8087,7 +8128,7 @@ function ContractList({ contracts, setContracts, customers, termsLibrary, busine
   );
 }
 
-function ContractEditor({ contract, customers, termsLibrary, businessInfo, userRole, onSave, onBack }) {
+function ContractEditor({ contract, customers, documents, termsLibrary, businessInfo, userRole, onSave, onBack }) {
   const [form, setForm] = useState(contract);
   const set = (k, v) => setForm(p => ({ ...p, [k]: v }));
   const setScope = (section, field, val) => setForm(p => ({ ...p, scope: { ...p.scope, [section]: { ...p.scope[section], [field]: val } } }));
@@ -8109,6 +8150,12 @@ function ContractEditor({ contract, customers, termsLibrary, businessInfo, userR
         }).filter(Boolean);
         return [...clauseTexts, tmpl.customText].filter(Boolean).join('\n\n');
       }
+    }
+    if ((form.selectedClauseIds||[]).length > 0) {
+      return form.selectedClauseIds.map(id => {
+        const c = clauses.find(x => x.id === id);
+        return c ? `${c.title}\n${c.text}` : '';
+      }).filter(Boolean).join('\n\n');
     }
     return form.customTerms || '';
   }
@@ -8148,6 +8195,21 @@ function ContractEditor({ contract, customers, termsLibrary, businessInfo, userR
           <option value="">— Select customer —</option>
           {customers.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
         </select>
+      </div>
+
+      <div style={{ marginTop: 14 }}>
+        <label style={labelStyle}>Linked Purchase Order (PO Reference)</label>
+        <select value={form.poRef || ''} onChange={e => {
+          const po = (documents||[]).find(d => d.id === e.target.value);
+          set('poRef', e.target.value);
+          set('poRefNumber', po?.number || '');
+        }} style={inputStyle}>
+          <option value="">— None / not linked to a PO —</option>
+          {(documents||[]).filter(d => d.type === 'purchase_order' || d.type === 'po').map(po => (
+            <option key={po.id} value={po.id}>{po.number}{po.customerSnapshot?.name ? ` — ${po.customerSnapshot.name}` : ''}{po.date ? ` (${po.date})` : ''}</option>
+          ))}
+        </select>
+        {form.poRefNumber && <div style={{ fontSize:11, color:'#1A7A3E', marginTop:4 }}>✓ Linked: <b>{form.poRefNumber}</b></div>}
       </div>
 
       <div style={sectionHead}>Preamble — Buyer &amp; Vendor Details</div>
@@ -8246,21 +8308,51 @@ function ContractEditor({ contract, customers, termsLibrary, businessInfo, userR
         </div>
       ))}
 
-      <div style={sectionHead}>Terms & Conditions</div>
+      <div style={sectionHead}>Terms &amp; Conditions</div>
       {templates.length > 0 && (
         <div style={{ marginBottom: 14 }}>
-          <label style={labelStyle}>Apply from Terms Library</label>
-          <select value={form.termsTemplateId || ''} onChange={e => { set('termsTemplateId', e.target.value); if (e.target.value) set('customTerms', ''); }} style={inputStyle}>
-            <option value="">— None / use custom text below —</option>
+          <label style={labelStyle}>Apply a Template from Terms Library</label>
+          <select value={form.termsTemplateId || ''} onChange={e => { set('termsTemplateId', e.target.value); if (e.target.value) { set('customTerms', ''); set('selectedClauseIds', []); } }} style={inputStyle}>
+            <option value="">— None —</option>
             {templates.map(t => <option key={t.id} value={t.id}>{t.name}</option>)}
           </select>
         </div>
       )}
-      {!form.termsTemplateId && <div><label style={labelStyle}>Custom Terms</label><textarea value={form.customTerms || ''} onChange={e => set('customTerms', e.target.value)} rows={6} style={{ ...inputStyle, resize: 'vertical' }} /></div>}
+      {!form.termsTemplateId && clauses.length > 0 && (
+        <div style={{ marginBottom: 14 }}>
+          <label style={labelStyle}>Select Clauses from Terms Library ({clauses.length} available)</label>
+          <div style={{ border:'1px solid #DDD8CE', borderRadius:8, maxHeight:220, overflowY:'auto', padding:'4px 0', background:'#fff' }}>
+            {clauses.map(cl => {
+              const sel = (form.selectedClauseIds||[]).includes(cl.id);
+              return (
+                <label key={cl.id} style={{ display:'flex', alignItems:'flex-start', gap:8, padding:'7px 12px', cursor:'pointer', background:sel?'#EFF6FF':'transparent', borderBottom:'1px solid #f0ede6' }}>
+                  <input type="checkbox" checked={sel} onChange={e => {
+                    const cur = form.selectedClauseIds||[];
+                    set('selectedClauseIds', e.target.checked ? [...cur,cl.id] : cur.filter(x=>x!==cl.id));
+                  }} style={{ marginTop:2, accentColor:'#1E2A4A' }} />
+                  <div>
+                    <div style={{ fontWeight:600, fontSize:12, color:'#1E2A4A' }}>{cl.title}</div>
+                    <div style={{ fontSize:11, color:'#888' }}>{cl.category}</div>
+                  </div>
+                </label>
+              );
+            })}
+          </div>
+          {(form.selectedClauseIds||[]).length > 0 && (
+            <div style={{ fontSize:11, color:'#1A7A3E', marginTop:4 }}>✓ {(form.selectedClauseIds||[]).length} clause(s) selected — will appear in print</div>
+          )}
+        </div>
+      )}
+      {!form.termsTemplateId && (
+        <div style={{ marginBottom:14 }}>
+          <label style={labelStyle}>Additional / Custom Terms</label>
+          <textarea value={form.customTerms || ''} onChange={e => set('customTerms', e.target.value)} rows={4}
+            placeholder="Type any additional terms here..." style={{ ...inputStyle, resize: 'vertical' }} />
+        </div>
+      )}
       {form.termsTemplateId && (
         <div style={{ background: '#F7F6F3', border: '1px solid #EAE6DB', borderRadius: 8, padding: 14, fontSize: 12, color: '#666', whiteSpace: 'pre-wrap', lineHeight: 1.8, maxHeight: 200, overflowY: 'auto' }}>{buildTermsPreview()}</div>
       )}
-
       <div style={sectionHead}>Signatories</div>
       <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 14 }}>
         <div>
@@ -8300,6 +8392,10 @@ function ContractPrint({ contract: c, businessInfo: bi, termsLibrary, onBack }) 
         const items = (tmpl.clauseIds || []).map(id => { const cl = clauses.find(x => x.id === id); return cl ? { title: cl.title, text: cl.text } : null; }).filter(Boolean);
         return { items, extra: tmpl.customText };
       }
+    }
+    if ((c.selectedClauseIds||[]).length > 0) {
+      const items = c.selectedClauseIds.map(id => { const cl = clauses.find(x => x.id === id); return cl ? { title: cl.title, text: cl.text } : null; }).filter(Boolean);
+      return { items, extra: c.customTerms || '' };
     }
     if (c.customTerms) return { items: c.customTerms.split('\n').filter(Boolean).map(t => ({ title: null, text: t })), extra: '' };
     return { items: [], extra: '' };
@@ -8433,7 +8529,7 @@ function ContractPrint({ contract: c, businessInfo: bi, termsLibrary, onBack }) 
       ${companyHeader}
       <div style="text-align:center;margin-bottom:20px;">
         <div style="font-size:17px;font-weight:700;letter-spacing:2px;color:#1E2A4A;text-transform:uppercase;">CONTRACT AGREEMENT</div>
-        <div style="font-size:12px;color:#888;margin-top:4px;">Contract No: ${c.number} &nbsp;|&nbsp; Date: ${c.date}${isDraft?' &nbsp;|&nbsp; <span style="color:red;font-weight:700">DRAFT</span>':''}</div>
+        <div style="font-size:12px;color:#888;margin-top:4px;">Contract No: ${c.number} &nbsp;|&nbsp; Date: ${c.date}${c.poRefNumber ? ` &nbsp;|&nbsp; PO Ref: <b>${c.poRefNumber}</b>` : ''}${isDraft?' &nbsp;|&nbsp; <span style="color:red;font-weight:700">DRAFT</span>':''}</div>
       </div>
       <div style="background:#f7f6f3;border:1px solid #ddd;border-radius:4px;padding:10px 16px;margin-bottom:20px;font-size:14px;font-weight:700;color:#1E2A4A;">
         Subject: ${c.title}
@@ -8730,6 +8826,7 @@ function ChannelPartnerForm({ partner, termsLibrary, businessInfo, documents, on
 }
 
 function PartnerAgreement({ partner: p, termsLibrary, businessInfo: bi, documents, onBack }) {
+  const [useLHPartner, setUseLHPartner] = React.useState(!!bi?.letterhead);
   const clauses   = termsLibrary?.clauses   || [];
   const templates = termsLibrary?.templates || [];
   const linkedDocs = documents.filter(d => d.channelPartnerId === p.id);
@@ -8751,12 +8848,14 @@ function PartnerAgreement({ partner: p, termsLibrary, businessInfo: bi, document
     <div>
       <div className="no-print" style={{ padding: '14px 28px', borderBottom: '1px solid #EAE6DB', display: 'flex', gap: 12, alignItems: 'center' }}>
         <button onClick={onBack} style={{ border: 'none', background: 'none', color: '#888', fontSize: 13, cursor: 'pointer' }}>← Back</button>
+        {bi?.letterhead && <button onClick={() => setUseLHPartner(v=>!v)} style={{ ...styles.ghostBtn, ...(useLHPartner?{background:'#EEF2FF',color:'#3D52A0',fontWeight:600}:{}) }}>📃 {useLHPartner?'Letterhead ON':'Use Letterhead'}</button>}
         <button onClick={() => window.print()} style={{ padding: '8px 20px', background: '#1E2A4A', color: '#fff', border: 'none', borderRadius: 8, fontSize: 13, fontWeight: 600 }}><Printer size={13} style={{ marginRight: 6 }} />Print Agreement</button>
         {linkedDocs.length > 0 && <span style={{ fontSize: 13, color: '#888' }}>{linkedDocs.length} linked document{linkedDocs.length !== 1 ? 's' : ''}</span>}
       </div>
       <div className="print-area" style={{ maxWidth: 780, margin: '28px auto', background: '#fff', padding: '48px 56px', fontFamily: 'Georgia, serif', fontSize: 13, lineHeight: 1.8, color: '#222', boxShadow: '0 2px 20px rgba(0,0,0,0.08)' }}>
+        {useLHPartner && bi?.letterhead && <div style={{ textAlign:'center', marginBottom:20, paddingBottom:14, borderBottom:'2px solid #1E2A4A' }}><img src={bi.letterhead} alt="letterhead" style={{ maxWidth:'100%', maxHeight:140, objectFit:'contain', display:'block', margin:'0 auto' }} /></div>}
         <div style={{ textAlign: 'center', borderBottom: '2px solid #1E2A4A', paddingBottom: 24, marginBottom: 32 }}>
-          {bi.companyName && <div style={{ fontSize: 22, fontWeight: 700, color: '#1E2A4A' }}>{bi.companyName}</div>}
+          {!useLHPartner && bi.companyName && <div style={{ fontSize: 22, fontWeight: 700, color: '#1E2A4A' }}>{bi.companyName}</div>}
           <div style={{ fontSize: 18, fontWeight: 700, letterSpacing: 2, marginTop: 20, color: '#1E2A4A', textTransform: 'uppercase' }}>Dealership / Channel Partner Agreement</div>
           <div style={{ fontSize: 13, color: '#888', marginTop: 6 }}>{p.number} | {p.agreementDate}</div>
         </div>
@@ -9934,13 +10033,14 @@ function DailyUpdateModal({ activityId, activity, project, progressUpdates, setP
 
 
 // ─── MEP Reports View ─────────────────────────────────────────────────────────
-function MEPReportsView({ siteProjects, siteActivities, progressUpdates, employees }) {
+function MEPReportsView({ siteProjects, siteActivities, progressUpdates, employees, businessInfo }) {
   const [selProject, setSelProject] = useState(siteProjects[0]?.id || '');
   const [reportType, setReportType] = useState('manhour_summary'); // manhour_summary | emp_report | material_report
   const [fromDate, setFromDate] = useState(() => { const d=new Date(); d.setDate(1); return d.toISOString().slice(0,10); });
   const [toDate, setToDate] = useState(new Date().toISOString().slice(0,10));
   const [selEmp, setSelEmp] = useState(employees[0]?.id || '');
   const [orientation, setOrientation] = useState('landscape'); // landscape | portrait
+  const [useLHMep, setUseLHMep] = useState(!!businessInfo?.letterhead);
 
   const acts = siteActivities.filter(a => a.projectId === selProject);
   const project = siteProjects.find(p => p.id === selProject);
@@ -10049,6 +10149,9 @@ function MEPReportsView({ siteProjects, siteActivities, progressUpdates, employe
         </table>`).join('');
     }
 
+    const lhHtml = useLHMep && businessInfo?.letterhead
+      ? `<div style="text-align:center;margin-bottom:14px;padding-bottom:10px;border-bottom:2px solid #1E2A4A;"><img src="${businessInfo.letterhead}" style="max-width:100%;max-height:120px;object-fit:contain;display:block;margin:0 auto;" /></div>`
+      : `<div style="font-size:15px;font-weight:700;color:#1E2A4A;margin-bottom:2px;">${businessInfo?.name||''}</div>`;
     const html = `<!DOCTYPE html><html><head>
       <meta charset="utf-8"/>
       <title>${title}</title>
@@ -10067,6 +10170,7 @@ function MEPReportsView({ siteProjects, siteActivities, progressUpdates, employe
         p { margin: 4px 0 10px; }
       </style>
     </head><body>
+      ${lhHtml}
       <h1>${title}</h1>
       <div class="meta">Project: <b>${projName}</b> &nbsp;|&nbsp; Period: <b>${period}</b> &nbsp;|&nbsp; Printed: ${new Date().toLocaleDateString()}</div>
       ${tableHTML || '<p>No data available for the selected period.</p>'}
@@ -10086,6 +10190,7 @@ function MEPReportsView({ siteProjects, siteActivities, progressUpdates, employe
           <p style={styles.muted}>Manhour, manpower & material reports for selected period</p>
         </div>
         <div style={{ display:'flex', alignItems:'center', gap:8 }}>
+          {businessInfo?.letterhead && <button onClick={() => setUseLHMep(v => !v)} style={{ ...styles.ghostBtn, ...(useLHMep ? { background: '#EEF2FF', color: '#3D52A0', fontWeight: 600 } : {}) }}>📃 {useLHMep ? 'Letterhead ON' : 'Use Letterhead'}</button>}
           <div style={{ display:'flex', border:'1px solid #DDD8CC', borderRadius:8, overflow:'hidden', fontSize:12 }}>
             {[['landscape','⬜ Landscape'],['portrait','📄 Portrait']].map(([val,lbl])=>(
               <button key={val} onClick={()=>setOrientation(val)}
@@ -11835,6 +11940,7 @@ export default function App() {
             contracts={contracts}
             setContracts={setContracts}
             customers={customers}
+            documents={documents}
             termsLibrary={termsLibrary}
             businessInfo={businessInfo}
             userRole={userRole}
@@ -11879,7 +11985,7 @@ export default function App() {
         return <ClientMaterialView clientMaterials={clientMaterials} setClientMaterials={setClientMaterials} siteProjects={siteProjects} employees={employees} userRole={userRole} />;
       case 'siteattendance':
         return <SiteAttendanceView siteAttendance={siteAttendance} setSiteAttendance={setSiteAttendance} siteProjects={siteProjects} employees={employees} userRole={userRole} />;
-      case 'mepreports':      return <MEPReportsView siteProjects={siteProjects} siteActivities={siteActivities} progressUpdates={progressUpdates} employees={employees} />;
+      case 'mepreports':      return <MEPReportsView siteProjects={siteProjects} siteActivities={siteActivities} progressUpdates={progressUpdates} employees={employees} businessInfo={businessInfo} />;
       case 'evaluation':
         return <QuarterlyEvalView evaluations={evaluations} setEvaluations={setEvaluations} employees={employees} siteAttendance={siteAttendance} progressUpdates={progressUpdates} siteProjects={siteProjects} userRole={userRole} />;
       case 'isoprinciples':
