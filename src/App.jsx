@@ -2845,8 +2845,8 @@ function DocEditor({ doc, setDoc, customers, vendors, items, businessInfo, userR
 
         <div style={styles.preview} className="print-area">
           {useLH && businessInfo?.letterhead && (
-            <div style={{ textAlign:'center', marginBottom:16, paddingBottom:12, borderBottom:'2px solid #1E2A4A' }}>
-              <img src={businessInfo.letterhead} alt="letterhead" style={{ maxWidth:'100%', maxHeight:150, objectFit:'contain', display:'block', margin:'0 auto' }} />
+            <div style={{ marginBottom: 16, paddingBottom: 12, borderBottom: '2px solid #1E2A4A' }}>
+              <img src={businessInfo.letterhead} alt="letterhead" style={{ width: '100%', display: 'block' }} />
             </div>
           )}
           {/* ── DRAFT watermark — visible on screen + print when not approved ── */}
@@ -2865,6 +2865,19 @@ function DocEditor({ doc, setDoc, customers, vendors, items, businessInfo, userR
             </div>
           )}
           {(() => {
+            // ── Letterhead mode: skip template header entirely ──
+            if (useLH && businessInfo?.letterhead) {
+              return (
+                <div style={{ display: 'flex', justifyContent: 'flex-end', marginBottom: 14, paddingBottom: 10, borderBottom: '1px solid #EAE6DB' }}>
+                  <div style={{ textAlign: 'right' }}>
+                    <div className="serif" style={{ ...styles.previewDocType, color: t.color }}>{t.label}</div>
+                    <div style={styles.previewSmall}>No: {doc.number}</div>
+                    <div style={styles.previewSmall}>Date: {doc.date}</div>
+                    {doc.refNumber && <div style={styles.previewSmall}>Ref: {doc.refNumber}</div>}
+                  </div>
+                </div>
+              );
+            }
             const logoStyle = { width: 64, height: 64, objectFit: 'contain', borderRadius: 8, display: 'block' };
             const logoWrap = (dark) => businessInfo.logo ? (
               <div style={{ background: dark ? '#fff' : 'transparent', borderRadius: 10, padding: dark ? 4 : 0, marginRight: 12, flexShrink: 0, alignSelf: 'flex-start' }}>
@@ -3684,7 +3697,7 @@ function StatementPanel({ rows, openingBalance, businessInfo, onClose }) {
         <button style={styles.primaryBtn} onClick={() => window.print()}><Printer size={15} /> Print</button>
       </div>
       <div className="print-area" style={{ position: 'fixed', inset: 0, background: '#fff', zIndex: 999, overflowY: 'auto', padding: '40px 56px' }}>
-        {useLH && businessInfo?.letterhead && <div style={{ textAlign:'center', marginBottom:16, paddingBottom:12, borderBottom:'2px solid #1E2A4A' }}><img src={businessInfo.letterhead} alt="letterhead" style={{ maxWidth:'100%', maxHeight:140, objectFit:'contain', display:'block', margin:'0 auto' }} /></div>}
+        {useLH && businessInfo?.letterhead && <div style={{ textAlign:'center', marginBottom:16, paddingBottom:12, borderBottom:'2px solid #1E2A4A' }}><img src={businessInfo.letterhead} alt="letterhead" style={{ width:'100%', display:'block' }} /></div>}
         {/* Header */}
         <div style={{ borderBottom: '2px solid #1E2A4A', paddingBottom: 12, marginBottom: 20, display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
           {!useLH && <div>
@@ -4032,7 +4045,7 @@ function VoucherPrintHeader({ businessInfo, useLH }) {
   if (useLH && businessInfo?.letterhead) {
     return (
       <div style={{ textAlign: 'center', marginBottom: 16, paddingBottom: 12, borderBottom: '2px solid #1E2A4A' }}>
-        <img src={businessInfo.letterhead} alt="letterhead" style={{ maxWidth: '100%', maxHeight: 140, objectFit: 'contain', display: 'block', margin: '0 auto' }} />
+        <img src={businessInfo.letterhead} alt="letterhead" style={{ width: '100%', display: 'block' }} />
       </div>
     );
   }
@@ -4511,7 +4524,7 @@ function BinCard({ items, stockLedger, businessInfo }) {
 
       {/* Print header */}
       <div className="print-only" style={{ marginBottom: 16 }}>
-        {useLHBin && businessInfo?.letterhead && <div style={{ textAlign:'center', marginBottom:12, paddingBottom:10, borderBottom:'2px solid #1E2A4A' }}><img src={businessInfo.letterhead} alt="letterhead" style={{ maxWidth:'100%', maxHeight:120, objectFit:'contain', display:'block', margin:'0 auto' }} /></div>}
+        {useLHBin && businessInfo?.letterhead && <div style={{ textAlign:'center', marginBottom:12, paddingBottom:10, borderBottom:'2px solid #1E2A4A' }}><img src={businessInfo.letterhead} alt="letterhead" style={{ width:'100%', display:'block' }} /></div>}
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
           {!useLHBin && <div>
             <div style={{ fontWeight: 700, fontSize: 18 }}>{businessInfo.name}</div>
@@ -5331,7 +5344,7 @@ function PaySlipPrint({ run, businessInfo, onClose }) {
         <button style={styles.primaryBtn} onClick={() => window.print()}><Printer size={15}/> Print</button>
       </div>
       <div className="print-area" style={{ position: 'fixed', inset: 0, background: '#fff', zIndex: 999, overflowY: 'auto', padding: '40px 48px' }}>
-        {useLH && businessInfo?.letterhead && <div style={{ textAlign:'center', marginBottom:16, paddingBottom:12, borderBottom:'2px solid #1E2A4A' }}><img src={businessInfo.letterhead} alt="letterhead" style={{ maxWidth:'100%', maxHeight:140, objectFit:'contain', display:'block', margin:'0 auto' }} /></div>}
+        {useLH && businessInfo?.letterhead && <div style={{ textAlign:'center', marginBottom:16, paddingBottom:12, borderBottom:'2px solid #1E2A4A' }}><img src={businessInfo.letterhead} alt="letterhead" style={{ width:'100%', display:'block' }} /></div>}
         <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 20, borderBottom: '2px solid #1E2A4A', paddingBottom: 12 }}>
           {!useLH && <div>
             <div className="serif" style={{ fontWeight: 700, fontSize: 20, color: '#1E2A4A' }}>{businessInfo.name}</div>
@@ -5415,7 +5428,7 @@ function IndividualPaySlips({ run, businessInfo, onClose }) {
       <div className="print-area" style={{ position: 'fixed', inset: 0, background: '#fff', zIndex: 999, overflowY: 'auto' }}>
         {lines.map((l, i) => (
           <div key={i} style={{ padding: '36px 48px', pageBreakAfter: i < lines.length - 1 ? 'always' : 'auto', borderBottom: i < lines.length - 1 ? '3px dashed #EAE6DB' : 'none' }}>
-            {useLH && businessInfo?.letterhead && <div style={{ textAlign:'center', marginBottom:12, paddingBottom:10, borderBottom:'2px solid #1E2A4A' }}><img src={businessInfo.letterhead} alt="letterhead" style={{ maxWidth:'100%', maxHeight:120, objectFit:'contain', display:'block', margin:'0 auto' }} /></div>}
+            {useLH && businessInfo?.letterhead && <div style={{ textAlign:'center', marginBottom:12, paddingBottom:10, borderBottom:'2px solid #1E2A4A' }}><img src={businessInfo.letterhead} alt="letterhead" style={{ width:'100%', display:'block' }} /></div>}
             {/* Header */}
             <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 16, paddingBottom: 10 }}>
               {!useLH && <div>
@@ -5748,7 +5761,7 @@ function ServiceOrderPrint({ order, businessInfo, onClose }) {
           </div>
         </div>
         <div className="print-area" style={{ background: '#fff', padding: 32, fontFamily: 'Georgia, serif' }}>
-          {useLH && businessInfo?.letterhead && <div style={{ textAlign:'center', marginBottom:20, paddingBottom:14, borderBottom:'2px solid #1E2A4A' }}><img src={businessInfo.letterhead} alt="letterhead" style={{ maxWidth:'100%', maxHeight:140, objectFit:'contain', display:'block', margin:'0 auto' }} /></div>}
+          {useLH && businessInfo?.letterhead && <div style={{ textAlign:'center', marginBottom:20, paddingBottom:14, borderBottom:'2px solid #1E2A4A' }}><img src={businessInfo.letterhead} alt="letterhead" style={{ width:'100%', display:'block' }} /></div>}
           <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 28 }}>
             {!useLH && <div>
               <div style={{ fontSize: 22, fontWeight: 700 }}>{businessInfo.name || 'Company Name'}</div>
@@ -8406,7 +8419,7 @@ function ContractPrint({ contract: c, businessInfo: bi, termsLibrary, onBack }) 
   const totalVal = c.contractValue || enabledScopes.reduce((s,sc)=>s+(parseFloat(c.scope?.[sc.key]?.value)||0),0);
 
   function handlePrint() {
-    const lhImg = useLH && bi?.letterhead ? `<img src="${bi.letterhead}" style="width:100%;max-height:180px;object-fit:contain;display:block;margin-bottom:8px;" />` : '';
+    const lhImg = useLH && bi?.letterhead ? `<img src="${bi.letterhead}" style="width:100%;display:block;margin-bottom:8px;" />` : '';
     const companyHeader = !lhImg ? `
       <div style="text-align:center;border-bottom:2px solid #1E2A4A;padding-bottom:16px;margin-bottom:24px;">
         ${bi?.logo ? `<img src="${bi.logo}" style="height:60px;object-fit:contain;display:block;margin:0 auto 8px;" />` : ''}
@@ -8853,7 +8866,7 @@ function PartnerAgreement({ partner: p, termsLibrary, businessInfo: bi, document
         {linkedDocs.length > 0 && <span style={{ fontSize: 13, color: '#888' }}>{linkedDocs.length} linked document{linkedDocs.length !== 1 ? 's' : ''}</span>}
       </div>
       <div className="print-area" style={{ maxWidth: 780, margin: '28px auto', background: '#fff', padding: '48px 56px', fontFamily: 'Georgia, serif', fontSize: 13, lineHeight: 1.8, color: '#222', boxShadow: '0 2px 20px rgba(0,0,0,0.08)' }}>
-        {useLHPartner && bi?.letterhead && <div style={{ textAlign:'center', marginBottom:20, paddingBottom:14, borderBottom:'2px solid #1E2A4A' }}><img src={bi.letterhead} alt="letterhead" style={{ maxWidth:'100%', maxHeight:140, objectFit:'contain', display:'block', margin:'0 auto' }} /></div>}
+        {useLHPartner && bi?.letterhead && <div style={{ textAlign:'center', marginBottom:20, paddingBottom:14, borderBottom:'2px solid #1E2A4A' }}><img src={bi.letterhead} alt="letterhead" style={{ width:'100%', display:'block' }} /></div>}
         <div style={{ textAlign: 'center', borderBottom: '2px solid #1E2A4A', paddingBottom: 24, marginBottom: 32 }}>
           {!useLHPartner && bi.companyName && <div style={{ fontSize: 22, fontWeight: 700, color: '#1E2A4A' }}>{bi.companyName}</div>}
           <div style={{ fontSize: 18, fontWeight: 700, letterSpacing: 2, marginTop: 20, color: '#1E2A4A', textTransform: 'uppercase' }}>Dealership / Channel Partner Agreement</div>
@@ -10150,7 +10163,7 @@ function MEPReportsView({ siteProjects, siteActivities, progressUpdates, employe
     }
 
     const lhHtml = useLHMep && businessInfo?.letterhead
-      ? `<div style="text-align:center;margin-bottom:14px;padding-bottom:10px;border-bottom:2px solid #1E2A4A;"><img src="${businessInfo.letterhead}" style="max-width:100%;max-height:120px;object-fit:contain;display:block;margin:0 auto;" /></div>`
+      ? `<div style="text-align:center;margin-bottom:14px;padding-bottom:10px;border-bottom:2px solid #1E2A4A;"><img src="${businessInfo.letterhead}" style="width:100%;display:block;" /></div>`
       : `<div style="font-size:15px;font-weight:700;color:#1E2A4A;margin-bottom:2px;">${businessInfo?.name||''}</div>`;
     const html = `<!DOCTYPE html><html><head>
       <meta charset="utf-8"/>
