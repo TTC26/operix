@@ -8290,7 +8290,7 @@ function ContractEditor({ contract, customers, vendors, documents, termsLibrary,
           </div>
         </div>
         <div style={{ background:'#F5F3EE', borderRadius:8, padding:'14px 16px' }}>
-          <div style={{ fontWeight:700, fontSize:12, color:'#1E2A4A', marginBottom:10 }}>VENDOR / CLIENT</div>
+          <div style={{ fontWeight:700, fontSize:12, color:'#1E2A4A', marginBottom:10 }}>SUPPLIER</div>
           <div style={{ fontSize:12, color:'#555', marginBottom:6 }}><b>{form.customerSnapshot?.name || '—'}</b></div>
           <div style={{ fontSize:11, color:'#888', marginBottom:8 }}>{form.customerSnapshot?.address || ''}</div>
           {(businessInfo?.country === 'india' || businessInfo?.country === 'India') && (
@@ -8477,7 +8477,7 @@ function ContractPrint({ contract: c, businessInfo: bi, termsLibrary, onBack }) 
       <table style="width:100%;border-collapse:collapse;margin-bottom:24px;font-size:12px;">
         <tr style="background:#1E2A4A;color:#fff;">
           <th style="padding:8px 12px;text-align:left;width:50%">BUYER</th>
-          <th style="padding:8px 12px;text-align:left;width:50%">VENDOR / SUPPLIER</th>
+          <th style="padding:8px 12px;text-align:left;width:50%">SUPPLIER</th>
         </tr>
         <tr>
           <td style="padding:10px 12px;border:1px solid #ddd;vertical-align:top;">
@@ -8537,19 +8537,25 @@ function ContractPrint({ contract: c, businessInfo: bi, termsLibrary, onBack }) 
         </tbody>
       </table>` : '';
 
+    // Split sub-clause text (e.g. "1.1 text 1.2 text") into separate numbered lines
+    const fmtClause = (text) => (text||'').replace(/ (?=\d+\.\d+\s)/g, '\n');
     const termsHTML = terms.items.length > 0 ? `
       <h3>Terms &amp; Conditions</h3>
       ${terms.items.map((item,i)=>`
-        <div style="margin-bottom:10px;font-size:12px;line-height:1.7;">
-          ${item.title ? `<div style="font-weight:700;color:#1E2A4A;">${item.title}</div>` : ''}
-          <div style="margin-left:${item.title?12:0}px;white-space:pre-line">${item.text}</div>
+        <div style="margin-bottom:16px;font-size:12px;line-height:1.8;">
+          ${item.title ? `<div style="font-weight:700;color:#1E2A4A;margin-bottom:6px;">${item.title}</div>` : ''}
+          <div style="margin-left:${item.title?14:0}px;">
+            ${fmtClause(item.text).split('\n').filter(l=>l.trim()).map(line=>`
+              <div style="margin-bottom:4px;">${line.trim()}</div>`).join('')}
+          </div>
         </div>`).join('')}
       ${terms.extra ? `<div style="font-size:12px;margin-top:10px">${terms.extra}</div>` : ''}` : '';
 
     const sigBlock = `
       <div style="margin-top:48px;border-top:1px solid #ccc;padding-top:28px;display:grid;grid-template-columns:1fr 1fr;gap:60px;font-size:12px;">
         <div>
-          <div style="font-weight:700;color:#555;margin-bottom:36px">For ${bi?.name||bi?.companyName||'Buyer'}</div>
+          <div style="font-weight:700;color:#1E2A4A;margin-bottom:4px;font-size:13px;">For the Contractor / Buyer</div>
+          <div style="font-size:11px;color:#555;margin-bottom:36px;">${bi?.name||bi?.companyName||''}</div>
           <div style="border-top:1px solid #333;padding-top:6px;">
             <b>${c.signatoryOurName||'Authorised Signatory'}</b>
             ${c.signatoryOurDesignation ? `<div style="color:#888;font-size:11px">${c.signatoryOurDesignation}</div>` : ''}
@@ -8557,7 +8563,8 @@ function ContractPrint({ contract: c, businessInfo: bi, termsLibrary, onBack }) 
           </div>
         </div>
         <div>
-          <div style="font-weight:700;color:#555;margin-bottom:36px">For ${c.customerSnapshot?.name||'Vendor'}</div>
+          <div style="font-weight:700;color:#1E2A4A;margin-bottom:4px;font-size:13px;">For the Supplier</div>
+          <div style="font-size:11px;color:#555;margin-bottom:36px;">${c.customerSnapshot?.name||''}</div>
           <div style="border-top:1px solid #333;padding-top:6px;">
             <b>${c.signatoryClientName||'Authorised Signatory'}</b>
             ${c.signatoryClientDesignation ? `<div style="color:#888;font-size:11px">${c.signatoryClientDesignation}</div>` : ''}
@@ -8586,7 +8593,7 @@ function ContractPrint({ contract: c, businessInfo: bi, termsLibrary, onBack }) 
       <div style="background:#f7f6f3;border:1px solid #ddd;border-radius:4px;padding:10px 16px;margin-bottom:20px;font-size:14px;font-weight:700;color:#1E2A4A;">
         Subject: ${c.title}
       </div>
-      <p style="font-size:12px;margin-bottom:16px;">This Contract Agreement is entered into between <b>${bi?.name||bi?.companyName||'Buyer'}</b> (hereinafter referred to as the "Buyer") and <b>${c.customerSnapshot?.name||'the Vendor'}</b> (hereinafter referred to as the "Vendor"), both parties agreeing to the terms set forth below.</p>
+      <p style="font-size:12px;margin-bottom:16px;">This Contract Agreement is entered into between <b>${bi?.name||bi?.companyName||'the Buyer'}</b> (hereinafter referred to as the "Buyer") and <b>${c.customerSnapshot?.name||'the Supplier'}</b> (hereinafter referred to as the "Supplier"), both parties agreeing to the terms set forth below.</p>
       ${preamble}
       ${scopeTable}
       ${milestoneTable}
