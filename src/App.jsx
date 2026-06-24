@@ -12623,4 +12623,8 @@ export default function App() {
             setEditingItem(null);
           }}
           onClose={() => setEditingItem(null)}
-     
+        />
+      )}
+    </div>
+  );
+}
