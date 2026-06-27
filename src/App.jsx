@@ -176,6 +176,87 @@ function computeTotals(doc, sellerState, country) {
   return { subtotal, cgst, sgst, igst, vat, totalTax, grandTotal, sameState };
 }
 
+// ─── PDF Download & OCR Utilities ────────────────────────────────────────────
+function loadScript(src) {
+  return new Promise((resolve, reject) => {
+    if (document.querySelector(`script[src="${src}"]`)) { resolve(); return; }
+    const s = document.createElement('script');
+    s.src = src; s.onload = resolve; s.onerror = reject;
+    document.head.appendChild(s);
+  });
+}
+
+async function downloadDocPDF(elOrSelector, filename) {
+  try {
+    if (!window.html2canvas) await loadScript('https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js');
+    if (!window.jspdf) await loadScript('https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js');
+    const el = typeof elOrSelector === 'string' ? document.querySelector(elOrSelector) : elOrSelector;
+    if (!el) { alert('Nothing to download'); return; }
+    const canvas = await window.html2canvas(el, { scale: 2, useCORS: true, allowTaint: true, backgroundColor: '#ffffff' });
+    const { jsPDF } = window.jspdf;
+    const pdf = new jsPDF({ orientation: 'portrait', unit: 'mm', format: 'a4' });
+    const pageW = pdf.internal.pageSize.getWidth();
+    const pageH = pdf.internal.pageSize.getHeight();
+    const imgData = canvas.toDataURL('image/jpeg', 0.92);
+    const imgH = (canvas.height * pageW) / canvas.width;
+    if (imgH <= pageH) {
+      pdf.addImage(imgData, 'JPEG', 0, 0, pageW, imgH);
+    } else {
+      let yOffset = 0;
+      while (yOffset < imgH) {
+        pdf.addImage(imgData, 'JPEG', 0, -yOffset, pageW, imgH);
+        yOffset += pageH;
+        if (yOffset < imgH) pdf.addPage();
+      }
+    }
+    pdf.save(filename || 'document.pdf');
+  } catch (e) {
+    console.error('PDF error:', e);
+    alert('PDF generation failed. Use Print → Save as PDF instead.');
+  }
+}
+
+function parseOCRText(text) {
+  const lines = text.split('\n').map(l => l.trim()).filter(Boolean);
+  // Date
+  let date = '';
+  const dm = text.match(/(\d{1,2})[\/\-\.](\d{1,2})[\/\-\.](\d{2,4})/);
+  if (dm) {
+    const y = dm[3].length === 2 ? '20' + dm[3] : dm[3];
+    date = `${y}-${dm[2].padStart(2,'0')}-${dm[1].padStart(2,'0')}`;
+  }
+  // Grand total
+  const totalM = text.match(/(?:grand\s*total|net\s*amount|total\s*amount|total)[:\s]*[₹Rs\.]*\s*([0-9,]+\.?\d*)/i);
+  const taxM = text.match(/(?:total\s*(?:gst|tax)|igst|cgst[^+\n]*\+[^₹\n]*sgst|gst\s*amount)[:\s]*[₹Rs\.]*\s*([0-9,]+\.?\d*)/i);
+  // Vendor — first non-trivial non-numeric line
+  let vendorName = '';
+  for (const l of lines) {
+    if (l.length > 3 && !/^\d/.test(l) && !/^(invoice|bill|receipt|tax|date|no\.|gstin|pan|phone|tel|email|www|address)/i.test(l)) {
+      vendorName = l; break;
+    }
+  }
+  // Items — lines with at least 2 numeric tokens (qty + rate or rate + amount)
+  const items = [];
+  for (const l of lines) {
+    const nums = l.match(/[0-9,]+\.?\d*/g);
+    if (nums && nums.length >= 2) {
+      const desc = l.replace(/[0-9,\.₹Rs%\s]+$/g, '').trim();
+      if (desc.length > 1) {
+        const vals = nums.map(n => parseFloat(n.replace(/,/g,''))).filter(n => n > 0);
+        items.push({ name: desc, qty: vals[0] || 1, rate: vals[vals.length - 1] || 0, gst: 18 });
+      }
+    }
+  }
+  return {
+    date,
+    vendorName,
+    total: totalM ? parseFloat(totalM[1].replace(/,/g,'')) : 0,
+    tax: taxM ? parseFloat(taxM[1].replace(/,/g,'')) : 0,
+    items: items.slice(0, 15),
+    rawText: text,
+  };
+}
+
 // ─── styles.js ─────────────────────────────────────────────────
 
 const styles = {
@@ -295,6 +376,207 @@ function Modal({ children, onClose, title, wide }) {
   );
 }
 
+
+// ─── Email Notification Utility ──────────────────────────────────────────────
+function sendNotificationEmail(businessInfo, type, vars = {}) {
+  const cfg = businessInfo?.emailConfig;
+  if (!cfg?.serviceId || !cfg?.templateId || !cfg?.publicKey) return; // not configured yet
+  if (!window.emailjs) {
+    const s = document.createElement('script');
+    s.src = 'https://cdn.jsdelivr.net/npm/@emailjs/browser@4/dist/email.min.js';
+    s.onload = () => { window.emailjs.init(cfg.publicKey); doSend(); };
+    document.head.appendChild(s);
+  } else { doSend(); }
+  function doSend() {
+    const params = {
+      company_name: businessInfo.name || 'Operix',
+      doc_ref: vars.docRef || '',
+      party: vars.party || '',
+      submitter: vars.submitter || '',
+      customer_email: vars.customerEmail || '',
+      approver_email: cfg.approverEmail || businessInfo.email || '',
+      type,
+    };
+    window.emailjs.send(cfg.serviceId, cfg.templateId, params).catch(e => console.warn('Email failed:', e));
+  }
+}
+
+// ─── Notifications View ───────────────────────────────────────────────────────
+function NotificationsView({ notifications = [], setNotifications, documents, openDoc, userRole }) {
+  const visible = notifications.filter(n => n.forRole === 'all' || n.forRole === userRole);
+
+  function markRead(id) {
+    setNotifications(prev => prev.map(n => n.id === id ? { ...n, read: true } : n));
+  }
+  function markAllRead() {
+    setNotifications(prev => prev.map(n => ({ ...n, read: true })));
+  }
+  function deleteNotif(id) {
+    setNotifications(prev => prev.filter(n => n.id !== id));
+  }
+
+  const typeIcon = { approval_request: '⏳', approved: '✅', rejected: '❌' };
+  const typeBg   = { approval_request: '#EEF2FF', approved: '#F0FDF4', rejected: '#FEF2F2' };
+  const typeColor= { approval_request: '#3D52A0', approved: '#059669', rejected: '#B5453A' };
+
+  return (
+    <div style={styles.page}>
+      <div style={styles.pageHeader}>
+        <div>
+          <h2 className="serif" style={styles.pageTitle}>🔔 Notifications</h2>
+          <div style={{ fontSize: 13, color: '#888780' }}>{visible.filter(n=>!n.read).length} unread</div>
+        </div>
+        {visible.some(n=>!n.read) && (
+          <button onClick={markAllRead} style={styles.ghostBtn}>✓ Mark all read</button>
+        )}
+      </div>
+
+      {visible.length === 0 ? (
+        <div style={{ ...styles.emptyBox, marginTop: 48 }}>
+          <div style={{ fontSize: 36, marginBottom: 12 }}>🔔</div>
+          <div style={{ fontWeight: 600, color: '#1E2A4A', marginBottom: 4 }}>No notifications yet</div>
+          <div style={{ fontSize: 13, color: '#888' }}>Approval requests and document updates will appear here.</div>
+        </div>
+      ) : (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 10, maxWidth: 700 }}>
+          {visible.map(n => {
+            const doc = documents.find(d => d.id === n.docId);
+            return (
+              <div key={n.id} style={{
+                background: n.read ? '#fff' : (typeBg[n.type] || '#F8F5EE'),
+                border: `1px solid ${n.read ? '#EAE6DB' : (typeColor[n.type] || '#C9A24B')}`,
+                borderLeft: `4px solid ${typeColor[n.type] || '#C9A24B'}`,
+                borderRadius: 10, padding: '14px 16px',
+                display: 'flex', gap: 14, alignItems: 'flex-start',
+                opacity: n.read ? 0.75 : 1,
+              }}>
+                <div style={{ fontSize: 22, flexShrink: 0, marginTop: 2 }}>{typeIcon[n.type] || '🔔'}</div>
+                <div style={{ flex: 1, minWidth: 0 }}>
+                  <div style={{ fontWeight: 700, fontSize: 14, color: '#1E2A4A', marginBottom: 2 }}>{n.title}</div>
+                  <div style={{ fontSize: 13, color: '#555', marginBottom: 6 }}>{n.message}</div>
+                  <div style={{ fontSize: 11, color: '#888' }}>{new Date(n.createdAt).toLocaleString('en-IN')}</div>
+                </div>
+                <div style={{ display: 'flex', gap: 6, flexShrink: 0 }}>
+                  {doc && openDoc && (
+                    <button onClick={() => { markRead(n.id); openDoc(doc); }}
+                      style={{ ...styles.ghostBtn, fontSize: 12, padding: '4px 10px' }}>Open</button>
+                  )}
+                  {!n.read && (
+                    <button onClick={() => markRead(n.id)}
+                      style={{ ...styles.ghostBtn, fontSize: 12, padding: '4px 10px' }}>Read</button>
+                  )}
+                  <button onClick={() => deleteNotif(n.id)}
+                    style={{ ...styles.iconBtn, color: '#B5453A' }}><X size={14}/></button>
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ─── Scan Bill Modal ───────────────────────────────────────────────────────────
+function ScanBillModal({ onApply, onClose }) {
+  const [imgFile, setImgFile] = React.useState(null);
+  const [imgUrl, setImgUrl] = React.useState(null);
+  const [scanning, setScanning] = React.useState(false);
+  const [progress, setProgress] = React.useState(0);
+  const [extracted, setExtracted] = React.useState(null);
+  const [showRaw, setShowRaw] = React.useState(false);
+
+  function handleFile(e) {
+    const f = e.target.files[0];
+    if (!f) return;
+    setImgFile(f);
+    setImgUrl(URL.createObjectURL(f));
+    setExtracted(null);
+  }
+
+  async function handleScan() {
+    if (!imgFile) return;
+    setScanning(true); setProgress(0);
+    try {
+      await loadScript('https://unpkg.com/tesseract.js@5/dist/tesseract.min.js');
+      const worker = await window.Tesseract.createWorker('eng', 1, {
+        logger: m => { if (m.status === 'recognizing text') setProgress(Math.round((m.progress || 0) * 100)); }
+      });
+      const { data: { text } } = await worker.recognize(imgFile);
+      await worker.terminate();
+      setExtracted(parseOCRText(text));
+    } catch(e) { alert('Scan failed: ' + (e.message || e)); }
+    setScanning(false);
+  }
+
+  return (
+    <Modal title="📷 Scan Bill / Invoice" onClose={onClose} wide>
+      <div style={{ display: 'flex', gap: 20, alignItems: 'flex-start' }}>
+        {/* Left: upload */}
+        <div style={{ flex: 1, minWidth: 0 }}>
+          <label style={{ display: 'block', border: '2px dashed #C9A24B', borderRadius: 10, padding: imgUrl ? 4 : 28, textAlign: 'center', cursor: 'pointer', background: '#FDFAF4', marginBottom: 10 }}>
+            <input type="file" accept="image/*" capture="environment" onChange={handleFile} style={{ display: 'none' }} />
+            {imgUrl
+              ? <img src={imgUrl} alt="bill" style={{ maxWidth: '100%', maxHeight: 280, borderRadius: 8, display: 'block', margin: '0 auto' }} />
+              : <div style={{ color: '#888780', fontSize: 13, lineHeight: 1.7 }}>
+                  <div style={{ fontSize: 28, marginBottom: 6 }}>📷</div>
+                  Click to take photo or upload bill<br />
+                  <span style={{ fontSize: 11 }}>Camera / Gallery — JPG, PNG</span>
+                </div>
+            }
+          </label>
+          {imgUrl && !scanning && (
+            <button onClick={handleScan} style={{ ...styles.primaryBtn, width: '100%' }}>
+              🔍 {extracted ? 'Scan Again' : 'Extract Data from Bill'}
+            </button>
+          )}
+          {scanning && (
+            <div style={{ textAlign: 'center', padding: '10px 0' }}>
+              <div style={{ fontSize: 12, color: '#888', marginBottom: 6 }}>Reading bill... {progress}%</div>
+              <div style={{ background: '#EAE6DB', borderRadius: 4, height: 6 }}>
+                <div style={{ background: '#C9A24B', height: 6, borderRadius: 4, width: `${progress}%`, transition: 'width 0.2s' }} />
+              </div>
+            </div>
+          )}
+        </div>
+
+        {/* Right: extracted fields */}
+        {extracted && (
+          <div style={{ flex: 1, minWidth: 0, fontSize: 13 }}>
+            <div style={{ fontWeight: 700, color: '#1E2A4A', marginBottom: 10 }}>Extracted Data — Edit if needed</div>
+            {[
+              ['Vendor / Party Name', 'vendorName', 'text'],
+              ['Date (YYYY-MM-DD)', 'date', 'date'],
+              ['Total Amount', 'total', 'number'],
+              ['Tax Amount', 'tax', 'number'],
+            ].map(([label, key, type]) => (
+              <div key={key} style={{ marginBottom: 8 }}>
+                <div style={{ fontSize: 11, color: '#888', marginBottom: 2 }}>{label}</div>
+                <input type={type} value={extracted[key] || ''} onChange={e => setExtracted(p => ({...p, [key]: e.target.value}))}
+                  style={{ width: '100%', border: '1px solid #DDD', borderRadius: 6, padding: '5px 8px', fontSize: 13, boxSizing: 'border-box' }} />
+              </div>
+            ))}
+            {extracted.items?.length > 0 && (
+              <div style={{ marginTop: 10, marginBottom: 10 }}>
+                <div style={{ fontSize: 11, color: '#888', marginBottom: 4 }}>Detected Lines ({extracted.items.length})</div>
+                <div style={{ maxHeight: 120, overflowY: 'auto', fontSize: 11, background: '#F8F5EE', borderRadius: 6, padding: '4px 8px' }}>
+                  {extracted.items.map((it, i) => (
+                    <div key={i} style={{ padding: '2px 0', borderBottom: '1px solid #EAE6DB' }}>{it.name} · qty {it.qty} · ₹{it.rate}</div>
+                  ))}
+                </div>
+              </div>
+            )}
+            <div style={{ display: 'flex', gap: 8, marginTop: 14 }}>
+              <button onClick={() => onApply(extracted)} style={styles.primaryBtn}>Apply to Document ✓</button>
+              <button onClick={() => setShowRaw(v=>!v)} style={styles.ghostBtn}>Raw</button>
+            </div>
+            {showRaw && <pre style={{ marginTop: 8, fontSize: 10, background: '#F5F3EE', padding: 8, borderRadius: 6, maxHeight: 140, overflow: 'auto', whiteSpace: 'pre-wrap' }}>{extracted.rawText}</pre>}
+          </div>
+        )}
+      </div>
+    </Modal>
+  );
+}
 
 // ─── Onboarding Setup ──────────────────────────────────────────────────────────
 function OnboardingSetup({ setBusinessInfo }) {
@@ -1430,6 +1712,43 @@ function SettingsView({ businessInfo, setBusinessInfo, onExportData, onSaved, us
                 ))}
               </div>
             </div>
+
+            {/* ── Email Notification Config ── */}
+            <div style={{ background: '#F8F5EE', border: '1px solid #EAE6DB', borderRadius: 12, padding: '20px 24px', marginTop: 20 }}>
+              <div style={{ fontWeight: 700, fontSize: 14, color: '#1E2A4A', marginBottom: 4 }}>📧 Email Notifications (Optional)</div>
+              <div style={{ fontSize: 12, color: '#888', marginBottom: 14, lineHeight: 1.6 }}>
+                Connect EmailJS (free, 200 emails/month) to send approval requests and document alerts by email.{' '}
+                <a href="https://www.emailjs.com" target="_blank" rel="noreferrer" style={{ color: '#3D52A0' }}>Setup guide →</a>
+              </div>
+              {[
+                ['Service ID', 'emailConfig.serviceId', 'service_xxxxxxx'],
+                ['Template ID', 'emailConfig.templateId', 'template_xxxxxxx'],
+                ['Public Key', 'emailConfig.publicKey', 'your_public_key'],
+                ['Approver Email', 'emailConfig.approverEmail', 'manager@company.com'],
+              ].map(([label, path, ph]) => {
+                const keys = path.split('.');
+                const val = keys.reduce((o, k) => (o || {})[k], businessInfo) || '';
+                return (
+                  <div key={path} style={{ display: 'flex', gap: 12, alignItems: 'center', marginBottom: 8 }}>
+                    <label style={{ width: 130, fontSize: 12, color: '#555', flexShrink: 0 }}>{label}</label>
+                    <input value={val} placeholder={ph}
+                      onChange={e => {
+                        const v = e.target.value;
+                        setBusinessInfo(prev => {
+                          const next = { ...prev };
+                          if (!next.emailConfig) next.emailConfig = {};
+                          next.emailConfig[keys[1]] = v;
+                          return next;
+                        });
+                      }}
+                      style={{ flex: 1, border: '1px solid #DDD', borderRadius: 6, padding: '6px 10px', fontSize: 12 }} />
+                  </div>
+                );
+              })}
+              {businessInfo?.emailConfig?.serviceId && (
+                <div style={{ fontSize: 11, color: '#3D7A5C', fontWeight: 600, marginTop: 6 }}>✓ Email notifications active</div>
+              )}
+            </div>
           </div>
         </div>
       </div>
@@ -2104,7 +2423,7 @@ const SECTION_VIEWS = {
   admin:       ['staff', 'contracts', 'termslibrary'],
 };
 
-function Sidebar({ view, setView, setActiveDoc, startNewDoc, syncStatus, user, onLogout, userRole, companyType, activeTypes, country }) {
+function Sidebar({ view, setView, setActiveDoc, startNewDoc, syncStatus, user, onLogout, userRole, companyType, activeTypes, country, unreadCount = 0, onShowNotifications }) {
   const showTrade      = activeTypes.includes('trading') || activeTypes.includes('manufacturing');
   const showProduction = activeTypes.includes('manufacturing');
   const showService    = activeTypes.includes('service');
@@ -2341,7 +2660,7 @@ function Sidebar({ view, setView, setActiveDoc, startNewDoc, syncStatus, user, o
         </Section>
       )}
 
-      <SidebarFooter syncStatus={syncStatus} user={user} userRole={userRole} onLogout={onLogout} view={view} setView={setView} />
+      <SidebarFooter syncStatus={syncStatus} user={user} userRole={userRole} onLogout={onLogout} view={view} setView={setView} unreadCount={unreadCount} onShowNotifications={onShowNotifications} />
     </div>
   );
 
@@ -2363,7 +2682,7 @@ function Sidebar({ view, setView, setActiveDoc, startNewDoc, syncStatus, user, o
         <CreateBtn docKey="packing_list" />
         <CreateBtn docKey="creditnote" />
       </Section>
-      <SidebarFooter syncStatus={syncStatus} user={user} userRole={userRole} onLogout={onLogout} view={view} setView={setView} />
+      <SidebarFooter syncStatus={syncStatus} user={user} userRole={userRole} onLogout={onLogout} view={view} setView={setView} unreadCount={unreadCount} onShowNotifications={onShowNotifications} />
     </div>
   );
 
@@ -2382,7 +2701,7 @@ function Sidebar({ view, setView, setActiveDoc, startNewDoc, syncStatus, user, o
         <CreateBtn docKey="purchase" />
         <CreateBtn docKey="purchasebill" />
       </Section>
-      <SidebarFooter syncStatus={syncStatus} user={user} userRole={userRole} onLogout={onLogout} view={view} setView={setView} />
+      <SidebarFooter syncStatus={syncStatus} user={user} userRole={userRole} onLogout={onLogout} view={view} setView={setView} unreadCount={unreadCount} onShowNotifications={onShowNotifications} />
     </div>
   );
 
@@ -2413,7 +2732,7 @@ function Sidebar({ view, setView, setActiveDoc, startNewDoc, syncStatus, user, o
           <NavBtn id="qatesting" label="QA Testing" icon={CheckCircle} />
         </Section>
       )}
-      <SidebarFooter syncStatus={syncStatus} user={user} userRole={userRole} onLogout={onLogout} view={view} setView={setView} />
+      <SidebarFooter syncStatus={syncStatus} user={user} userRole={userRole} onLogout={onLogout} view={view} setView={setView} unreadCount={unreadCount} onShowNotifications={onShowNotifications} />
     </div>
   );
 
@@ -2433,7 +2752,7 @@ function Sidebar({ view, setView, setActiveDoc, startNewDoc, syncStatus, user, o
         <NavBtn id="pettycash" label="Petty Cash" icon={FileMinus} />
         <NavBtn id="vouchers"  label="Vouchers"   icon={FileSignature} />
       </Section>
-      <SidebarFooter syncStatus={syncStatus} user={user} userRole={userRole} onLogout={onLogout} view={view} setView={setView} />
+      <SidebarFooter syncStatus={syncStatus} user={user} userRole={userRole} onLogout={onLogout} view={view} setView={setView} unreadCount={unreadCount} onShowNotifications={onShowNotifications} />
     </div>
   );
 
@@ -2445,15 +2764,32 @@ function Sidebar({ view, setView, setActiveDoc, startNewDoc, syncStatus, user, o
         <NavBtn id="dashboard" label="Dashboard" icon={LayoutDashboard} />
         <NavBtn id="documents" label="Documents"  icon={FileText} />
       </div>
-      <SidebarFooter syncStatus={syncStatus} user={user} userRole={userRole} onLogout={onLogout} view={view} setView={setView} />
+      <SidebarFooter syncStatus={syncStatus} user={user} userRole={userRole} onLogout={onLogout} view={view} setView={setView} unreadCount={unreadCount} onShowNotifications={onShowNotifications} />
     </div>
   );
 }
 
-function SidebarFooter({ syncStatus }) {
+function SidebarFooter({ syncStatus, unreadCount, onShowNotifications, view }) {
   return (
     <>
       <div style={{ flex: 1 }} />
+      {/* Notification Bell */}
+      <button onClick={onShowNotifications} style={{
+        display: 'flex', alignItems: 'center', gap: 8, width: '100%',
+        background: view === 'notifications' ? 'rgba(255,255,255,0.12)' : 'transparent',
+        border: 'none', borderRadius: 8, padding: '8px 10px', cursor: 'pointer',
+        color: '#E8E6DE', fontSize: 13, marginBottom: 4, position: 'relative',
+      }}>
+        <span style={{ fontSize: 16 }}>🔔</span>
+        <span>Notifications</span>
+        {unreadCount > 0 && (
+          <span style={{
+            background: '#C9A24B', color: '#fff', borderRadius: 10,
+            fontSize: 10, fontWeight: 700, padding: '1px 6px', marginLeft: 'auto',
+            minWidth: 18, textAlign: 'center',
+          }}>{unreadCount}</span>
+        )}
+      </button>
       <div style={styles.syncBox}>
         {syncStatus === 'syncing' && <><Cloud size={14} color="#A9B0C9" /><span>Syncing…</span></>}
         {syncStatus === 'synced'  && <><Cloud size={14} color="#7FBF96" /><span>Synced</span></>}
@@ -2659,6 +2995,8 @@ function DocEditor({ doc, setDoc, customers, vendors, items, businessInfo, userR
   const [hsnSearchRow, setHsnSearchRow] = useState(null); // rowId being searched
   const [mepPickerOpen, setMepPickerOpen] = useState(false);
   const [useLH, setUseLH] = useState(!!businessInfo?.letterhead);
+  const [showScan, setShowScan] = useState(false);
+  const [pdfLoading, setPdfLoading] = useState(false);
   const bizBadge = BIZ_BADGE[doc.bizType];
   const showBizBadge = !!bizBadge;
 
@@ -2681,6 +3019,39 @@ function DocEditor({ doc, setDoc, customers, vendors, items, businessInfo, userR
   const isEditable =
     userRole === 'admin' || userRole === 'manager' ||
     (doc.status === 'draft' || doc.status === 'rejected');
+
+  async function handleSaveAndDownload(status) {
+    setPdfLoading(true);
+    try {
+      const el = document.querySelector('.print-area');
+      const fname = `${(DOC_TYPES[doc.type]?.label || doc.type).replace(/\s+/g,'-')}-${doc.number || 'draft'}.pdf`;
+      if (el) await downloadDocPDF(el, fname);
+    } catch(e) { console.error(e); }
+    setPdfLoading(false);
+    onSave(status);
+  }
+
+  function applyScanData(extracted) {
+    setDoc(prev => {
+      const updates = {};
+      if (extracted.date) updates.date = extracted.date;
+      if (extracted.vendorName && !prev.customerName) updates.customerName = extracted.vendorName;
+      if (extracted.items?.length) {
+        updates.items = extracted.items.map(it => ({
+          id: crypto.randomUUID(),
+          name: it.name,
+          qty: it.qty || 1,
+          rate: it.rate || 0,
+          gst: it.gst || 18,
+          unit: 'pcs',
+          itemId: '',
+          description: '',
+        }));
+      }
+      return { ...prev, ...updates };
+    });
+    setShowScan(false);
+  }
 
   function handleReject() {
     onSave('rejected', rejectionNote);
@@ -2779,12 +3150,14 @@ function DocEditor({ doc, setDoc, customers, vendors, items, businessInfo, userR
               📃 {useLH ? 'Letterhead ON' : 'Use Letterhead'}
             </button>
           )}
+          <button onClick={() => setShowScan(true)} style={styles.ghostBtn}>📷 Scan Bill</button>
           <button onClick={() => window.print()} style={styles.ghostBtn}><Printer size={15} /> Print / PDF</button>
+          <button onClick={async () => { setPdfLoading(true); await downloadDocPDF('.print-area', `${(DOC_TYPES[doc.type]?.label||doc.type).replace(/\s+/g,'-')}-${doc.number||'draft'}.pdf`); setPdfLoading(false); }} style={styles.ghostBtn} disabled={pdfLoading}>{pdfLoading ? '⏳' : <Download size={15}/>} {pdfLoading ? 'Generating...' : 'Download PDF'}</button>
 
           {/* ── PREPARER (any non-admin): draft or rejected → Save / Forward ── */}
           {userRole !== 'admin' && (doc.status === 'draft' || doc.status === 'rejected') && (
             <>
-              <button onClick={() => onSave('draft')} style={styles.ghostBtn}>Save</button>
+              <button onClick={() => handleSaveAndDownload('draft')} style={styles.ghostBtn}>💾 Save</button>
               <button onClick={() => onSave('submitted')} style={styles.primaryBtn}>Forward for Approval →</button>
             </>
           )}
@@ -2798,19 +3171,19 @@ function DocEditor({ doc, setDoc, customers, vendors, items, businessInfo, userR
           {(userRole === 'admin' || userRole === 'manager') && !rejectMode && (
             <>
               {/* Can always save as draft */}
-              {!isApproved && <button onClick={() => onSave('draft')} style={styles.ghostBtn}>Save Draft</button>}
+              {!isApproved && <button onClick={() => handleSaveAndDownload('draft')} style={styles.ghostBtn}>💾 Save Draft</button>}
               {/* Reject button — shown when forwarded */}
               {isForwarded && (
                 <button onClick={() => setRejectMode(true)} style={{ ...styles.ghostBtn, color: '#B5453A', borderColor: '#B5453A' }}>Reject</button>
               )}
               {/* Approve — shown when forwarded; Save changes when already approved */}
               {!isApproved
-                ? isForwarded && <button onClick={() => onSave('approved')} style={{ ...styles.primaryBtn, background: '#3D7A5C' }}>Approve ✓</button>
-                : <button onClick={() => onSave('approved')} style={styles.primaryBtn}>Save changes</button>
+                ? isForwarded && <button onClick={() => handleSaveAndDownload('approved')} style={{ ...styles.primaryBtn, background: '#3D7A5C' }}>Approve ✓</button>
+                : <button onClick={() => handleSaveAndDownload('approved')} style={styles.primaryBtn}>💾 Save changes</button>
               }
               {/* Admin can also forward their own drafts */}
               {userRole === 'admin' && doc.status === 'draft' && (
-                <button onClick={() => onSave('approved')} style={{ ...styles.primaryBtn, background: '#3D7A5C' }}>Approve ✓</button>
+                <button onClick={() => handleSaveAndDownload('approved')} style={{ ...styles.primaryBtn, background: '#3D7A5C' }}>Approve ✓</button>
               )}
             </>
           )}
@@ -3148,13 +3521,9 @@ function DocEditor({ doc, setDoc, customers, vendors, items, businessInfo, userR
             // ── Letterhead mode: skip template header entirely ──
             if (useLH && businessInfo?.letterhead) {
               return (
-                <div style={{ display: 'flex', justifyContent: 'flex-end', marginBottom: 14, paddingBottom: 10, borderBottom: '1px solid #EAE6DB' }}>
-                  <div style={{ textAlign: 'right' }}>
-                    <div className="serif" style={{ ...styles.previewDocType, color: t.color }}>{t.label}</div>
-                    <div style={styles.previewSmall}>No: {doc.number}</div>
-                    <div style={styles.previewSmall}>Date: {doc.date}</div>
-                    {doc.refNumber && <div style={styles.previewSmall}>Ref: {doc.refNumber}</div>}
-                  </div>
+                <div style={{ textAlign: 'center', marginBottom: 14, paddingBottom: 10, borderBottom: '1px solid #EAE6DB' }}>
+                  <div className="serif" style={{ ...styles.previewDocType, color: t.color }}>{t.label}</div>
+                  <div style={styles.previewSmall}>No: {doc.number} &nbsp;·&nbsp; Date: {doc.date}{doc.refNumber ? ` · Ref: ${doc.refNumber}` : ''}</div>
                 </div>
               );
             }
@@ -3722,6 +4091,7 @@ function DocEditor({ doc, setDoc, customers, vendors, items, businessInfo, userR
           }}
         />
       )}
+      {showScan && <ScanBillModal onApply={applyScanData} onClose={() => setShowScan(false)} />}
     </div>
   );
 }
@@ -3979,18 +4349,19 @@ function StatementPanel({ rows, openingBalance, businessInfo, onClose }) {
       <div className="no-print" style={{ position: 'fixed', top: 16, right: 24, zIndex: 1001, display: 'flex', gap: 8 }}>
         <button style={styles.ghostBtn} onClick={onClose}><X size={15} /> Close</button>
         {businessInfo?.letterhead && <button onClick={() => setUseLH(v=>!v)} style={{ ...styles.ghostBtn, ...(useLH?{background:'#EEF2FF',color:'#3D52A0',fontWeight:600}:{}) }}>📃 {useLH?'Letterhead ON':'Use Letterhead'}</button>}
+        <button style={styles.ghostBtn} onClick={() => downloadDocPDF('.print-area','petty-cash-statement.pdf')}><Download size={15}/> PDF</button>
         <button style={styles.primaryBtn} onClick={() => window.print()}><Printer size={15} /> Print</button>
       </div>
       <div className="print-area" style={{ position: 'fixed', inset: 0, background: '#fff', zIndex: 999, overflowY: 'auto', padding: '40px 56px' }}>
         {useLH && (businessInfo?.letterhead || businessInfo?.letterheadFooter) && <LetterpadPrintStyle />}
         {useLH && businessInfo?.letterhead && <div className="lh-pad-header" style={{ background:'#fff' }}><img src={businessInfo.letterhead} alt="letterhead" style={{ width:'100%', display:'block' }} /></div>}
         {/* Header */}
-        <div style={{ borderBottom: '2px solid #1E2A4A', paddingBottom: 12, marginBottom: 20, display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
+        <div style={{ borderBottom: '2px solid #1E2A4A', paddingBottom: 12, marginBottom: 20, display: 'flex', justifyContent: useLH ? 'center' : 'space-between', alignItems: 'flex-start' }}>
           {!useLH && <div>
             <div className="serif" style={{ fontSize: 20, fontWeight: 700, color: '#1E2A4A' }}>{businessInfo.name}</div>
             <div style={{ fontSize: 11, color: '#888780', marginTop: 2 }}>{businessInfo.address}</div>
           </div>}
-          <div style={{ textAlign: 'right' }}>
+          <div style={{ textAlign: useLH ? 'center' : 'right' }}>
             <div style={{ fontSize: 15, fontWeight: 700, color: '#C9A24B', letterSpacing: '0.05em' }}>PETTY CASH STATEMENT</div>
             <div style={{ fontSize: 11, color: '#888780', marginTop: 3 }}>Printed: {new Date().toLocaleDateString('en-IN')}</div>
           </div>
@@ -4439,6 +4810,7 @@ function VoucherPrintModal({ voucher, businessInfo, onClose }) {
       <div className="no-print" style={{ position: 'fixed', top: 16, right: 24, zIndex: 1001, display: 'flex', gap: 8 }}>
         <button style={styles.ghostBtn} onClick={onClose}><X size={15} /> Close</button>
         {businessInfo?.letterhead && <button onClick={() => setUseLH(v=>!v)} style={{ ...styles.ghostBtn, ...(useLH?{background:'#EEF2FF',color:'#3D52A0',fontWeight:600}:{}) }}>📃 {useLH?'Letterhead ON':'Use Letterhead'}</button>}
+        <button style={styles.ghostBtn} onClick={() => downloadDocPDF('.print-area','voucher.pdf')}><Download size={15}/> PDF</button>
         <button style={styles.primaryBtn} onClick={() => window.print()}><Printer size={15}/> Print / PDF</button>
       </div>
       {/* Print area — only this shows on print */}
@@ -4502,6 +4874,7 @@ function PartyStatementModal({ party, vouchers, businessInfo, onClose }) {
       <div className="no-print" style={{ position: 'fixed', top: 16, right: 24, zIndex: 1001, display: 'flex', gap: 8 }}>
         <button style={styles.ghostBtn} onClick={onClose}><X size={15} /> Close</button>
         {businessInfo?.letterhead && <button onClick={() => setUseLH(v=>!v)} style={{ ...styles.ghostBtn, ...(useLH?{background:'#EEF2FF',color:'#3D52A0',fontWeight:600}:{}) }}>📃 {useLH?'Letterhead ON':'Use Letterhead'}</button>}
+        <button style={styles.ghostBtn} onClick={() => downloadDocPDF('.print-area','statement.pdf')}><Download size={15}/> PDF</button>
         <button style={styles.primaryBtn} onClick={() => window.print()}><Printer size={15} /> Print</button>
       </div>
       <div className="print-area" style={{ position: 'fixed', inset: 0, background: '#fff', zIndex: 999, overflowY: 'auto', padding: '40px 56px' }}>
@@ -4844,6 +5217,7 @@ function BinCard({ items, stockLedger, businessInfo }) {
           <div style={{ fontSize: 13, color: '#888780' }}>Stock movement card per item</div>
         </div>
         {businessInfo?.letterhead && <button onClick={() => setUseLHBin(v => !v)} style={{ ...styles.ghostBtn, ...(useLHBin ? { background: '#EEF2FF', color: '#3D52A0', fontWeight: 600 } : {}) }}>📃 {useLHBin ? 'Letterhead ON' : 'Use Letterhead'}</button>}
+        <button onClick={() => downloadDocPDF('.print-area','bin-card.pdf')} style={styles.ghostBtn}><Download size={15}/> PDF</button>
         <button onClick={() => window.print()} style={styles.primaryBtn}>🖨 Print</button>
       </div>
 
@@ -4859,12 +5233,12 @@ function BinCard({ items, stockLedger, businessInfo }) {
       <div className="print-only" style={{ marginBottom: 16 }}>
         {useLHBin && (businessInfo?.letterhead || businessInfo?.letterheadFooter) && <LetterpadPrintStyle />}
         {useLHBin && businessInfo?.letterhead && <div className="lh-pad-header" style={{ background:'#fff' }}><img src={businessInfo.letterhead} alt="letterhead" style={{ width:'100%', display:'block' }} /></div>}
-        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
+        <div style={{ display: 'flex', justifyContent: useLHBin ? 'center' : 'space-between', alignItems: 'flex-start' }}>
           {!useLHBin && <div>
             <div style={{ fontWeight: 700, fontSize: 18 }}>{businessInfo.name}</div>
             <div style={{ fontSize: 12, color: '#555' }}>{businessInfo.address}</div>
           </div>}
-          <div style={{ textAlign: 'right' }}>
+          <div style={{ textAlign: useLHBin ? 'center' : 'right' }}>
             <div style={{ fontWeight: 700, fontSize: 16 }}>BIN CARD</div>
             <div style={{ fontSize: 12 }}>Printed: {new Date().toLocaleDateString('en-IN')}</div>
           </div>
@@ -5680,17 +6054,18 @@ function PaySlipPrint({ run, businessInfo, onClose }) {
       <div className="no-print" style={{ position: 'fixed', top: 16, right: 24, zIndex: 1001, display: 'flex', gap: 8 }}>
         <button style={styles.ghostBtn} onClick={onClose}><X size={15}/> Close</button>
         {businessInfo?.letterhead && <button onClick={() => setUseLH(v=>!v)} style={{ ...styles.ghostBtn, ...(useLH?{background:'#EEF2FF',color:'#3D52A0',fontWeight:600}:{}) }}>📃 {useLH?'Letterhead ON':'Use Letterhead'}</button>}
+        <button style={styles.ghostBtn} onClick={() => downloadDocPDF('.print-area','payroll-summary.pdf')}><Download size={15}/> PDF</button>
         <button style={styles.primaryBtn} onClick={() => window.print()}><Printer size={15}/> Print</button>
       </div>
       <div className="print-area" style={{ position: 'fixed', inset: 0, background: '#fff', zIndex: 999, overflowY: 'auto', padding: '40px 48px' }}>
         {useLH && (businessInfo?.letterhead || businessInfo?.letterheadFooter) && <LetterpadPrintStyle />}
         {useLH && businessInfo?.letterhead && <div className="lh-pad-header" style={{ background:'#fff' }}><img src={businessInfo.letterhead} alt="letterhead" style={{ width:'100%', display:'block' }} /></div>}
-        <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 20, borderBottom: '2px solid #1E2A4A', paddingBottom: 12 }}>
+        <div style={{ display: 'flex', justifyContent: useLH ? 'center' : 'space-between', marginBottom: 20, borderBottom: '2px solid #1E2A4A', paddingBottom: 12 }}>
           {!useLH && <div>
             <div className="serif" style={{ fontWeight: 700, fontSize: 20, color: '#1E2A4A' }}>{businessInfo.name}</div>
             <div style={{ fontSize: 11, color: '#888' }}>{businessInfo.address}</div>
           </div>}
-          <div style={{ textAlign: 'right' }}>
+          <div style={{ textAlign: useLH ? 'center' : 'right' }}>
             <div style={{ fontWeight: 700, fontSize: 15, color: '#C9A24B' }}>PAYROLL SUMMARY</div>
             <div style={{ fontSize: 12, color: '#888', marginTop: 3 }}>{period}</div>
           </div>
@@ -5768,6 +6143,7 @@ function IndividualPaySlips({ run, businessInfo, onClose }) {
       <div className="no-print" style={{ position: 'fixed', top: 16, right: 24, zIndex: 1001, display: 'flex', gap: 8 }}>
         <button style={styles.ghostBtn} onClick={onClose}><X size={15}/> Close</button>
         {businessInfo?.letterhead && <button onClick={() => setUseLH(v=>!v)} style={{ ...styles.ghostBtn, ...(useLH?{background:'#EEF2FF',color:'#3D52A0',fontWeight:600}:{}) }}>📃 {useLH?'Letterhead ON':'Use Letterhead'}</button>}
+        <button style={styles.ghostBtn} onClick={() => downloadDocPDF('.print-area','payslips.pdf')}><Download size={15}/> PDF</button>
         <button style={styles.primaryBtn} onClick={() => window.print()}><Printer size={15}/> Print All ({lines.length})</button>
       </div>
       <div className="print-area" style={{ position: 'fixed', inset: 0, background: '#fff', zIndex: 999, overflowY: 'auto' }}>
@@ -5776,12 +6152,12 @@ function IndividualPaySlips({ run, businessInfo, onClose }) {
             {useLH && (businessInfo?.letterhead || businessInfo?.letterheadFooter) && <LetterpadPrintStyle />}
             {useLH && businessInfo?.letterhead && <div className="lh-pad-header" style={{ background:'#fff' }}><img src={businessInfo.letterhead} alt="letterhead" style={{ width:'100%', display:'block' }} /></div>}
             {/* Header */}
-            <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 16, paddingBottom: 10 }}>
+            <div style={{ display: 'flex', justifyContent: useLH ? 'center' : 'space-between', marginBottom: 16, paddingBottom: 10 }}>
               {!useLH && <div>
                 <div className="serif" style={{ fontWeight: 700, fontSize: 18, color: '#1E2A4A' }}>{businessInfo.name}</div>
                 <div style={{ fontSize: 11, color: '#888' }}>{businessInfo.address}</div>
               </div>}
-              <div style={{ textAlign: 'right' }}>
+              <div style={{ textAlign: useLH ? 'center' : 'right' }}>
                 <div style={{ fontWeight: 900, fontSize: 18, color: '#1E2A4A', letterSpacing: 2, textTransform: 'uppercase' }}>PAY SLIP</div>
                 <div style={{ fontSize: 12, color: '#555', marginTop: 2 }}>{period}</div>
               </div>
@@ -6107,6 +6483,7 @@ function ServiceOrderPrint({ order, businessInfo, onClose }) {
           <div style={{ fontWeight: 700, fontSize: 16 }}>Service Order — {order.number}</div>
           <div style={{ display: 'flex', gap: 8 }}>
             {businessInfo?.letterhead && <button onClick={() => setUseLH(v=>!v)} style={{ ...styles.ghostBtn, ...(useLH?{background:'#EEF2FF',color:'#3D52A0',fontWeight:600}:{}) }}>📃 {useLH?'Letterhead ON':'Use Letterhead'}</button>}
+            <button style={styles.ghostBtn} onClick={() => downloadDocPDF('.print-area',`service-order-${order.number||'so'}.pdf`)}><Download size={14}/> PDF</button>
             <button style={styles.primaryBtn} onClick={() => window.print()}><Printer size={14}/> Print</button>
             <button style={styles.secondaryBtn} onClick={onClose}>Close</button>
           </div>
@@ -6114,13 +6491,13 @@ function ServiceOrderPrint({ order, businessInfo, onClose }) {
         <div className="print-area" style={{ background: '#fff', padding: 32, fontFamily: 'Georgia, serif' }}>
           {useLH && (businessInfo?.letterhead || businessInfo?.letterheadFooter) && <LetterpadPrintStyle />}
         {useLH && businessInfo?.letterhead && <div className="lh-pad-header" style={{ background:'#fff' }}><img src={businessInfo.letterhead} alt="letterhead" style={{ width:'100%', display:'block' }} /></div>}
-          <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 28 }}>
+          <div style={{ display: 'flex', justifyContent: useLH ? 'center' : 'space-between', marginBottom: 28 }}>
             {!useLH && <div>
               <div style={{ fontSize: 22, fontWeight: 700 }}>{businessInfo.name || 'Company Name'}</div>
               <div style={{ fontSize: 12, color: '#555', maxWidth: 240 }}>{businessInfo.address}</div>
               {businessInfo.gstin && <div style={{ fontSize: 11 }}>GSTIN: {businessInfo.gstin}</div>}
             </div>}
-            <div style={{ textAlign: 'right' }}>
+            <div style={{ textAlign: useLH ? 'center' : 'right' }}>
               <div style={{ fontSize: 20, fontWeight: 700, letterSpacing: 1 }}>SERVICE ORDER</div>
               <div style={{ fontSize: 13, marginTop: 4 }}>#{order.number}</div>
               <div style={{ fontSize: 12, color: '#555' }}>Date: {order.date}</div>
@@ -6236,6 +6613,7 @@ function PrintModal({ title, children, onClose }) {
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '12px 16px', borderBottom: '1px solid #eee' }}>
           <span style={{ fontWeight: 700, fontSize: 15 }}>{title}</span>
           <div style={{ display: 'flex', gap: 8 }}>
+            <button style={styles.ghostBtn} onClick={() => downloadDocPDF('.print-area','bin-card.pdf')}><Download size={14}/> PDF</button>
             <button style={styles.primaryBtn} onClick={() => window.print()}><Printer size={14}/> Print / Save PDF</button>
             <button style={styles.secondaryBtn} onClick={onClose}><X size={14}/> Close</button>
           </div>
@@ -6710,13 +7088,14 @@ function TaxReport({ documents, customers, businessInfo }) {
   const thStyle   = { ...styles.th, fontSize: 11 };
 
   return (
-    <div style={styles.page}>
+    <div style={styles.page} id="tax-report-page">
       <div style={styles.pageHeader}>
         <div>
           <h2 className="serif" style={styles.pageTitle}>Tax Report</h2>
           <div style={{ fontSize: 13, color: '#888780' }}>Sales & purchase tax summary</div>
         </div>
         {businessInfo?.letterhead && <button onClick={() => setUseLHTax(v=>!v)} style={{ ...styles.ghostBtn, ...(useLHTax?{background:'#EEF2FF',color:'#3D52A0',fontWeight:600}:{}) }}>📃 {useLHTax?'Letterhead ON':'Use Letterhead'}</button>}
+        <button style={styles.ghostBtn} onClick={() => downloadDocPDF('#tax-report-page','tax-report.pdf')}><Download size={15}/> PDF</button>
         <button style={styles.primaryBtn} onClick={() => window.print()}><Printer size={15} /> Print</button>
       </div>
 
@@ -9353,6 +9732,7 @@ function PartnerAgreement({ partner: p, termsLibrary, businessInfo: bi, document
       <div className="no-print" style={{ padding: '14px 28px', borderBottom: '1px solid #EAE6DB', display: 'flex', gap: 12, alignItems: 'center' }}>
         <button onClick={onBack} style={{ border: 'none', background: 'none', color: '#888', fontSize: 13, cursor: 'pointer' }}>← Back</button>
         {bi?.letterhead && <button onClick={() => setUseLHPartner(v=>!v)} style={{ ...styles.ghostBtn, ...(useLHPartner?{background:'#EEF2FF',color:'#3D52A0',fontWeight:600}:{}) }}>📃 {useLHPartner?'Letterhead ON':'Use Letterhead'}</button>}
+        <button onClick={() => downloadDocPDF('.print-area','partner-agreement.pdf')} style={styles.ghostBtn}><Download size={13} style={{ marginRight: 4 }}/> PDF</button>
         <button onClick={() => window.print()} style={{ padding: '8px 20px', background: '#1E2A4A', color: '#fff', border: 'none', borderRadius: 8, fontSize: 13, fontWeight: 600 }}><Printer size={13} style={{ marginRight: 6 }} />Print Agreement</button>
         {linkedDocs.length > 0 && <span style={{ fontSize: 13, color: '#888' }}>{linkedDocs.length} linked document{linkedDocs.length !== 1 ? 's' : ''}</span>}
       </div>
@@ -11912,6 +12292,7 @@ export default function App() {
   const [clientMaterials,  _setCM]     = useState([]);
   const [siteAttendance,   _setSA]     = useState([]);
   const [evaluations,      _setEvls]   = useState([]);
+  const [notifications,    setNotifications] = useState([]);
 
   // ── Auth ────────────────────────────────────────────────────────────────────
   useEffect(() => {
@@ -12114,6 +12495,46 @@ export default function App() {
       }));
       if (entries.length) setStockLedger((prev) => [...prev, ...entries]);
     }
+    // ── Notifications ──────────────────────────────────────────────────────────
+    const docLabel = DOC_TYPES[saved.type]?.label || saved.type;
+    const docRef = `${docLabel} ${saved.number || ''}`.trim();
+    const party = saved.customerSnapshot?.name || '';
+    if (status === 'submitted') {
+      // Notify admin/manager that a doc needs approval
+      const notif = {
+        id: crypto.randomUUID(), createdAt: Date.now(), read: false,
+        type: 'approval_request', docId: saved.id, docType: saved.type, docNumber: saved.number,
+        forRole: 'admin',
+        title: `Approval needed: ${docRef}`,
+        message: `${party ? party + ' · ' : ''}Forwarded by ${user?.email || 'staff'} — awaiting your approval.`,
+        action: 'open_doc',
+      };
+      setNotifications(prev => [notif, ...prev]);
+      sendNotificationEmail(businessInfo, 'approval_request', { docRef, party, submitter: user?.email });
+    }
+    if (status === 'approved') {
+      const notif = {
+        id: crypto.randomUUID(), createdAt: Date.now(), read: false,
+        type: 'approved', docId: saved.id, docType: saved.type, docNumber: saved.number,
+        forRole: 'all',
+        title: `Approved: ${docRef}`,
+        message: `${party ? party + ' — ' : ''}${docLabel} has been approved.`,
+        action: 'open_doc',
+      };
+      setNotifications(prev => [notif, ...prev]);
+      sendNotificationEmail(businessInfo, 'approved', { docRef, party, customerEmail: saved.customerSnapshot?.email });
+    }
+    if (status === 'rejected') {
+      const notif = {
+        id: crypto.randomUUID(), createdAt: Date.now(), read: false,
+        type: 'rejected', docId: saved.id, docType: saved.type, docNumber: saved.number,
+        forRole: 'all',
+        title: `Rejected: ${docRef}`,
+        message: rejectionNote || 'Document was rejected.',
+        action: 'open_doc',
+      };
+      setNotifications(prev => [notif, ...prev]);
+    }
     setActiveDoc(null);
     setView('documents');
   }
@@ -12143,7 +12564,6 @@ export default function App() {
     URL.revokeObjectURL(url);
   }
 
-  // Derive activeTypes array (new) — with backward compat for old companyType string
   const activeTypes = (() => {
     if (businessInfo?.activeTypes?.length) return businessInfo.activeTypes;
     const ct = businessInfo?.companyType || 'trading';
@@ -12152,13 +12572,12 @@ export default function App() {
     return [ct];
   })();
   const isMultiBiz = activeTypes.length > 1;
-  // Keep companyType string for legacy components that still read it
   const companyType = activeTypes.length === 1 ? activeTypes[0]
     : activeTypes.includes('service') && activeTypes.includes('manufacturing') ? 'both'
     : activeTypes.includes('manufacturing') ? 'both'
     : activeTypes.includes('service') ? 'service'
     : 'trading';
-  const country     = (businessInfo && businessInfo.country)     || 'india';
+  const country = (businessInfo && businessInfo.country) || 'india';
 
   const stats = useMemo(() => {
     const totalRevenue   = documents.filter(d => d.type === 'invoice').reduce((s, d) => s + (computeTotals(d, businessInfo.state, country).grandTotal || 0), 0);
@@ -12183,18 +12602,15 @@ export default function App() {
     return { totalRevenue, totalPurchases, outstanding, payable, totalReceived, totalPaid, counts, pcBalance, itemCount, lowStockCount, rmCount, poCount, poOpen };
   }, [documents, vouchers, businessInfo, country, pettyCash, items, stockLedger, rawMaterials, productionOrders]);
 
-  // ── Auth gates ───────────────────────────────────────────────────────────────
   if (!authReady) return (
     <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', height: '100vh', fontSize: 16, color: '#888' }}>Loading…</div>
   );
   if (!user) return <AuthScreen />;
   if (user && !user.emailVerified) return <VerifyEmailScreen user={user} onLogout={handleLogout} />;
-  // Onboarding: new owner who hasn't set country yet
   if (biReady && ownerUid && user?.uid === ownerUid && userRole === 'admin' && !businessInfo.country) {
     return <OnboardingSetup setBusinessInfo={setBusinessInfo} />;
   }
 
-  // ── Trial / subscription ─────────────────────────────────────────────────────
   const TRIAL_DAYS = 7;
   const _trialStart    = businessInfo.trialStartDate ? new Date(businessInfo.trialStartDate) : null;
   const _trialDaysUsed = _trialStart ? Math.floor((Date.now() - _trialStart.getTime()) / 86400000) : null;
@@ -12206,7 +12622,6 @@ export default function App() {
     return <PaywallScreen businessInfo={businessInfo} onLogout={handleLogout} isStaff={userRole !== 'admin'} />;
   }
 
-  // ── Content router ───────────────────────────────────────────────────────────
   function renderContent() {
     if (view === 'doceditor' && activeDoc) {
       return (
@@ -12321,6 +12736,455 @@ export default function App() {
           <GRNList
             grns={grns}
             setGrns={setGrns}
+            documents={documents}
+            vendors={vendors}
+            items={items}
+            setStockLedger={setStockLedger}
+            userRole={userRole}
+            businessInfo={businessInfo}
+          />
+        );
+      case 'stock':
+        return (
+          <StockView
+            items={items}
+            stockLedger={stockLedger}
+            businessInfo={businessInfo}
+          />
+        );
+      case 'bincard':
+        return (
+          <BinCardView
+            items={items}
+            stockLedger={stockLedger}
+            businessInfo={businessInfo}
+          />
+        );
+      case 'hr':
+        return (
+          <HRView
+            employees={employees}
+            setEmployees={setEmployees}
+            userRole={userRole}
+            ownerUid={ownerUid}
+          />
+        );
+      case 'payroll':
+        return (
+          <PayrollView
+            employees={employees}
+            payrollRuns={payrollRuns}
+            setPayrollRuns={setPayrollRuns}
+            businessInfo={businessInfo}
+            userRole={userRole}
+          />
+        );
+      case 'serviceorders':
+        return (
+          <ServiceOrdersView
+            serviceOrders={serviceOrders}
+            setServiceOrders={setServiceOrders}
+            customers={customers}
+            businessInfo={businessInfo}
+            userRole={userRole}
+          />
+        );
+      case 'rawmaterials':
+        return (
+          <RawMaterialsList
+            rawMaterials={rawMaterials}
+            setRawMaterials={setRawMaterials}
+            userRole={userRole}
+            ownerUid={ownerUid}
+            businessInfo={businessInfo}
+          />
+        );
+      case 'bom':
+        return (
+          <BOMList
+            boms={boms}
+            setBoms={setBoms}
+            rawMaterials={rawMaterials}
+            userRole={userRole}
+            ownerUid={ownerUid}
+            parts={parts}
+          />
+        );
+      case 'production':
+        return (
+          <ProductionOrdersList
+            productionOrders={productionOrders}
+            setProductionOrders={setProductionOrders}
+            boms={boms}
+            rawMaterials={rawMaterials}
+            setRawMaterials={setRawMaterials}
+            userRole={userRole}
+            ownerUid={ownerUid}
+            setStockLedger={setStockLedger}
+            items={items}
+          />
+        );
+      case 'qualitycheck':
+        return (
+          <QualityCheckList
+            productionOrders={productionOrders}
+            setProductionOrders={setProductionOrders}
+            userRole={userRole}
+            boms={boms}
+            parts={parts}
+          />
+        );
+      case 'qatesting':
+        return (
+          <QATestingView
+            productionOrders={productionOrders}
+            setProductionOrders={setProductionOrders}
+            pdvs={pdvs}
+            setPdvs={setPdvs}
+            setStockLedger={setStockLedger}
+            boms={boms}
+            items={items}
+            userRole={userRole}
+            businessInfo={businessInfo}
+          />
+        );
+      case 'parts':
+        return (
+          <PartsMasterList
+            parts={parts}
+            setParts={setParts}
+            vendors={vendors}
+            ownerUid={ownerUid}
+            userRole={userRole}
+          />
+        );
+      case 'engdocs':
+        return (
+          <EngineeringDocsList
+            engDocs={engDocs}
+            setEngDocs={setEngDocs}
+            parts={parts}
+            ownerUid={ownerUid}
+            userRole={userRole}
+          />
+        );
+      case 'enquiries':
+        return (
+          <EnquiryList
+            enquiries={enquiries}
+            setEnquiries={setEnquiries}
+            customers={customers}
+            userRole={userRole}
+            onConvertToQuotation={(enq) => {
+              const cust = customers.find(c => c.id === enq.customerId);
+              startNewDoc('quotation', { customerId: enq.customerId, customerSnapshot: cust || null, notes: enq.notes || '' });
+            }}
+          />
+        );
+      case 'contracts':
+        return (
+          <ContractList
+            contracts={contracts}
+            setContracts={setContracts}
+            customers={customers}
+            vendors={vendors}
+            documents={documents}
+            termsLibrary={termsLibrary}
+            businessInfo={businessInfo}
+            userRole={userRole}
+          />
+        );
+      case 'channelpartners':
+        return (
+          <ChannelPartnerList
+            channelPartners={channelPartners}
+            setChannelPartners={setChannelPartners}
+            documents={documents}
+            termsLibrary={termsLibrary}
+            businessInfo={businessInfo}
+            userRole={userRole}
+          />
+        );
+      case 'termslibrary':
+        return (
+          <TermsLibraryView
+            termsLibrary={termsLibrary}
+            setTermsLibrary={setTermsLibrary}
+            userRole={userRole}
+          />
+        );
+      case 'scopeofwork':
+        return (
+          <ScopeOfWorkView
+            scopeOfWork={scopeOfWork}
+            setScopeOfWork={setScopeOfWork}
+            userRole={userRole}
+          />
+        );
+      case 'isoprinciples':
+        return (
+          <ISOPrinciplesView
+            qualityDocs={qualityDocs}
+            setQualityDocs={setQualityDocs}
+            userRole={userRole}
+          />
+        );
+      case 'deptprocedures':
+        return (
+          <DeptProceduresView
+            qualityDocs={qualityDocs}
+            setQualityDocs={setQualityDocs}
+            userRole={userRole}
+          />
+        );
+      case 'inprocessqa':
+        return (
+          <InprocessQAView
+            qualityDocs={qualityDocs}
+            setQualityDocs={setQualityDocs}
+            productionOrders={productionOrders}
+            userRole={userRole}
+          />
+        );
+      case 'gstr1':
+        return (
+          <GSTR1Report
+            documents={documents}
+            customers={customers}
+            businessInfo={businessInfo}
+          />
+        );
+      case 'vatreport':
+        return (
+          <VATReport
+            documents={documents}
+            customers={customers}
+            businessInfo={businessInfo}
+          />
+        );
+      case 'taxreport':
+        return (
+          <TaxReport
+            documents={documents}
+            customers={customers}
+            businessInfo={businessInfo}
+          />
+        );
+      case 'mepprojects':
+        return (
+          <MEPProjectsView
+            siteProjects={siteProjects}
+            setSiteProjects={setSiteProjects}
+            employees={employees}
+            siteActivities={siteActivities}
+            progressUpdates={progressUpdates}
+            userRole={userRole}
+          />
+        );
+      case 'activityplanner':
+        return (
+          <ActivityPlannerView
+            siteActivities={siteActivities}
+            setSiteActivities={setSiteActivities}
+            siteProjects={siteProjects}
+            progressUpdates={progressUpdates}
+            setProgressUpdates={setProgressUpdates}
+            userRole={userRole}
+            employees={employees}
+          />
+        );
+      case 'dailyupdates':
+        return (
+          <DailyUpdateView
+            progressUpdates={progressUpdates}
+            setProgressUpdates={setProgressUpdates}
+            siteActivities={siteActivities}
+            siteProjects={siteProjects}
+            employees={employees}
+            userRole={userRole}
+          />
+        );
+      case 'progressboard':
+        return (
+          <ProgressBoardView
+            siteProjects={siteProjects}
+            siteActivities={siteActivities}
+            progressUpdates={progressUpdates}
+          />
+        );
+      case 'mepreports':
+        return (
+          <MEPReportsView
+            siteProjects={siteProjects}
+            siteActivities={siteActivities}
+            progressUpdates={progressUpdates}
+            employees={employees}
+            businessInfo={businessInfo}
+          />
+        );
+      case 'clientmaterials':
+        return (
+          <ClientMaterialView
+            clientMaterials={clientMaterials}
+            setClientMaterials={setClientMaterials}
+            siteProjects={siteProjects}
+            employees={employees}
+            userRole={userRole}
+          />
+        );
+      case 'siteattendance':
+        return (
+          <SiteAttendanceView
+            siteAttendance={siteAttendance}
+            setSiteAttendance={setSiteAttendance}
+            siteProjects={siteProjects}
+            employees={employees}
+            userRole={userRole}
+          />
+        );
+      case 'evaluations':
+        return (
+          <QuarterlyEvalView
+            evaluations={evaluations}
+            setEvaluations={setEvaluations}
+            employees={employees}
+            siteAttendance={siteAttendance}
+            progressUpdates={progressUpdates}
+            siteProjects={siteProjects}
+            userRole={userRole}
+          />
+        );
+      case 'notifications':
+        return (
+          <NotificationsView
+            notifications={notifications}
+            setNotifications={setNotifications}
+            documents={documents}
+            openDoc={openDoc}
+            userRole={userRole}
+          />
+        );
+      default:
+        return (
+          <Dashboard
+            stats={stats}
+            documents={documents}
+            customers={customers}
+            vendors={vendors}
+            businessInfo={businessInfo}
+            startNewDoc={startNewDoc}
+            openDoc={openDoc}
+            setView={setView}
+            vouchers={vouchers}
+            pettyCash={pettyCash}
+            productionOrders={productionOrders}
+            rawMaterials={rawMaterials}
+            items={items}
+            companyType={companyType}
+          />
+        );
+    }
+  }
+
+  const unreadCount = notifications.filter(n => !n.read && (n.forRole === 'all' || n.forRole === userRole)).length;
+
+  return (
+    <div style={styles.app} className="no-print-bg">
+      <Sidebar
+        view={view}
+        setView={setView}
+        setActiveDoc={setActiveDoc}
+        startNewDoc={startNewDoc}
+        syncStatus={syncStatus}
+        user={user}
+        onLogout={handleLogout}
+        userRole={userRole}
+        companyType={companyType}
+        activeTypes={activeTypes}
+        country={country}
+        unreadCount={unreadCount}
+        onShowNotifications={() => setView('notifications')}
+      />
+      <div style={styles.main}>
+        {trialDaysLeft !== null && trialDaysLeft <= 3 && !isSubscribed && (
+          <TrialBanner daysLeft={trialDaysLeft} onUpgrade={() => setView('settings')} />
+        )}
+        {renderContent()}
+      </div>
+
+      {editingCustomer && (
+        <CustomerModal
+          customer={editingCustomer}
+          onSave={(c) => {
+            const isNew = !customers.find(x => x.id === c.id);
+            const saved = isNew ? { ...c, id: crypto.randomUUID() } : c;
+            setCustomers(prev => isNew ? [...prev, saved] : prev.map(x => x.id === saved.id ? saved : x));
+            setEditingCustomer(null);
+          }}
+          onClose={() => setEditingCustomer(null)}
+          businessInfo={businessInfo}
+        />
+      )}
+      {editingVendor && (
+        <VendorModal
+          vendor={editingVendor}
+          onSave={(v) => {
+            const isNew = !vendors.find(x => x.id === v.id);
+            const saved = isNew ? { ...v, id: crypto.randomUUID() } : v;
+            setVendors(prev => isNew ? [...prev, saved] : prev.map(x => x.id === saved.id ? saved : x));
+            setEditingVendor(null);
+          }}
+          onClose={() => setEditingVendor(null)}
+          businessInfo={businessInfo}
+        />
+      )}
+      {editingItem && (
+        <ItemModal
+          item={editingItem}
+          onSave={(it) => {
+            const isNew = !items.find(x => x.id === it.id);
+            const saved = isNew ? { ...it, id: crypto.randomUUID() } : it;
+            setItems(prev => isNew ? [...prev, saved] : prev.map(x => x.id === saved.id ? saved : x));
+            setEditingItem(null);
+          }}
+          onClose={() => setEditingItem(null)}
+          businessInfo={businessInfo}
+        />
+      )}
+    </div>
+  );
+}
+
+export default App;
+endor}
+          onSave={(v) => {
+            const isNew = !vendors.find(x => x.id === v.id);
+            const saved = isNew ? { ...v, id: crypto.randomUUID() } : v;
+            setVendors(prev => isNew ? [...prev, saved] : prev.map(x => x.id === saved.id ? saved : x));
+            setEditingVendor(null);
+          }}
+          onClose={() => setEditingVendor(null)}
+          businessInfo={businessInfo}
+        />
+      )}
+      {editingItem && (
+        <ItemModal
+          item={editingItem}
+          onSave={(it) => {
+            const isNew = !items.find(x => x.id === it.id);
+            const saved = isNew ? { ...it, id: crypto.randomUUID() } : it;
+            setItems(prev => isNew ? [...prev, saved] : prev.map(x => x.id === saved.id ? saved : x));
+            setEditingItem(null);
+          }}
+          onClose={() => setEditingItem(null)}
+          businessInfo={businessInfo}
+        />
+      )}
+    </div>
+  );
+}
+
+export default App;
             documents={documents}
             vendors={vendors}
             items={items}
