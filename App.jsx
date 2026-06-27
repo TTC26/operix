@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useMemo } from 'react';
-import { AlertTriangle, BookOpen, Briefcase, CheckCircle, CheckSquare, ChevronDown, ChevronRight, ClipboardList, Cloud, CloudOff, Download, Factory, FileMinus, FileSignature, FileText, LayoutDashboard, LogOut, Package, Paperclip, Pencil, Plus, Printer, Search, Settings, Shield, ShoppingCart, Square, Trash2, Truck, Users, Wrench, X } from 'lucide-react';
+import { AlertTriangle, BarChart2, BookOpen, Briefcase, CheckCircle, CheckSquare, ChevronDown, ChevronRight, ClipboardList, Cloud, CloudOff, Download, Factory, FileMinus, FileSignature, FileText, LayoutDashboard, LogOut, MapPin, Package, Paperclip, Pencil, Plus, Printer, Search, Settings, Shield, ShoppingCart, Square, Trash2, Truck, Users, Wrench, X } from 'lucide-react';
 import { auth, watchAuth, signUp, signIn, logOut, loadCompanyData, saveCompanyData, subscribeCompanyData, resendVerificationEmail, refreshUser, getMembership, createStaffAccount, getStaffList, removeStaff, updateStaffRole, uploadDrawing, deleteDrawing, resetPassword } from './firebase';
 
 
@@ -176,6 +176,87 @@ function computeTotals(doc, sellerState, country) {
   return { subtotal, cgst, sgst, igst, vat, totalTax, grandTotal, sameState };
 }
 
+// ─── PDF Download & OCR Utilities ────────────────────────────────────────────
+function loadScript(src) {
+  return new Promise((resolve, reject) => {
+    if (document.querySelector(`script[src="${src}"]`)) { resolve(); return; }
+    const s = document.createElement('script');
+    s.src = src; s.onload = resolve; s.onerror = reject;
+    document.head.appendChild(s);
+  });
+}
+
+async function downloadDocPDF(elOrSelector, filename) {
+  try {
+    if (!window.html2canvas) await loadScript('https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js');
+    if (!window.jspdf) await loadScript('https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js');
+    const el = typeof elOrSelector === 'string' ? document.querySelector(elOrSelector) : elOrSelector;
+    if (!el) { alert('Nothing to download'); return; }
+    const canvas = await window.html2canvas(el, { scale: 2, useCORS: true, allowTaint: true, backgroundColor: '#ffffff' });
+    const { jsPDF } = window.jspdf;
+    const pdf = new jsPDF({ orientation: 'portrait', unit: 'mm', format: 'a4' });
+    const pageW = pdf.internal.pageSize.getWidth();
+    const pageH = pdf.internal.pageSize.getHeight();
+    const imgData = canvas.toDataURL('image/jpeg', 0.92);
+    const imgH = (canvas.height * pageW) / canvas.width;
+    if (imgH <= pageH) {
+      pdf.addImage(imgData, 'JPEG', 0, 0, pageW, imgH);
+    } else {
+      let yOffset = 0;
+      while (yOffset < imgH) {
+        pdf.addImage(imgData, 'JPEG', 0, -yOffset, pageW, imgH);
+        yOffset += pageH;
+        if (yOffset < imgH) pdf.addPage();
+      }
+    }
+    pdf.save(filename || 'document.pdf');
+  } catch (e) {
+    console.error('PDF error:', e);
+    alert('PDF generation failed. Use Print → Save as PDF instead.');
+  }
+}
+
+function parseOCRText(text) {
+  const lines = text.split('\n').map(l => l.trim()).filter(Boolean);
+  // Date
+  let date = '';
+  const dm = text.match(/(\d{1,2})[\/\-\.](\d{1,2})[\/\-\.](\d{2,4})/);
+  if (dm) {
+    const y = dm[3].length === 2 ? '20' + dm[3] : dm[3];
+    date = `${y}-${dm[2].padStart(2,'0')}-${dm[1].padStart(2,'0')}`;
+  }
+  // Grand total
+  const totalM = text.match(/(?:grand\s*total|net\s*amount|total\s*amount|total)[:\s]*[₹Rs\.]*\s*([0-9,]+\.?\d*)/i);
+  const taxM = text.match(/(?:total\s*(?:gst|tax)|igst|cgst[^+\n]*\+[^₹\n]*sgst|gst\s*amount)[:\s]*[₹Rs\.]*\s*([0-9,]+\.?\d*)/i);
+  // Vendor — first non-trivial non-numeric line
+  let vendorName = '';
+  for (const l of lines) {
+    if (l.length > 3 && !/^\d/.test(l) && !/^(invoice|bill|receipt|tax|date|no\.|gstin|pan|phone|tel|email|www|address)/i.test(l)) {
+      vendorName = l; break;
+    }
+  }
+  // Items — lines with at least 2 numeric tokens (qty + rate or rate + amount)
+  const items = [];
+  for (const l of lines) {
+    const nums = l.match(/[0-9,]+\.?\d*/g);
+    if (nums && nums.length >= 2) {
+      const desc = l.replace(/[0-9,\.₹Rs%\s]+$/g, '').trim();
+      if (desc.length > 1) {
+        const vals = nums.map(n => parseFloat(n.replace(/,/g,''))).filter(n => n > 0);
+        items.push({ name: desc, qty: vals[0] || 1, rate: vals[vals.length - 1] || 0, gst: 18 });
+      }
+    }
+  }
+  return {
+    date,
+    vendorName,
+    total: totalM ? parseFloat(totalM[1].replace(/,/g,'')) : 0,
+    tax: taxM ? parseFloat(taxM[1].replace(/,/g,'')) : 0,
+    items: items.slice(0, 15),
+    rawText: text,
+  };
+}
+
 // ─── styles.js ─────────────────────────────────────────────────
 
 const styles = {
@@ -290,6 +371,463 @@ function Modal({ children, onClose, title, wide }) {
           <button onClick={onClose} style={{ ...styles.iconBtn, color: '#fff', opacity: 0.8 }}><X size={18} /></button>
         </div>
         <div style={{ padding: '20px 24px 24px' }}>{children}</div>
+      </div>
+    </div>
+  );
+}
+
+
+// ─── Email Notification Utility ──────────────────────────────────────────────
+function sendNotificationEmail(businessInfo, type, vars = {}) {
+  const cfg = businessInfo?.emailConfig;
+  if (!cfg?.serviceId || !cfg?.templateId || !cfg?.publicKey) return; // not configured yet
+  if (!window.emailjs) {
+    const s = document.createElement('script');
+    s.src = 'https://cdn.jsdelivr.net/npm/@emailjs/browser@4/dist/email.min.js';
+    s.onload = () => { window.emailjs.init(cfg.publicKey); doSend(); };
+    document.head.appendChild(s);
+  } else { doSend(); }
+  function doSend() {
+    const params = {
+      company_name: businessInfo.name || 'Operix',
+      doc_ref: vars.docRef || '',
+      party: vars.party || '',
+      submitter: vars.submitter || '',
+      customer_email: vars.customerEmail || '',
+      approver_email: cfg.approverEmail || businessInfo.email || '',
+      type,
+    };
+    window.emailjs.send(cfg.serviceId, cfg.templateId, params).catch(e => console.warn('Email failed:', e));
+  }
+}
+
+// ─── Notifications View ───────────────────────────────────────────────────────
+function NotificationsView({ notifications = [], setNotifications, documents, openDoc, userRole }) {
+  const visible = notifications.filter(n => n.forRole === 'all' || n.forRole === userRole);
+
+  function markRead(id) {
+    setNotifications(prev => prev.map(n => n.id === id ? { ...n, read: true } : n));
+  }
+  function markAllRead() {
+    setNotifications(prev => prev.map(n => ({ ...n, read: true })));
+  }
+  function deleteNotif(id) {
+    setNotifications(prev => prev.filter(n => n.id !== id));
+  }
+
+  const typeIcon = { approval_request: '⏳', approved: '✅', rejected: '❌' };
+  const typeBg   = { approval_request: '#EEF2FF', approved: '#F0FDF4', rejected: '#FEF2F2' };
+  const typeColor= { approval_request: '#3D52A0', approved: '#059669', rejected: '#B5453A' };
+
+  return (
+    <div style={styles.page}>
+      <div style={styles.pageHeader}>
+        <div>
+          <h2 className="serif" style={styles.pageTitle}>🔔 Notifications</h2>
+          <div style={{ fontSize: 13, color: '#888780' }}>{visible.filter(n=>!n.read).length} unread</div>
+        </div>
+        {visible.some(n=>!n.read) && (
+          <button onClick={markAllRead} style={styles.ghostBtn}>✓ Mark all read</button>
+        )}
+      </div>
+
+      {visible.length === 0 ? (
+        <div style={{ ...styles.emptyBox, marginTop: 48 }}>
+          <div style={{ fontSize: 36, marginBottom: 12 }}>🔔</div>
+          <div style={{ fontWeight: 600, color: '#1E2A4A', marginBottom: 4 }}>No notifications yet</div>
+          <div style={{ fontSize: 13, color: '#888' }}>Approval requests and document updates will appear here.</div>
+        </div>
+      ) : (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 10, maxWidth: 700 }}>
+          {visible.map(n => {
+            const doc = documents.find(d => d.id === n.docId);
+            return (
+              <div key={n.id} style={{
+                background: n.read ? '#fff' : (typeBg[n.type] || '#F8F5EE'),
+                border: `1px solid ${n.read ? '#EAE6DB' : (typeColor[n.type] || '#C9A24B')}`,
+                borderLeft: `4px solid ${typeColor[n.type] || '#C9A24B'}`,
+                borderRadius: 10, padding: '14px 16px',
+                display: 'flex', gap: 14, alignItems: 'flex-start',
+                opacity: n.read ? 0.75 : 1,
+              }}>
+                <div style={{ fontSize: 22, flexShrink: 0, marginTop: 2 }}>{typeIcon[n.type] || '🔔'}</div>
+                <div style={{ flex: 1, minWidth: 0 }}>
+                  <div style={{ fontWeight: 700, fontSize: 14, color: '#1E2A4A', marginBottom: 2 }}>{n.title}</div>
+                  <div style={{ fontSize: 13, color: '#555', marginBottom: 6 }}>{n.message}</div>
+                  <div style={{ fontSize: 11, color: '#888' }}>{new Date(n.createdAt).toLocaleString('en-IN')}</div>
+                </div>
+                <div style={{ display: 'flex', gap: 6, flexShrink: 0 }}>
+                  {doc && openDoc && (
+                    <button onClick={() => { markRead(n.id); openDoc(doc); }}
+                      style={{ ...styles.ghostBtn, fontSize: 12, padding: '4px 10px' }}>Open</button>
+                  )}
+                  {!n.read && (
+                    <button onClick={() => markRead(n.id)}
+                      style={{ ...styles.ghostBtn, fontSize: 12, padding: '4px 10px' }}>Read</button>
+                  )}
+                  <button onClick={() => deleteNotif(n.id)}
+                    style={{ ...styles.iconBtn, color: '#B5453A' }}><X size={14}/></button>
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ─── Scan Bill Modal ───────────────────────────────────────────────────────────
+function ScanBillModal({ onApply, onClose }) {
+  const [imgFile, setImgFile] = React.useState(null);
+  const [imgUrl, setImgUrl] = React.useState(null);
+  const [scanning, setScanning] = React.useState(false);
+  const [progress, setProgress] = React.useState(0);
+  const [extracted, setExtracted] = React.useState(null);
+  const [showRaw, setShowRaw] = React.useState(false);
+
+  function handleFile(e) {
+    const f = e.target.files[0];
+    if (!f) return;
+    setImgFile(f);
+    setImgUrl(URL.createObjectURL(f));
+    setExtracted(null);
+  }
+
+  async function handleScan() {
+    if (!imgFile) return;
+    setScanning(true); setProgress(0);
+    try {
+      await loadScript('https://unpkg.com/tesseract.js@5/dist/tesseract.min.js');
+      const worker = await window.Tesseract.createWorker('eng', 1, {
+        logger: m => { if (m.status === 'recognizing text') setProgress(Math.round((m.progress || 0) * 100)); }
+      });
+      const { data: { text } } = await worker.recognize(imgFile);
+      await worker.terminate();
+      setExtracted(parseOCRText(text));
+    } catch(e) { alert('Scan failed: ' + (e.message || e)); }
+    setScanning(false);
+  }
+
+  return (
+    <Modal title="📷 Scan Bill / Invoice" onClose={onClose} wide>
+      <div style={{ display: 'flex', gap: 20, alignItems: 'flex-start' }}>
+        {/* Left: upload */}
+        <div style={{ flex: 1, minWidth: 0 }}>
+          <label style={{ display: 'block', border: '2px dashed #C9A24B', borderRadius: 10, padding: imgUrl ? 4 : 28, textAlign: 'center', cursor: 'pointer', background: '#FDFAF4', marginBottom: 10 }}>
+            <input type="file" accept="image/*" capture="environment" onChange={handleFile} style={{ display: 'none' }} />
+            {imgUrl
+              ? <img src={imgUrl} alt="bill" style={{ maxWidth: '100%', maxHeight: 280, borderRadius: 8, display: 'block', margin: '0 auto' }} />
+              : <div style={{ color: '#888780', fontSize: 13, lineHeight: 1.7 }}>
+                  <div style={{ fontSize: 28, marginBottom: 6 }}>📷</div>
+                  Click to take photo or upload bill<br />
+                  <span style={{ fontSize: 11 }}>Camera / Gallery — JPG, PNG</span>
+                </div>
+            }
+          </label>
+          {imgUrl && !scanning && (
+            <button onClick={handleScan} style={{ ...styles.primaryBtn, width: '100%' }}>
+              🔍 {extracted ? 'Scan Again' : 'Extract Data from Bill'}
+            </button>
+          )}
+          {scanning && (
+            <div style={{ textAlign: 'center', padding: '10px 0' }}>
+              <div style={{ fontSize: 12, color: '#888', marginBottom: 6 }}>Reading bill... {progress}%</div>
+              <div style={{ background: '#EAE6DB', borderRadius: 4, height: 6 }}>
+                <div style={{ background: '#C9A24B', height: 6, borderRadius: 4, width: `${progress}%`, transition: 'width 0.2s' }} />
+              </div>
+            </div>
+          )}
+        </div>
+
+        {/* Right: extracted fields */}
+        {extracted && (
+          <div style={{ flex: 1, minWidth: 0, fontSize: 13 }}>
+            <div style={{ fontWeight: 700, color: '#1E2A4A', marginBottom: 10 }}>Extracted Data — Edit if needed</div>
+            {[
+              ['Vendor / Party Name', 'vendorName', 'text'],
+              ['Date (YYYY-MM-DD)', 'date', 'date'],
+              ['Total Amount', 'total', 'number'],
+              ['Tax Amount', 'tax', 'number'],
+            ].map(([label, key, type]) => (
+              <div key={key} style={{ marginBottom: 8 }}>
+                <div style={{ fontSize: 11, color: '#888', marginBottom: 2 }}>{label}</div>
+                <input type={type} value={extracted[key] || ''} onChange={e => setExtracted(p => ({...p, [key]: e.target.value}))}
+                  style={{ width: '100%', border: '1px solid #DDD', borderRadius: 6, padding: '5px 8px', fontSize: 13, boxSizing: 'border-box' }} />
+              </div>
+            ))}
+            {extracted.items?.length > 0 && (
+              <div style={{ marginTop: 10, marginBottom: 10 }}>
+                <div style={{ fontSize: 11, color: '#888', marginBottom: 4 }}>Detected Lines ({extracted.items.length})</div>
+                <div style={{ maxHeight: 120, overflowY: 'auto', fontSize: 11, background: '#F8F5EE', borderRadius: 6, padding: '4px 8px' }}>
+                  {extracted.items.map((it, i) => (
+                    <div key={i} style={{ padding: '2px 0', borderBottom: '1px solid #EAE6DB' }}>{it.name} · qty {it.qty} · ₹{it.rate}</div>
+                  ))}
+                </div>
+              </div>
+            )}
+            <div style={{ display: 'flex', gap: 8, marginTop: 14 }}>
+              <button onClick={() => onApply(extracted)} style={styles.primaryBtn}>Apply to Document ✓</button>
+              <button onClick={() => setShowRaw(v=>!v)} style={styles.ghostBtn}>Raw</button>
+            </div>
+            {showRaw && <pre style={{ marginTop: 8, fontSize: 10, background: '#F5F3EE', padding: 8, borderRadius: 6, maxHeight: 140, overflow: 'auto', whiteSpace: 'pre-wrap' }}>{extracted.rawText}</pre>}
+          </div>
+        )}
+      </div>
+    </Modal>
+  );
+}
+
+// ─── Onboarding Setup ──────────────────────────────────────────────────────────
+function OnboardingSetup({ setBusinessInfo }) {
+  const [step, setStep] = React.useState(1);
+  const [country, setCountry] = React.useState('india');
+  const [countrySearch, setCountrySearch] = React.useState('');
+  const [activeTypes, setActiveTypes] = React.useState(['trading']);
+
+  function finish() {
+    const cc = COUNTRY_CONFIG[country] || COUNTRY_CONFIG.other;
+    setBusinessInfo(p => ({
+      ...p,
+      country,
+      taxRate: (p && p.taxRate != null) ? p.taxRate : cc.defaultTaxRate,
+      activeTypes,
+      companyType: activeTypes[0],
+      trialStartDate: (p && p.trialStartDate) ? p.trialStartDate : new Date().toISOString(),
+    }));
+  }
+
+  const BIZ_TYPES = [
+    { id: 'trading',       icon: '🛒', label: 'Trading / Distribution', desc: 'Buy & sell goods — quotations, invoices, purchase orders, delivery notes, stock management' },
+    { id: 'manufacturing', icon: '🏭', label: 'Manufacturing',          desc: 'Produce goods — BOM, raw materials, production orders, quality assurance' },
+    { id: 'service',       icon: '🔧', label: 'Services / MEP',         desc: 'Project-based work — site projects, activity planning, manpower, attendance, MEP reports' },
+  ];
+
+  const filteredCountries = Object.entries(COUNTRY_CONFIG).filter(([id, cfg]) =>
+    !countrySearch ||
+    (cfg.label || '').toLowerCase().includes(countrySearch.toLowerCase()) ||
+    id.toLowerCase().includes(countrySearch.toLowerCase())
+  );
+
+  const cardStyle = {
+    minHeight: '100vh', background: 'linear-gradient(135deg, #1E2A4A 0%, #2D3E6A 100%)',
+    display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 24,
+    fontFamily: "'Inter', sans-serif",
+  };
+  const panelStyle = {
+    width: '100%', maxWidth: 540, background: '#FAF8F4', borderRadius: 20,
+    padding: '40px 44px', boxShadow: '0 24px 80px rgba(0,0,0,0.35)',
+  };
+  const btnPrimary = {
+    width: '100%', padding: '13px', background: '#1E2A4A', color: '#fff',
+    border: 'none', borderRadius: 10, fontSize: 15, fontWeight: 600, cursor: 'pointer',
+  };
+  const btnGhost = {
+    flex: 1, padding: '13px', background: '#fff', color: '#1E2A4A',
+    border: '1px solid #DDD8CE', borderRadius: 10, fontSize: 14, fontWeight: 600, cursor: 'pointer',
+  };
+
+  return (
+    <div style={cardStyle}>
+      <div style={panelStyle}>
+        {/* Logo row */}
+        <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 32 }}>
+          <div style={{ width: 38, height: 38, borderRadius: 10, background: '#C9A24B', color: '#1E2A4A', display: 'flex', alignItems: 'center', justifyContent: 'center', fontWeight: 700, fontFamily: 'Georgia, serif', fontSize: 20 }}>O</div>
+          <div>
+            <div style={{ fontFamily: 'Georgia, serif', fontWeight: 700, fontSize: 18, color: '#1E2A4A' }}>Welcome to Operix</div>
+            <div style={{ fontSize: 12, color: '#888' }}>Set up your business profile to get started</div>
+          </div>
+        </div>
+
+        {/* Progress bar */}
+        <div style={{ display: 'flex', gap: 8, marginBottom: 32 }}>
+          {[1, 2].map(s => (
+            <div key={s} style={{ flex: 1, height: 4, borderRadius: 2, background: s <= step ? '#1E2A4A' : '#EAE6DB' }} />
+          ))}
+        </div>
+
+        {step === 1 && (
+          <>
+            <div style={{ fontFamily: 'Georgia, serif', fontSize: 20, fontWeight: 700, color: '#1E2A4A', marginBottom: 6 }}>Where is your business based?</div>
+            <div style={{ fontSize: 13, color: '#888', marginBottom: 20 }}>Sets your currency, tax system, and document format.</div>
+
+            <input
+              value={countrySearch}
+              onChange={e => setCountrySearch(e.target.value)}
+              placeholder="Search country..."
+              style={{ width: '100%', border: '1px solid #DDD8CE', borderRadius: 8, padding: '9px 14px', fontSize: 13, marginBottom: 10, outline: 'none', boxSizing: 'border-box' }}
+            />
+            <div style={{ border: '1px solid #EAE6DB', borderRadius: 10, maxHeight: 280, overflowY: 'auto', background: '#fff' }}>
+              {filteredCountries.map(([id, cfg]) => (
+                <div key={id} onClick={() => setCountry(id)} style={{
+                  display: 'flex', alignItems: 'center', gap: 12, padding: '10px 14px',
+                  cursor: 'pointer', borderBottom: '1px solid #F5F3EE',
+                  background: country === id ? '#EFF4FF' : 'transparent',
+                }}>
+                  <span style={{ fontSize: 20 }}>{cfg.flag}</span>
+                  <div style={{ flex: 1 }}>
+                    <div style={{ fontWeight: country === id ? 700 : 500, fontSize: 13, color: '#1E2A4A' }}>{cfg.label}</div>
+                    <div style={{ fontSize: 11, color: '#888' }}>{(cfg.currency || '').trim()}{cfg.hasTax ? ` · ${cfg.taxLabel} ${cfg.defaultTaxRate}%` : ' · No tax'}</div>
+                  </div>
+                  {country === id && <span style={{ color: '#1E2A4A', fontWeight: 800 }}>✓</span>}
+                </div>
+              ))}
+            </div>
+
+            <button onClick={() => setStep(2)} style={{ ...btnPrimary, marginTop: 24 }}>
+              Continue →
+            </button>
+          </>
+        )}
+
+        {step === 2 && (
+          <>
+            <div style={{ fontFamily: 'Georgia, serif', fontSize: 20, fontWeight: 700, color: '#1E2A4A', marginBottom: 6 }}>What does your business do?</div>
+            <div style={{ fontSize: 13, color: '#888', marginBottom: 20 }}>Select one or more. You can adjust this later in Settings.</div>
+
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+              {BIZ_TYPES.map(t => {
+                const on = activeTypes.includes(t.id);
+                return (
+                  <div key={t.id} onClick={() => {
+                    const next = on ? activeTypes.filter(x => x !== t.id) : [...activeTypes, t.id];
+                    if (next.length) setActiveTypes(next);
+                  }} style={{
+                    display: 'flex', alignItems: 'flex-start', gap: 14, padding: '14px 16px',
+                    border: on ? '2px solid #1E2A4A' : '2px solid #EAE6DB',
+                    borderRadius: 12, cursor: 'pointer', background: on ? '#F0EFE9' : '#fff',
+                  }}>
+                    <div style={{ width: 22, height: 22, borderRadius: 5, border: on ? '2px solid #1E2A4A' : '2px solid #BDB9B0', background: on ? '#1E2A4A' : '#fff', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0, marginTop: 2 }}>
+                      {on && <span style={{ color: '#fff', fontSize: 13, fontWeight: 700 }}>✓</span>}
+                    </div>
+                    <div>
+                      <div style={{ fontWeight: 600, fontSize: 14, color: '#1E2A4A', marginBottom: 3 }}>{t.icon} {t.label}</div>
+                      <div style={{ fontSize: 12, color: '#888780', lineHeight: 1.5 }}>{t.desc}</div>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+
+            <div style={{ display: 'flex', gap: 10, marginTop: 28 }}>
+              <button onClick={() => setStep(1)} style={btnGhost}>← Back</button>
+              <button
+                onClick={finish}
+                disabled={!activeTypes.length}
+                style={{ flex: 2, padding: '13px', background: activeTypes.length ? '#1E2A4A' : '#9AA5C0', color: '#fff', border: 'none', borderRadius: 10, fontSize: 15, fontWeight: 600, cursor: activeTypes.length ? 'pointer' : 'not-allowed' }}
+              >
+                Launch Operix 🚀
+              </button>
+            </div>
+          </>
+        )}
+      </div>
+    </div>
+  );
+}
+
+
+// ─── Trial Banner ─────────────────────────────────────────────────────────────
+function TrialBanner({ daysLeft, onUpgrade }) {
+  const urgent = daysLeft <= 3;
+  const bg    = urgent ? '#FEF3C7' : '#EFF6FF';
+  const color = urgent ? '#92400E' : '#1E40AF';
+  const border= urgent ? '#FCD34D' : '#BFDBFE';
+  return (
+    <div style={{
+      display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+      padding: '8px 20px', background: bg, borderBottom: `1px solid ${border}`,
+      fontSize: 13, color, flexShrink: 0,
+    }}>
+      <span>
+        {urgent ? '⚠️' : '⏳'}{' '}
+        <strong>{daysLeft === 0 ? 'Last day' : `${daysLeft} day${daysLeft === 1 ? '' : 's'} left`}</strong>
+        {' '}in your free trial
+      </span>
+      <button onClick={onUpgrade} style={{
+        background: urgent ? '#D97706' : '#2563EB', color: '#fff',
+        border: 'none', borderRadius: 6, padding: '4px 14px',
+        fontSize: 12, fontWeight: 600, cursor: 'pointer',
+      }}>
+        Upgrade now
+      </button>
+    </div>
+  );
+}
+
+// ─── Paywall Screen ───────────────────────────────────────────────────────────
+function PaywallScreen({ businessInfo, onLogout, isStaff }) {
+  const [showContact, setShowContact] = React.useState(false);
+
+  const panelStyle = {
+    width: '100%', maxWidth: 480, background: '#FAF8F4', borderRadius: 20,
+    padding: '44px 48px', boxShadow: '0 24px 80px rgba(0,0,0,0.35)',
+    fontFamily: "'Inter', sans-serif", textAlign: 'center',
+  };
+
+  return (
+    <div style={{
+      minHeight: '100vh', background: 'linear-gradient(135deg, #1E2A4A 0%, #2D3E6A 100%)',
+      display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 24,
+    }}>
+      <div style={panelStyle}>
+        {/* Logo */}
+        <div style={{ width: 52, height: 52, borderRadius: 14, background: '#C9A24B', color: '#1E2A4A', display: 'flex', alignItems: 'center', justifyContent: 'center', fontWeight: 700, fontFamily: 'Georgia, serif', fontSize: 26, margin: '0 auto 20px' }}>O</div>
+
+        {isStaff ? (
+          <>
+            <div style={{ fontFamily: 'Georgia, serif', fontSize: 22, fontWeight: 700, color: '#1E2A4A', marginBottom: 10 }}>Subscription required</div>
+            <div style={{ fontSize: 14, color: '#666', lineHeight: 1.6, marginBottom: 28 }}>
+              Your company's free trial has ended.<br />Please ask <strong>{businessInfo?.name || 'your admin'}</strong>'s owner to subscribe to continue.
+            </div>
+          </>
+        ) : (
+          <>
+            <div style={{ fontFamily: 'Georgia, serif', fontSize: 22, fontWeight: 700, color: '#1E2A4A', marginBottom: 10 }}>Your free trial has ended</div>
+            <div style={{ fontSize: 14, color: '#666', lineHeight: 1.6, marginBottom: 28 }}>
+              Subscribe to keep your data and continue using Operix.
+            </div>
+
+            {/* Plan card */}
+            <div style={{ background: '#1E2A4A', borderRadius: 14, padding: '24px 28px', marginBottom: 24, textAlign: 'left' }}>
+              <div style={{ color: '#C9A24B', fontSize: 11, fontWeight: 700, letterSpacing: 1.2, textTransform: 'uppercase', marginBottom: 10 }}>Operix Pro</div>
+              <div style={{ display: 'flex', alignItems: 'flex-end', gap: 4, marginBottom: 16 }}>
+                <span style={{ color: '#fff', fontSize: 38, fontWeight: 700, fontFamily: 'Georgia, serif' }}>₹999</span>
+                <span style={{ color: '#9BABB8', fontSize: 13, marginBottom: 8 }}>/month</span>
+              </div>
+              {[
+                'All modules — Trading, Manufacturing, Services',
+                'Unlimited documents & storage',
+                'Staff accounts & role management',
+                'Letterpad printing & contracts',
+                'Priority support',
+              ].map(f => (
+                <div key={f} style={{ display: 'flex', alignItems: 'center', gap: 8, color: '#E2E8F0', fontSize: 13, marginBottom: 8 }}>
+                  <span style={{ color: '#C9A24B', fontWeight: 700 }}>✓</span> {f}
+                </div>
+              ))}
+            </div>
+
+            {/* Subscribe button — wire Razorpay here later */}
+            <button
+              onClick={() => setShowContact(true)}
+              style={{ width: '100%', padding: '14px', background: '#C9A24B', color: '#1E2A4A', border: 'none', borderRadius: 10, fontSize: 16, fontWeight: 700, cursor: 'pointer', marginBottom: 12 }}
+            >
+              Subscribe — ₹999/month
+            </button>
+
+            {showContact && (
+              <div style={{ background: '#EFF6FF', border: '1px solid #BFDBFE', borderRadius: 10, padding: '14px 16px', marginBottom: 12, fontSize: 13, color: '#1E40AF', textAlign: 'left' }}>
+                📩 Payment gateway coming soon! To activate your subscription now, contact us at{' '}
+                <strong>support@operix.in</strong> with your business name and we'll activate manually.
+              </div>
+            )}
+          </>
+        )}
+
+        <button onClick={onLogout} style={{ fontSize: 13, color: '#999', background: 'none', border: 'none', cursor: 'pointer', textDecoration: 'underline' }}>
+          Sign out
+        </button>
       </div>
     </div>
   );
@@ -619,7 +1157,7 @@ function VendorsList({ vendors, setEditing, setVendors, documents }) {
       <div style={{ ...styles.list, marginTop: 16 }}>
         {vendors.length === 0 && <div style={styles.emptyBox}>No vendors yet. Add suppliers to speed up purchase orders and bills.</div>}
         {vendors.map((v) => {
-          const count = documents.filter((d) => d.customerId === v.id && DOC_TYPES[d.type].party === 'vendor').length;
+          const count = documents.filter((d) => d.customerId === v.id && DOC_TYPES[d.type]?.party === 'vendor').length;
           return (
             <div key={v.id} style={styles.recordRow}>
               <div style={{ flex: 1 }}>
@@ -673,6 +1211,7 @@ function VendorModal({ vendor, onSave, onClose, businessInfo = {} }) {
 
 function ItemsList({ items, setEditing, setItems, businessInfo }) {
   const fmt = makeFmt(businessInfo);
+  const cc = COUNTRY_CONFIG[businessInfo?.country || 'india'] || COUNTRY_CONFIG.india;
   return (
     <div style={styles.page}>
       <div style={styles.pageHeader}>
@@ -686,7 +1225,7 @@ function ItemsList({ items, setEditing, setItems, businessInfo }) {
           <div key={it.id} style={styles.recordRow}>
             <div style={{ flex: 1 }}>
               <div style={styles.docRowTitle}>{it.name}</div>
-              <div style={styles.docRowSub}>HSN {it.hsn || '—'} · Tax {it.gst}%</div>
+              <div style={styles.docRowSub}>{cc.splitTax && <>HSN {it.hsn || '—'} · </>}Tax {it.gst}%</div>
             </div>
             <div style={{ textAlign: 'right', marginRight: 8 }}>
               <div style={{ fontSize: 11, color: '#888780' }}>Buy: <span style={{ color: '#B5453A', fontWeight: 600 }}>{fmt(it.purchaseRate ?? it.rate ?? 0)}</span></div>
@@ -702,9 +1241,9 @@ function ItemsList({ items, setEditing, setItems, businessInfo }) {
 }
 
 function ItemModal({ item, onSave, onClose, businessInfo = {} }) {
+  const cc = COUNTRY_CONFIG[businessInfo?.country || 'india'] || COUNTRY_CONFIG.india;
   const [form, setForm] = useState({ openingStock: 0, minStock: 0, unit: '', ...item });
   const set = (k, v) => setForm(p => ({ ...p, [k]: v }));
-  const cc = COUNTRY_CONFIG[businessInfo.country || 'india'] || COUNTRY_CONFIG.other;
   return (
     <Modal onClose={onClose} title={item.id ? 'Edit item' : 'Add item'}>
       <div style={styles.formGroup}>
@@ -712,10 +1251,10 @@ function ItemModal({ item, onSave, onClose, businessInfo = {} }) {
         <input value={form.name} onChange={e => set('name', e.target.value)} style={styles.input} />
       </div>
       <div style={{ display: 'flex', gap: 12 }}>
-        <div style={{ ...styles.formGroup, flex: 1 }}>
+        {cc.splitTax && <div style={{ ...styles.formGroup, flex: 1 }}>
           <label style={styles.label}>HSN/SAC code</label>
           <input value={form.hsn} onChange={e => set('hsn', e.target.value)} style={styles.input} />
-        </div>
+        </div>}
         <div style={{ ...styles.formGroup, flex: 1 }}>
           <label style={styles.label}>Unit (pcs/kg/m…)</label>
           <input value={form.unit || ''} onChange={e => set('unit', e.target.value)} style={styles.input} placeholder="pcs" />
@@ -857,9 +1396,34 @@ function TemplateMiniPreview({ template, name }) {
 }
 
 
-function SettingsView({ businessInfo, setBusinessInfo }) {
+function SettingsView({ businessInfo, setBusinessInfo, onExportData, onSaved, userRole = 'admin' }) {
   const [form, setForm] = useState(businessInfo);
+  const [saved, setSaved] = useState(false);
   useEffect(() => setForm(businessInfo), [businessInfo]);
+
+  function handleSave() {
+    setBusinessInfo(form);
+    setSaved(true);
+    setTimeout(() => { setSaved(false); if (onSaved) onSaved(); }, 1200);
+  }
+
+  function handleLetterheadUpload(e) {
+    const file = e.target.files[0];
+    if (!file) return;
+    if (file.size > 1500 * 1024) { alert('Please choose an image under 1.5 MB.'); return; }
+    const reader = new FileReader();
+    reader.onload = () => setForm(p => ({ ...p, letterhead: reader.result }));
+    reader.readAsDataURL(file);
+  }
+
+  function handleLetterheadFooterUpload(e) {
+    const file = e.target.files[0];
+    if (!file) return;
+    if (file.size > 1500 * 1024) { alert('Please choose an image under 1.5 MB.'); return; }
+    const reader = new FileReader();
+    reader.onload = () => setForm(p => ({ ...p, letterheadFooter: reader.result }));
+    reader.readAsDataURL(file);
+  }
 
   function handleLogoUpload(e) {
     const file = e.target.files[0];
@@ -923,6 +1487,31 @@ function SettingsView({ businessInfo, setBusinessInfo }) {
           <div style={{ ...styles.muted, fontSize: 11.5, marginTop: 4 }}>PNG or JPG · Max 500 KB · Recommended size: 400 × 400 px (square) or 800 × 300 px (horizontal). Appears on every document.</div>
         </div>
 
+        <div style={styles.formGroup}>
+          <label style={styles.label}>Header Image <span style={{ fontWeight:400, color:'#888', fontSize:11 }}>(used automatically on all printed documents)</span></label>
+          {form.letterhead && (
+            <div style={{ marginBottom: 8, border:'1px solid #EAE6DB', borderRadius:8, overflow:'hidden', maxWidth:400 }}>
+              <img src={form.letterhead} alt="Letterhead preview" style={{ width:'100%', maxHeight:160, objectFit:'contain', background:'#fff' }} />
+            </div>
+          )}
+          <input type="file" accept="image/*" onChange={handleLetterheadUpload} style={styles.input} />
+          {form.letterhead && <button onClick={()=>setForm(p=>({...p,letterhead:''}))} style={{ ...styles.ghostBtn, marginTop:6, fontSize:12 }}>Remove Header</button>}
+          <div style={{ ...styles.muted, fontSize:11.5, marginTop:4 }}>PNG or JPG · Max 1.5 MB · Recommended 2480 × 350 px. Auto-applied to all document prints (invoices, PO, contracts, etc).</div>
+        </div>
+
+        <div style={styles.formGroup}>
+          <label style={styles.label}>Footer Image <span style={{ fontWeight:400, color:'#888', fontSize:11 }}>(used automatically on all printed documents)</span></label>
+          {form.letterheadFooter && (
+            <div style={{ marginBottom: 8, border:'1px solid #EAE6DB', borderRadius:8, overflow:'hidden', maxWidth:400 }}>
+              <img src={form.letterheadFooter} alt="Letterhead footer preview" style={{ width:'100%', maxHeight:100, objectFit:'contain', background:'#fff' }} />
+            </div>
+          )}
+          <input type="file" accept="image/*" onChange={handleLetterheadFooterUpload} style={styles.input} />
+          {form.letterheadFooter && <button onClick={()=>setForm(p=>({...p,letterheadFooter:''}))} style={{ ...styles.ghostBtn, marginTop:6, fontSize:12 }}>Remove Footer</button>}
+          <div style={{ ...styles.muted, fontSize:11.5, marginTop:4 }}>PNG or JPG · Max 1.5 MB · Recommended 2480 × 200 px. Auto-applied to the bottom of all document prints.</div>
+        </div>
+
+        {userRole === 'admin' && (<>
         <div style={{ ...styles.sectionDivider, marginTop: 8 }}>Region &amp; Tax</div>
 
         <div style={styles.formGroup}>
@@ -1012,21 +1601,38 @@ function SettingsView({ businessInfo, setBusinessInfo }) {
 
         <div style={styles.formGroup}>
           <label style={styles.label}>Company type</label>
-          <div style={{ display: 'flex', gap: 10, marginTop: 4 }}>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 8, marginTop: 4 }}>
             {[
-              { id: 'trading', label: 'Trading', desc: 'Buy & sell only' },
-              { id: 'manufacturing', label: 'Manufacturing', desc: 'Produce goods' },
-              { id: 'both', label: 'Both', desc: 'Trade + Manufacture' },
-              { id: 'service', label: 'Service', desc: 'Service-based business' },
-            ].map((t) => (
-              <button key={t.id} onClick={() => setForm((p) => ({ ...p, companyType: t.id }))}
-                style={{ ...styles.templateCard, flex: 1, ...(form.companyType === t.id ? styles.templateCardActive : {}) }}>
-                <div style={{ fontWeight: 600, fontSize: 13, color: '#1E2A4A' }}>{t.label}</div>
-                <div style={{ fontSize: 11.5, color: '#888780' }}>{t.desc}</div>
-              </button>
-            ))}
+              { id: 'trading',       label: '🛒 Trading',             desc: 'Buy & sell goods — invoices, POs, delivery, stock' },
+              { id: 'manufacturing', label: '🏭 Manufacturing',        desc: 'Produce goods — BOM, production orders, QA' },
+              { id: 'service',       label: '🔧 Services / MEP Suite', desc: 'Manpower & site work — projects, activity planner, attendance' },
+            ].map((t) => {
+              const cur = form.activeTypes || [form.companyType || 'trading'];
+              const active = cur.includes(t.id);
+              return (
+                <div key={t.id} onClick={() => {
+                  const next = active ? cur.filter(x => x !== t.id) : [...cur, t.id];
+                  setForm(p => ({ ...p, activeTypes: next.length ? next : [t.id] }));
+                }} style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '10px 14px', borderRadius: 10, border: active ? '2px solid #1E2A4A' : '2px solid #EAE6DB', background: active ? '#F0EFE9' : '#FAFAF8', cursor: 'pointer', userSelect: 'none' }}>
+                  <div style={{ width: 20, height: 20, borderRadius: 5, border: active ? '2px solid #1E2A4A' : '2px solid #BDB9B0', background: active ? '#1E2A4A' : '#fff', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
+                    {active && <span style={{ color: '#fff', fontSize: 13, fontWeight: 700 }}>✓</span>}
+                  </div>
+                  <div>
+                    <div style={{ fontWeight: 600, fontSize: 13, color: '#1E2A4A' }}>{t.label}</div>
+                    <div style={{ fontSize: 11.5, color: '#888780' }}>{t.desc}</div>
+                  </div>
+                </div>
+              );
+            })}
+            <button onClick={() => setForm(p => {
+              const cur = p.activeTypes || [p.companyType || 'trading'];
+              return { ...p, activeTypes: cur.length === 3 ? ['trading'] : ['trading','manufacturing','service'] };
+            })} style={{ ...styles.ghostBtn, alignSelf: 'flex-start', marginTop: 2 }}>
+              {((form.activeTypes || [form.companyType || 'trading']).length === 3) ? 'Deselect all' : 'Select all 3 activities'}
+            </button>
           </div>
         </div>
+        </>)}
 
         <div style={styles.formGroup}>
           <label style={styles.label}>Print template</label>
@@ -1076,7 +1682,75 @@ function SettingsView({ businessInfo, setBusinessInfo }) {
           <input value={form.signatory || ''} onChange={(e) => setForm((p) => ({ ...p, signatory: e.target.value }))} style={styles.input} placeholder="e.g. Director / Manager" />
         </div>
 
-        <button onClick={() => setBusinessInfo(form)} style={styles.primaryBtn}>Save profile</button>
+        <button onClick={handleSave} style={{ ...styles.primaryBtn, ...(saved ? { background: '#1A7A3E' } : {}), transition: 'background 0.3s' }}>
+          {saved ? '✓ Settings saved!' : 'Save profile'}
+        </button>
+
+        {/* ── Data & Privacy ── */}
+        <div style={{ ...styles.sectionDivider, marginTop: 32 }}>Data &amp; Privacy</div>
+        <div style={{ background: '#F8F5EE', border: '1px solid #EAE6DB', borderRadius: 12, padding: '20px 22px', marginTop: 8 }}>
+          <div style={{ display: 'flex', alignItems: 'flex-start', gap: 14 }}>
+            <div style={{ fontSize: 26 }}>🔒</div>
+            <div style={{ flex: 1 }}>
+              <div style={{ fontWeight: 700, fontSize: 14, color: '#1E2A4A', marginBottom: 4 }}>Your data belongs to you</div>
+              <div style={{ fontSize: 13, color: '#666', lineHeight: 1.6, marginBottom: 14 }}>
+                All your business data is stored securely on Google Cloud (256-bit encryption, TLS in transit).
+                We never sell, share, or use your data for advertising. You can export or delete everything at any time.
+              </div>
+              <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap' }}>
+                <button onClick={onExportData} style={{ ...styles.secondaryBtn, display: 'flex', alignItems: 'center', gap: 6 }}>
+                  <Download size={14} /> Export all my data (JSON)
+                </button>
+                <a href="/privacy" target="_blank" rel="noopener noreferrer"
+                  style={{ ...styles.ghostBtn, textDecoration: 'none', display: 'flex', alignItems: 'center', gap: 6, fontSize: 13 }}>
+                  Privacy Policy ↗
+                </a>
+              </div>
+              <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginTop: 14 }}>
+                {['256-bit encrypted', 'Google Cloud India', 'No ads, ever', 'DPDP Act 2023 compliant'].map(tag => (
+                  <span key={tag} style={{ background: '#EEF5F0', color: '#1A7A3E', borderRadius: 10, padding: '3px 10px', fontSize: 11.5, fontWeight: 600 }}>✓ {tag}</span>
+                ))}
+              </div>
+            </div>
+
+            {/* ── Email Notification Config ── */}
+            <div style={{ background: '#F8F5EE', border: '1px solid #EAE6DB', borderRadius: 12, padding: '20px 24px', marginTop: 20 }}>
+              <div style={{ fontWeight: 700, fontSize: 14, color: '#1E2A4A', marginBottom: 4 }}>📧 Email Notifications (Optional)</div>
+              <div style={{ fontSize: 12, color: '#888', marginBottom: 14, lineHeight: 1.6 }}>
+                Connect EmailJS (free, 200 emails/month) to send approval requests and document alerts by email.{' '}
+                <a href="https://www.emailjs.com" target="_blank" rel="noreferrer" style={{ color: '#3D52A0' }}>Setup guide →</a>
+              </div>
+              {[
+                ['Service ID', 'emailConfig.serviceId', 'service_xxxxxxx'],
+                ['Template ID', 'emailConfig.templateId', 'template_xxxxxxx'],
+                ['Public Key', 'emailConfig.publicKey', 'your_public_key'],
+                ['Approver Email', 'emailConfig.approverEmail', 'manager@company.com'],
+              ].map(([label, path, ph]) => {
+                const keys = path.split('.');
+                const val = keys.reduce((o, k) => (o || {})[k], businessInfo) || '';
+                return (
+                  <div key={path} style={{ display: 'flex', gap: 12, alignItems: 'center', marginBottom: 8 }}>
+                    <label style={{ width: 130, fontSize: 12, color: '#555', flexShrink: 0 }}>{label}</label>
+                    <input value={val} placeholder={ph}
+                      onChange={e => {
+                        const v = e.target.value;
+                        setBusinessInfo(prev => {
+                          const next = { ...prev };
+                          if (!next.emailConfig) next.emailConfig = {};
+                          next.emailConfig[keys[1]] = v;
+                          return next;
+                        });
+                      }}
+                      style={{ flex: 1, border: '1px solid #DDD', borderRadius: 6, padding: '6px 10px', fontSize: 12 }} />
+                  </div>
+                );
+              })}
+              {businessInfo?.emailConfig?.serviceId && (
+                <div style={{ fontSize: 11, color: '#3D7A5C', fontWeight: 600, marginTop: 6 }}>✓ Email notifications active</div>
+              )}
+            </div>
+          </div>
+        </div>
       </div>
     </div>
   );
@@ -1291,73 +1965,236 @@ function StaffModal({ ownerUid, onSaved, onClose, employees = [] }) {
 
 // ─── Dashboard ─────────────────────────────────────────────────
 
-function Dashboard({ stats, documents, customers, vendors, businessInfo, startNewDoc, openDoc, setView, vouchers = [], pettyCash = {}, productionOrders = [], rawMaterials = [], items = [], companyType = 'trading' }) {
-  const recent = [...documents].sort((a, b) => b.createdAt - a.createdAt).slice(0, 5);
-  const showProduction = companyType === 'manufacturing' || companyType === 'both';
-  const cc = COUNTRY_CONFIG[businessInfo?.country || 'india'];
-  const cur = (n) => currency(n, cc.currency);
+// Doc types visible per company type
+const DASHBOARD_DOC_TYPES = {
+  trading:       ['quotation', 'invoice', 'delivery', 'packing_list', 'creditnote', 'purchase', 'purchasebill'],
+  service:       ['quotation', 'invoice', 'creditnote'],
+  manufacturing: ['quotation', 'invoice', 'delivery', 'packing_list', 'creditnote', 'purchase', 'purchasebill'],
+  both:          ['quotation', 'invoice', 'delivery', 'packing_list', 'creditnote', 'purchase', 'purchasebill'],
+};
+
+// ── Per-activity stats column ──────────────────────────────────────────────────
+function ActivityColumn({ bizType, label, color, icon, docs, stats, customers, vendors, productionOrders, siteProjects, siteAttendance, startNewDoc, openDoc, setView, cur, items }) {
+  const BIZ_DOC_TYPES = {
+    trading:       ['quotation','invoice','delivery','packing_list','creditnote','purchase','purchasebill'],
+    manufacturing: ['quotation','invoice','delivery','packing_list','creditnote','purchase','purchasebill'],
+    service:       ['quotation','invoice','creditnote'],
+  };
+  const allowed = BIZ_DOC_TYPES[bizType] || [];
+  const bizDocs = docs.filter(d => (d.bizType || 'trading') === bizType);
+  const invoiced  = bizDocs.filter(d=>d.type==='invoice').reduce((s,d)=>s+(d.total||0),0);
+  const outstanding = bizDocs.filter(d=>d.type==='invoice'&&d.status!=='paid').reduce((s,d)=>s+(d.total||0),0);
+  const recent = [...bizDocs].sort((a,b)=>b.createdAt-a.createdAt).slice(0,3);
   return (
-    <div style={styles.page}>
-      <div style={styles.pageHeader}>
-        <h1 className="serif" style={styles.h1}>Good day, {(businessInfo.name || 'there').split(' ')[0]}</h1>
-        <p style={styles.muted}>Here's what's happening across your business.</p>
+    <div style={{ background: '#fff', border: `2px solid ${color}22`, borderRadius: 14, padding: '18px 16px', flex: 1, minWidth: 260 }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 14, paddingBottom: 10, borderBottom: `2px solid ${color}22` }}>
+        <div style={{ width: 32, height: 32, borderRadius: 8, background: `${color}18`, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 17 }}>{icon}</div>
+        <div>
+          <div style={{ fontWeight: 700, fontSize: 14, color: '#1E2A4A' }}>{label}</div>
+          <div style={{ fontSize: 11, color: '#aaa' }}>{bizDocs.length} documents</div>
+        </div>
+        <button onClick={()=>setView('documents')} style={{ ...{padding:'3px 10px',borderRadius:8,border:'1px solid #EAE6DB',background:'#FAF8F4',cursor:'pointer',fontSize:11,color:'#666',marginLeft:'auto'} }}>View all</button>
       </div>
 
-      <div style={styles.dashSection}>Sales</div>
-      <div style={styles.statGrid}>
-        <StatCard label="Total invoiced" value={cur(stats.totalRevenue)} accent="#1E2A4A" />
-        <StatCard label="Outstanding (receivable)" value={cur(stats.outstanding)} accent="#B5453A" />
-        <StatCard label="Quotations" value={stats.counts.quotation || 0} accent="#C9A24B" sub="created" />
-        <StatCard label="Delivery notes" value={stats.counts.delivery || 0} accent="#3D7A5C" sub="created" />
+      {/* Key stats */}
+      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8, marginBottom: 14 }}>
+        <div style={{ background: '#FAF8F4', borderRadius: 8, padding: '8px 10px' }}>
+          <div style={{ fontSize: 15, fontWeight: 700, color: '#1E2A4A' }}>{cur(invoiced)}</div>
+          <div style={{ fontSize: 10.5, color: '#888', marginTop: 1 }}>Total invoiced</div>
+        </div>
+        <div style={{ background: '#FEF0E0', borderRadius: 8, padding: '8px 10px' }}>
+          <div style={{ fontSize: 15, fontWeight: 700, color: '#B5453A' }}>{cur(outstanding)}</div>
+          <div style={{ fontSize: 10.5, color: '#888', marginTop: 1 }}>Outstanding</div>
+        </div>
+        {bizType !== 'service' && (
+          <>
+            <div style={{ background: '#F0EAF9', borderRadius: 8, padding: '8px 10px' }}>
+              <div style={{ fontSize: 15, fontWeight: 700, color: '#6B5BAE' }}>{bizDocs.filter(d=>d.type==='purchase').length}</div>
+              <div style={{ fontSize: 10.5, color: '#888', marginTop: 1 }}>Purchase orders</div>
+            </div>
+            <div style={{ background: '#E6F5EC', borderRadius: 8, padding: '8px 10px' }}>
+              <div style={{ fontSize: 15, fontWeight: 700, color: '#1A7A3E' }}>{items?.length || 0}</div>
+              <div style={{ fontSize: 10.5, color: '#888', marginTop: 1 }}>Items in master</div>
+            </div>
+          </>
+        )}
+        {bizType === 'manufacturing' && (
+          <>
+            <div style={{ background: '#FAF8F4', borderRadius: 8, padding: '8px 10px', gridColumn: '1/-1' }}>
+              <div style={{ fontSize: 15, fontWeight: 700, color: '#1E2A4A' }}>
+                {productionOrders?.filter(o=>o.status==='in_progress').length || 0}
+                <span style={{ fontSize: 11, color: '#888', fontWeight: 400, marginLeft: 6 }}>in progress</span>
+              </div>
+              <div style={{ fontSize: 10.5, color: '#888', marginTop: 1 }}>Production orders</div>
+            </div>
+          </>
+        )}
+        {bizType === 'service' && (
+          <>
+            <div style={{ background: '#E0F2F9', borderRadius: 8, padding: '8px 10px' }}>
+              <div style={{ fontSize: 15, fontWeight: 700, color: '#1E7A9A' }}>{siteProjects?.filter(p=>p.status==='active').length || 0}</div>
+              <div style={{ fontSize: 10.5, color: '#888', marginTop: 1 }}>Active sites</div>
+            </div>
+            <div style={{ background: '#FAF8F4', borderRadius: 8, padding: '8px 10px' }}>
+              <div style={{ fontSize: 15, fontWeight: 700, color: '#1E2A4A' }}>{siteAttendance?.filter(r=>r.date===new Date().toISOString().slice(0,10)).reduce((s,r)=>(s+(r.records||[]).filter(x=>x.status==='present').length),0) || 0}</div>
+              <div style={{ fontSize: 10.5, color: '#888', marginTop: 1 }}>Present today</div>
+            </div>
+          </>
+        )}
       </div>
 
-      <div style={styles.dashSection}>Purchase</div>
-      <div style={styles.statGrid}>
-        <StatCard label="Total purchases" value={cur(stats.totalPurchases)} accent="#6B5BAE" />
-        <StatCard label="Payable to vendors" value={cur(stats.payable)} accent="#8A6FD6" />
-        <StatCard label="Purchase orders" value={stats.counts.purchase || 0} accent="#6B5BAE" sub="raised" />
-        <StatCard label="Vendors" value={vendors.length} accent="#555" sub="registered" />
-      </div>
-
-      <div style={styles.dashSection}>Accounts</div>
-      <div style={styles.statGrid}>
-        <StatCard label="Cash received" value={cur(stats.totalReceived)} accent="#1A7A3E" sub="receipt vouchers" />
-        <StatCard label="Cash paid" value={cur(stats.totalPaid)} accent="#B91C1C" sub="payment vouchers" />
-        <StatCard label="Petty cash balance" value={cur(stats.pcBalance)} accent="#C9A24B" />
-        <StatCard label="Customers" value={customers.length} accent="#1E2A4A" sub="registered" />
-      </div>
-
-      <div style={styles.dashSection}>Inventory</div>
-      <div style={styles.statGrid}>
-        <StatCard label="Items master" value={stats.itemCount} accent="#3D7A5C" sub="products / services" />
-        <StatCard label="Low / out of stock" value={stats.lowStockCount || 0} accent={stats.lowStockCount > 0 ? '#B91C1C' : '#3D7A5C'} sub={stats.lowStockCount > 0 ? 'needs attention' : 'all items ok'} />
-        {showProduction && <StatCard label="Raw materials" value={stats.rmCount} accent="#C9A24B" sub="in master" />}
-        {showProduction && <StatCard label="Production orders" value={stats.poCount} accent="#1E2A4A" sub={`${stats.poOpen} open`} />}
-      </div>
-
-      <div style={styles.sectionRow}>
-        <div className="serif" style={styles.h2}>Quick create</div>
-      </div>
-      <div style={styles.quickGrid}>
-        {Object.entries(DOC_TYPES).map(([key, t]) => (
-          <button key={key} onClick={() => startNewDoc(key)} style={styles.quickCard}>
-            <t.icon size={22} strokeWidth={1.6} color={t.color} />
-            <span style={styles.quickLabel}>{t.label}</span>
-            <span style={styles.quickCount}>{stats.counts[key]} created</span>
+      {/* Quick create */}
+      <div style={{ fontSize: 11, fontWeight: 700, color: '#888', textTransform: 'uppercase', letterSpacing: '0.07em', marginBottom: 6 }}>Quick create</div>
+      <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, marginBottom: 14 }}>
+        {Object.entries(DOC_TYPES).filter(([k])=>allowed.includes(k)).map(([k, t]) => (
+          <button key={k} onClick={()=>startNewDoc(k, bizType)}
+            style={{ display:'flex', alignItems:'center', gap:5, padding:'5px 10px', borderRadius:8, border:'1px solid #EAE6DB', background:'#FAF8F4', cursor:'pointer', fontSize:12, color:'#1E2A4A' }}>
+            <t.icon size={13} color={t.color} />
+            {t.label}
           </button>
         ))}
       </div>
 
-      <div style={styles.sectionRow}>
-        <div className="serif" style={styles.h2}>Recent documents</div>
-        <button onClick={() => setView('documents')} style={styles.linkBtn}>View all</button>
+      {/* Recent docs */}
+      <div style={{ fontSize: 11, fontWeight: 700, color: '#888', textTransform: 'uppercase', letterSpacing: '0.07em', marginBottom: 6 }}>Recent</div>
+      {recent.length === 0
+        ? <div style={{ fontSize: 12, color: '#ccc', padding: '8px 0' }}>No documents yet</div>
+        : recent.map(d => (
+            <div key={d.id} onClick={()=>openDoc(d)} style={{ display:'flex', justifyContent:'space-between', alignItems:'center', padding:'7px 0', borderTop:'1px solid #F0EDE6', cursor:'pointer' }}>
+              <div>
+                <div style={{ fontSize: 12.5, fontWeight: 600, color: '#1E2A4A' }}>{d.number}</div>
+                <div style={{ fontSize: 11, color: '#aaa' }}>{DOC_TYPES[d.type]?.label || d.type}</div>
+              </div>
+              <div style={{ fontSize: 12, color: '#1E2A4A', fontWeight: 600 }}>{cur(d.total || 0)}</div>
+            </div>
+          ))
+      }
+    </div>
+  );
+}
+
+function Dashboard({ stats, documents, customers, vendors, businessInfo, startNewDoc, openDoc, setView, vouchers = [], pettyCash = {}, productionOrders = [], rawMaterials = [], items = [], companyType = 'trading', activeTypes = ['trading'], isMultiBiz = false, siteProjects = [], siteAttendance = [] }) {
+  const allowedTypes = DASHBOARD_DOC_TYPES[companyType] || Object.keys(DOC_TYPES);
+  const recent = [...documents].sort((a, b) => b.createdAt - a.createdAt).slice(0, 5);
+  const showProduction = activeTypes.includes('manufacturing');
+  const showService    = activeTypes.includes('service');
+  const showTrade      = activeTypes.includes('trading') || activeTypes.includes('manufacturing');
+  const cc = COUNTRY_CONFIG[businessInfo?.country || 'india'];
+  const cur = (n) => currency(n, cc.currency);
+
+  const BIZ_META = {
+    trading:       { label: 'Trading',              icon: '🛒', color: '#C9A24B' },
+    manufacturing: { label: 'Manufacturing',         icon: '🏭', color: '#1E2A4A' },
+    service:       { label: 'Services / MEP Suite',  icon: '🔧', color: '#1E7A9A' },
+  };
+
+  return (
+    <div style={styles.page}>
+      <div style={styles.pageHeader}>
+        <h1 className="serif" style={styles.h1}>Good day, {(businessInfo.name || 'there').split(' ')[0]}</h1>
+        <p style={styles.muted}>{isMultiBiz ? `${activeTypes.length} business activities running` : `Here's what's happening across your business.`}</p>
       </div>
-      {recent.length === 0 ? (
-        <div style={styles.emptyBox}>No documents yet. Pick a type above to create your first one.</div>
+
+      {/* ── MULTI-BUSINESS: column view ─────────────────────────────────────── */}
+      {isMultiBiz ? (
+        <>
+          <div style={{ display: 'flex', gap: 14, alignItems: 'stretch', flexWrap: 'wrap', marginBottom: 24 }}>
+            {activeTypes.map(bt => (
+              <ActivityColumn
+                key={bt}
+                bizType={bt}
+                label={BIZ_META[bt]?.label || bt}
+                color={BIZ_META[bt]?.color || '#888'}
+                icon={BIZ_META[bt]?.icon || '📁'}
+                docs={documents}
+                stats={stats}
+                customers={customers}
+                vendors={vendors}
+                productionOrders={productionOrders}
+                siteProjects={siteProjects}
+                siteAttendance={siteAttendance}
+                startNewDoc={startNewDoc}
+                openDoc={openDoc}
+                setView={setView}
+                cur={cur}
+                items={items}
+              />
+            ))}
+          </div>
+
+          {/* Shared accounts summary */}
+          <div style={styles.dashSection}>Accounts (shared)</div>
+          <div style={styles.statGrid}>
+            <StatCard label="Cash received" value={cur(stats.totalReceived)} accent="#1A7A3E" sub="receipt vouchers" />
+            <StatCard label="Cash paid" value={cur(stats.totalPaid)} accent="#B91C1C" sub="payment vouchers" />
+            <StatCard label="Petty cash balance" value={cur(stats.pcBalance)} accent="#C9A24B" />
+            <StatCard label="Customers" value={customers.length} accent="#1E2A4A" sub="registered" />
+          </div>
+        </>
       ) : (
-        <div style={styles.list}>
-          {recent.map((d) => <DocRow key={d.id} doc={d} customers={customers} vendors={vendors} onClick={() => openDoc(d)} businessInfo={businessInfo} />)}
-        </div>
+        /* ── SINGLE BUSINESS: original layout ──────────────────────────────── */
+        <>
+          <div style={styles.dashSection}>Sales</div>
+          <div style={styles.statGrid}>
+            <StatCard label="Total invoiced" value={cur(stats.totalRevenue)} accent="#1E2A4A" />
+            <StatCard label="Outstanding (receivable)" value={cur(stats.outstanding)} accent="#B5453A" />
+            <StatCard label="Quotations" value={stats.counts.quotation || 0} accent="#C9A24B" sub="created" />
+            {showTrade && <StatCard label="Delivery notes" value={stats.counts.delivery || 0} accent="#3D7A5C" sub="created" />}
+          </div>
+
+          {showTrade && <>
+            <div style={styles.dashSection}>Purchase</div>
+            <div style={styles.statGrid}>
+              <StatCard label="Total purchases" value={cur(stats.totalPurchases)} accent="#6B5BAE" />
+              <StatCard label="Payable to vendors" value={cur(stats.payable)} accent="#8A6FD6" />
+              <StatCard label="Purchase orders" value={stats.counts.purchase || 0} accent="#6B5BAE" sub="raised" />
+              <StatCard label="Vendors" value={vendors.length} accent="#555" sub="registered" />
+            </div>
+          </>}
+
+          <div style={styles.dashSection}>Accounts</div>
+          <div style={styles.statGrid}>
+            <StatCard label="Cash received" value={cur(stats.totalReceived)} accent="#1A7A3E" sub="receipt vouchers" />
+            <StatCard label="Cash paid" value={cur(stats.totalPaid)} accent="#B91C1C" sub="payment vouchers" />
+            <StatCard label="Petty cash balance" value={cur(stats.pcBalance)} accent="#C9A24B" />
+            <StatCard label="Customers" value={customers.length} accent="#1E2A4A" sub="registered" />
+          </div>
+
+          {showTrade && <>
+            <div style={styles.dashSection}>Inventory</div>
+            <div style={styles.statGrid}>
+              <StatCard label="Items master" value={stats.itemCount} accent="#3D7A5C" sub="products / services" />
+              <StatCard label="Low / out of stock" value={stats.lowStockCount || 0} accent={stats.lowStockCount > 0 ? '#B91C1C' : '#3D7A5C'} sub={stats.lowStockCount > 0 ? 'needs attention' : 'all items ok'} />
+              {showProduction && <StatCard label="Raw materials" value={stats.rmCount} accent="#C9A24B" sub="in master" />}
+              {showProduction && <StatCard label="Production orders" value={stats.poCount} accent="#1E2A4A" sub={`${stats.poOpen} open`} />}
+            </div>
+          </>}
+
+          <div style={styles.sectionRow}>
+            <div className="serif" style={styles.h2}>Quick create</div>
+          </div>
+          <div style={styles.quickGrid}>
+            {Object.entries(DOC_TYPES).filter(([key]) => allowedTypes.includes(key)).map(([key, t]) => (
+              <button key={key} onClick={() => startNewDoc(key, companyType)} style={styles.quickCard}>
+                <t.icon size={22} strokeWidth={1.6} color={t.color} />
+                <span style={styles.quickLabel}>{t.label}</span>
+                <span style={styles.quickCount}>{stats.counts[key] || 0} created</span>
+              </button>
+            ))}
+          </div>
+
+          <div style={styles.sectionRow}>
+            <div className="serif" style={styles.h2}>Recent documents</div>
+            <button onClick={() => setView('documents')} style={styles.linkBtn}>View all</button>
+          </div>
+          {recent.length === 0 ? (
+            <div style={styles.emptyBox}>No documents yet. Pick a type above to create your first one.</div>
+          ) : (
+            <div style={styles.list}>
+              {recent.map((d) => <DocRow key={d.id} doc={d} customers={customers} vendors={vendors} onClick={() => openDoc(d)} businessInfo={businessInfo} showBizBadge={true} />)}
+            </div>
+          )}
+        </>
       )}
     </div>
   );
@@ -1376,7 +2213,12 @@ function StatCard({ label, value, accent, sub }) {
   );
 }
 
-function DocRow({ doc, customers, vendors, onClick, businessInfo }) {
+const BIZ_BADGE = {
+  trading:       { label: 'Trading',       bg: '#FDF7E6', color: '#C9A24B' },
+  manufacturing: { label: 'Manufacturing', bg: '#EEF0F7', color: '#1E2A4A' },
+  service:       { label: 'MEP / Service', bg: '#E0F2F9', color: '#1E7A9A' },
+};
+function DocRow({ doc, customers, vendors, onClick, businessInfo, showBizBadge = false }) {
   const t = DOC_TYPES[doc.type];
   if (!t) return null;
   const partyList = t.party === 'vendor' ? (vendors || []) : customers;
@@ -1471,7 +2313,20 @@ function ApprovalActions({ item, onUpdate, userRole, compact = false }) {
   );
 }
 
-function DocumentsList({ docs, customers, vendors, search, setSearch, openDoc, deleteDoc, startNewDoc }) {
+function DocumentsList({ docs, customers, vendors, search, setSearch, openDoc, deleteDoc, startNewDoc, activeTypes = ['trading'] }) {
+  const isMultiBiz = activeTypes.length > 1;
+  const [filterBizType, setFilterBizType] = React.useState(
+    activeTypes.length === 1 ? activeTypes[0] : 'all'
+  );
+  const BIZ_FILTER_TABS = [
+    { key: 'all',           label: 'All' },
+    { key: 'trading',       label: '🛒 Trading' },
+    { key: 'manufacturing', label: '🏭 Manufacturing' },
+    { key: 'service',       label: '🔧 Services' },
+  ].filter(t => t.key === 'all' || activeTypes.includes(t.key));
+  const visibleDocs = filterBizType === 'all'
+    ? docs
+    : docs.filter(d => (d.bizType || 'trading') === filterBizType);
   return (
     <div style={styles.page}>
       <div style={styles.pageHeader}>
@@ -1479,28 +2334,41 @@ function DocumentsList({ docs, customers, vendors, search, setSearch, openDoc, d
         <p style={styles.muted}>Every invoice, delivery note, quotation, purchase order, bill and credit note in one place.</p>
       </div>
 
+      {isMultiBiz && (
+        <div style={{ display: 'flex', gap: 6, marginBottom: 12, flexWrap: 'wrap' }}>
+          {BIZ_FILTER_TABS.map(t => (
+            <button key={t.key} onClick={() => setFilterBizType(t.key)}
+              style={{ padding: '5px 14px', borderRadius: 20, border: 'none', cursor: 'pointer', fontSize: 12, fontWeight: 600,
+                background: filterBizType === t.key ? '#1E2A4A' : '#EAE6DB',
+                color: filterBizType === t.key ? '#fff' : '#555' }}>
+              {t.label}
+            </button>
+          ))}
+        </div>
+      )}
+
       <div style={styles.toolbar}>
         <div style={styles.searchWrap}>
           <Search size={15} color="#888780" />
           <input value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Search by number, customer or vendor" style={styles.searchInput} />
         </div>
         <button style={styles.ghostBtn} onClick={() => downloadCSV('documents.csv',
-          ['Type', 'Number', 'Date', 'Party', 'Status', 'Amount'],
-          docs.map(d => {
+          ['Type', 'Number', 'Date', 'Party', 'Status', 'Amount', 'Activity'],
+          visibleDocs.map(d => {
             const party = customers.find(c => c.id === d.customerId) || vendors.find(v => v.id === d.customerId);
             const t = computeTotals(d, '', '');
-            return [d.type, d.number, d.date, party ? party.name : (d.customerSnapshot?.name || ''), d.status || '', t.grandTotal.toFixed(2)];
+            return [d.type, d.number, d.date, party ? party.name : (d.customerSnapshot?.name || ''), d.status || '', t.grandTotal.toFixed(2), d.bizType || 'trading'];
           })
         )}><Download size={14} /> Export CSV</button>
       </div>
 
-      {docs.length === 0 ? (
-        <div style={styles.emptyBox}>No documents found. Try a different search, or create a new document from the sidebar.</div>
+      {visibleDocs.length === 0 ? (
+        <div style={styles.emptyBox}>No documents found. Try a different search or activity filter, or create a new document from the sidebar.</div>
       ) : (
         <div style={styles.list}>
-          {docs.map((d) => (
+          {visibleDocs.map((d) => (
             <div key={d.id} style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-              <div style={{ flex: 1 }}><DocRow doc={d} customers={customers} vendors={vendors} onClick={() => openDoc(d)} businessInfo={{ state: '' }} /></div>
+              <div style={{ flex: 1 }}><DocRow doc={d} customers={customers} vendors={vendors} onClick={() => openDoc(d)} businessInfo={{ state: '' }} showBizBadge={isMultiBiz} /></div>
               <button onClick={() => deleteDoc(d.id)} style={styles.iconBtn} title="Delete"><Trash2 size={15} color="#B5453A" /></button>
             </div>
           ))}
@@ -1542,22 +2410,24 @@ function ConvertDropdown({ doc, onConvert }) {
 
 // Which views belong to each section (for auto-expand when child is active)
 const SECTION_VIEWS = {
-  sales:       ['customers', 'enquiries', 'documents'],
+  sales:       ['customers', 'enquiries', 'documents', 'channelpartners', 'serviceorders'],
   accounts:    ['pettycash', 'vouchers', 'gstr1', 'vatreport', 'taxreport'],
   purchase:    ['vendors', 'grn'],
-  stores:      ['stock', 'stockledger', 'bincard'],
-  engineering: ['items', 'partsmaster', 'engdocs'],
-  production:  ['rawmaterials', 'bom', 'productionorders', 'qualitycheck'],
+  stores:      ['stock', 'stockledger', 'bincard', 'items'],
+  engineering: ['partsmaster', 'engdocs'],
+  production:  ['rawmaterials', 'bom', 'productionorders'],
+  quality:     ['isoprinciples', 'deptprocedures', 'inprocessqa', 'qatesting'],
   hr:          ['employees', 'payroll'],
-  services:    ['serviceorders'],
-  admin:       ['staff'],
+  scope:       ['scopeofwork'],
+  site:        ['siteprojects', 'activityplanner', 'dailyupdates', 'progressboard', 'clientmaterials', 'siteattendance', 'evaluation', 'mepreports'],
+  admin:       ['staff', 'contracts', 'termslibrary'],
 };
 
-function Sidebar({ view, setView, setActiveDoc, startNewDoc, syncStatus, user, onLogout, userRole, companyType, country }) {
-  // 'both' = Trade + Manufacture (not service)
-  const showTrade      = companyType !== 'service';                                   // trading, manufacturing, both
-  const showProduction = companyType === 'manufacturing' || companyType === 'both';   // manufacturing, both
-  const showService    = companyType === 'service';                                   // service only
+function Sidebar({ view, setView, setActiveDoc, startNewDoc, syncStatus, user, onLogout, userRole, companyType, activeTypes, country, unreadCount = 0, onShowNotifications }) {
+  const showTrade      = activeTypes.includes('trading') || activeTypes.includes('manufacturing');
+  const showProduction = activeTypes.includes('manufacturing');
+  const showService    = activeTypes.includes('service');
+  const isMultiBiz     = activeTypes.length > 1;
 
   // Track manually collapsed sections (set of section keys)
   const [collapsed, setCollapsed] = useState(new Set());
@@ -1595,12 +2465,12 @@ function Sidebar({ view, setView, setActiveDoc, startNewDoc, syncStatus, user, o
     );
   }
 
-  function CreateBtn({ docKey }) {
+  function CreateBtn({ docKey, bizType: btnBizType }) {
     const t = DOC_TYPES[docKey];
     if (!t) return null;
     return (
       <button
-        onClick={() => startNewDoc(docKey)}
+        onClick={() => startNewDoc(docKey, btnBizType || activeTypes[0])}
         style={{ ...styles.navItem, fontSize: 12.5, color: '#A9B0C9', paddingLeft: 28 }}>
         <Plus size={13} strokeWidth={2} />{t.label}
       </button>
@@ -1685,9 +2555,10 @@ function Sidebar({ view, setView, setActiveDoc, startNewDoc, syncStatus, user, o
 
       {/* Sales */}
       <Section sectionKey="sales" label="Sales">
-        <NavBtn id="customers"       label="Customers"         icon={Users} />
-        <NavBtn id="enquiries"       label="Enquiries"         icon={FileSignature} />
-        <NavBtn id="channelpartners" label="Channel Partners"  icon={Briefcase} />
+        <NavBtn id="customers" label="Customers"    icon={Users} />
+        <NavBtn id="enquiries" label="Enquiries"    icon={FileSignature} />
+        {!showService && <NavBtn id="channelpartners" label="Channel Partners" icon={Briefcase} />}
+        {showProduction && <NavBtn id="serviceorders" label="SAS" icon={Briefcase} />}
         <CreateBtn docKey="quotation" />
       </Section>
 
@@ -1697,50 +2568,80 @@ function Sidebar({ view, setView, setActiveDoc, startNewDoc, syncStatus, user, o
         <CreateBtn docKey="creditnote" />
         <NavBtn id="pettycash" label="Petty Cash"  icon={FileMinus} />
         <NavBtn id="vouchers"  label="Vouchers"    icon={FileSignature} />
-        {country === 'india'  && <NavBtn id="gstr1"     label="GSTR-1 Report" icon={FileText} />}
-        {(country === 'uae' || country === 'saudi' || country === 'bahrain' || country === 'oman') && <NavBtn id="vatreport" label="VAT Return" icon={FileText} />}
+        {country === 'india' && <NavBtn id="gstr1" label="GSTR-1 Report" icon={FileText} />}
+        {['uae','saudi','bahrain','oman'].includes(country) && <NavBtn id="vatreport" label="VAT Return" icon={FileText} />}
         {COUNTRY_CONFIG[country]?.hasTax && !['india','uae','saudi','bahrain','oman'].includes(country) && <NavBtn id="taxreport" label="Tax Report" icon={FileText} />}
       </Section>
 
-      {/* Purchase — hidden for service companies */}
-      {showTrade && (
-        <Section sectionKey="purchase" label="Purchase">
-          <NavBtn id="vendors" label="Vendors" icon={Truck} />
-          <CreateBtn docKey="purchase" />
-          <CreateBtn docKey="purchasebill" />
-          <NavBtn id="grn" label="Goods Receipt (GRN)" icon={Truck} />
-        </Section>
-      )}
+      {/* Purchase */}
+      <Section sectionKey="purchase" label="Purchase">
+        <NavBtn id="vendors" label="Vendors" icon={Truck} />
+        <CreateBtn docKey="purchase" />
+        <CreateBtn docKey="purchasebill" />
+        <NavBtn id="grn" label="Goods Receipt (GRN)" icon={Truck} />
+      </Section>
 
       {/* Stores — hidden for service companies */}
       {showTrade && (
         <Section sectionKey="stores" label="Stores">
+          {!showService && <NavBtn id="items" label="Item Master" icon={Package} />}
           <CreateBtn docKey="delivery" />
           <CreateBtn docKey="packing_list" />
-          {/* Items shown here for trading; under Engineering for manufacturing */}
-          {!showProduction && <NavBtn id="items" label="Item Master" icon={Package} />}
           <NavBtn id="stock"       label="Stock Position" icon={ClipboardList} />
           <NavBtn id="stockledger" label="Stock Ledger"   icon={FileText} />
           <NavBtn id="bincard"     label="Bin Card"       icon={ClipboardList} />
         </Section>
       )}
 
-      {/* Engineering — only for manufacturing / both */}
-      {showProduction && (
-        <Section sectionKey="engineering" label="Engineering">
-          <NavBtn id="items"       label="Item Master"    icon={Package} />
-          <NavBtn id="partsmaster" label="Parts Master"   icon={Wrench} />
-          <NavBtn id="engdocs"     label="Eng Documents"  icon={BookOpen} />
+      {/* Scope of Work — service companies only (replaces Item Master) */}
+      {showService && (
+        <Section sectionKey="scope" label="Scope of Work">
+          <NavBtn id="scopeofwork" label="Scope of Work" icon={ClipboardList} />
         </Section>
       )}
 
-      {/* Production — only for manufacturing / both */}
+      {/* MEP Suite divider */}
+      {isMultiBiz && showService && (
+        <div style={{ fontSize: 10, fontWeight: 800, color: '#1E7A9A', textTransform: 'uppercase', letterSpacing: '0.1em', padding: '6px 14px 2px', marginTop: 4, borderTop: '1px solid #EAE6DB' }}>🔧 Services / MEP Suite</div>
+      )}
+      {/* MEP Suite — service / MEP manpower companies */}
+      {showService && (
+        <Section sectionKey="site" label="MEP Suite">
+          <NavBtn id="siteprojects"    label="Projects"         icon={MapPin} />
+          <NavBtn id="activityplanner" label="Activity Planner" icon={ClipboardList} />
+          <NavBtn id="dailyupdates"    label="Daily Updates"    icon={Pencil} />
+          <NavBtn id="progressboard"   label="Progress Board"   icon={BarChart2} />
+          <NavBtn id="clientmaterials" label="Client Materials" icon={Package} />
+          <NavBtn id="siteattendance"  label="Attendance"       icon={Users} />
+          <NavBtn id="evaluation"      label="Quarterly Review" icon={BarChart2} />
+          <NavBtn id="mepreports"      label="MEP Reports"      icon={FileText} />
+        </Section>
+      )}
+
+      {/* Engineering — manufacturing only (Item Master is in Stores) */}
+      {showProduction && (
+        <Section sectionKey="engineering" label="Engineering">
+          <NavBtn id="partsmaster" label="Parts Master"  icon={Wrench} />
+          <NavBtn id="engdocs"     label="Eng Documents" icon={BookOpen} />
+        </Section>
+      )}
+
+      {/* Production — manufacturing only */}
       {showProduction && (
         <Section sectionKey="production" label="Production">
-          <NavBtn id="rawmaterials"     label="Raw Materials"      icon={Package} />
-          <NavBtn id="bom"              label="Bill of Materials"  icon={ClipboardList} />
-          <NavBtn id="productionorders" label="Production Orders"  icon={Factory} />
-          <NavBtn id="qualitycheck"     label="Quality Check"      icon={CheckCircle} />
+          <NavBtn id="rawmaterials"     label="Raw Materials"     icon={Package} />
+          <NavBtn id="bom"              label="Bill of Materials" icon={ClipboardList} />
+          <NavBtn id="productionorders" label="Production Orders" icon={Factory} />
+        </Section>
+      )}
+
+      {/* Quality — manufacturing only */}
+      {showProduction && (
+        <Section sectionKey="quality" label="Quality">
+          <NavBtn id="isoprinciples"  label="ISO Principles"  icon={CheckCircle} />
+          <NavBtn id="deptprocedures" label="Dept Procedures" icon={BookOpen} />
+          <NavBtn id="inprocessqa"    label="Inprocess QA"    icon={CheckSquare} />
+          <NavBtn id="qatesting"      label="QA Testing"      icon={CheckCircle} />
         </Section>
       )}
 
@@ -1750,23 +2651,16 @@ function Sidebar({ view, setView, setActiveDoc, startNewDoc, syncStatus, user, o
         <NavBtn id="payroll"   label="Payroll"   icon={FileText} />
       </Section>
 
-      {/* Services — only for service company type */}
-      {showService && (
-        <Section sectionKey="services" label="Services">
-          <NavBtn id="serviceorders" label="Service Orders" icon={Briefcase} />
-        </Section>
-      )}
-
       {/* Admin */}
       {userRole === 'admin' && (
         <Section sectionKey="admin" label="Admin">
-          <NavBtn id="staff"         label="Staff"          icon={Shield} />
-          <NavBtn id="contracts"     label="Contracts"      icon={FileSignature} />
-          <NavBtn id="termslibrary"  label="Terms Library"  icon={BookOpen} />
+          <NavBtn id="staff" label="Staff" icon={Shield} />
+          {!showService && <NavBtn id="contracts"    label="Contracts"     icon={FileSignature} />}
+          {!showService && <NavBtn id="termslibrary" label="Terms Library" icon={BookOpen} />}
         </Section>
       )}
 
-      <SidebarFooter syncStatus={syncStatus} user={user} userRole={userRole} onLogout={onLogout} view={view} setView={setView} />
+      <SidebarFooter syncStatus={syncStatus} user={user} userRole={userRole} onLogout={onLogout} view={view} setView={setView} unreadCount={unreadCount} onShowNotifications={onShowNotifications} />
     </div>
   );
 
@@ -1788,7 +2682,7 @@ function Sidebar({ view, setView, setActiveDoc, startNewDoc, syncStatus, user, o
         <CreateBtn docKey="packing_list" />
         <CreateBtn docKey="creditnote" />
       </Section>
-      <SidebarFooter syncStatus={syncStatus} user={user} userRole={userRole} onLogout={onLogout} view={view} setView={setView} />
+      <SidebarFooter syncStatus={syncStatus} user={user} userRole={userRole} onLogout={onLogout} view={view} setView={setView} unreadCount={unreadCount} onShowNotifications={onShowNotifications} />
     </div>
   );
 
@@ -1807,7 +2701,7 @@ function Sidebar({ view, setView, setActiveDoc, startNewDoc, syncStatus, user, o
         <CreateBtn docKey="purchase" />
         <CreateBtn docKey="purchasebill" />
       </Section>
-      <SidebarFooter syncStatus={syncStatus} user={user} userRole={userRole} onLogout={onLogout} view={view} setView={setView} />
+      <SidebarFooter syncStatus={syncStatus} user={user} userRole={userRole} onLogout={onLogout} view={view} setView={setView} unreadCount={unreadCount} onShowNotifications={onShowNotifications} />
     </div>
   );
 
@@ -1831,10 +2725,14 @@ function Sidebar({ view, setView, setActiveDoc, startNewDoc, syncStatus, user, o
         <Section sectionKey="production" label="Production">
           <NavBtn id="rawmaterials"     label="Raw Materials"     icon={Package} />
           <NavBtn id="productionorders" label="Production Orders" icon={Factory} />
-          <NavBtn id="qualitycheck"     label="Quality Check"     icon={CheckCircle} />
         </Section>
       )}
-      <SidebarFooter syncStatus={syncStatus} user={user} userRole={userRole} onLogout={onLogout} view={view} setView={setView} />
+      {showProduction && (
+        <Section sectionKey="quality" label="Quality">
+          <NavBtn id="qatesting" label="QA Testing" icon={CheckCircle} />
+        </Section>
+      )}
+      <SidebarFooter syncStatus={syncStatus} user={user} userRole={userRole} onLogout={onLogout} view={view} setView={setView} unreadCount={unreadCount} onShowNotifications={onShowNotifications} />
     </div>
   );
 
@@ -1854,7 +2752,7 @@ function Sidebar({ view, setView, setActiveDoc, startNewDoc, syncStatus, user, o
         <NavBtn id="pettycash" label="Petty Cash" icon={FileMinus} />
         <NavBtn id="vouchers"  label="Vouchers"   icon={FileSignature} />
       </Section>
-      <SidebarFooter syncStatus={syncStatus} user={user} userRole={userRole} onLogout={onLogout} view={view} setView={setView} />
+      <SidebarFooter syncStatus={syncStatus} user={user} userRole={userRole} onLogout={onLogout} view={view} setView={setView} unreadCount={unreadCount} onShowNotifications={onShowNotifications} />
     </div>
   );
 
@@ -1866,15 +2764,32 @@ function Sidebar({ view, setView, setActiveDoc, startNewDoc, syncStatus, user, o
         <NavBtn id="dashboard" label="Dashboard" icon={LayoutDashboard} />
         <NavBtn id="documents" label="Documents"  icon={FileText} />
       </div>
-      <SidebarFooter syncStatus={syncStatus} user={user} userRole={userRole} onLogout={onLogout} view={view} setView={setView} />
+      <SidebarFooter syncStatus={syncStatus} user={user} userRole={userRole} onLogout={onLogout} view={view} setView={setView} unreadCount={unreadCount} onShowNotifications={onShowNotifications} />
     </div>
   );
 }
 
-function SidebarFooter({ syncStatus }) {
+function SidebarFooter({ syncStatus, unreadCount, onShowNotifications, view }) {
   return (
     <>
       <div style={{ flex: 1 }} />
+      {/* Notification Bell */}
+      <button onClick={onShowNotifications} style={{
+        display: 'flex', alignItems: 'center', gap: 8, width: '100%',
+        background: view === 'notifications' ? 'rgba(255,255,255,0.12)' : 'transparent',
+        border: 'none', borderRadius: 8, padding: '8px 10px', cursor: 'pointer',
+        color: '#E8E6DE', fontSize: 13, marginBottom: 4, position: 'relative',
+      }}>
+        <span style={{ fontSize: 16 }}>🔔</span>
+        <span>Notifications</span>
+        {unreadCount > 0 && (
+          <span style={{
+            background: '#C9A24B', color: '#fff', borderRadius: 10,
+            fontSize: 10, fontWeight: 700, padding: '1px 6px', marginLeft: 'auto',
+            minWidth: 18, textAlign: 'center',
+          }}>{unreadCount}</span>
+        )}
+      </button>
       <div style={styles.syncBox}>
         {syncStatus === 'syncing' && <><Cloud size={14} color="#A9B0C9" /><span>Syncing…</span></>}
         {syncStatus === 'synced'  && <><Cloud size={14} color="#7FBF96" /><span>Synced</span></>}
@@ -1977,8 +2892,116 @@ function HsnSearchModal({ onSelect, onClose }) {
 
 // ─── DocEditor ─────────────────────────────────────────────────
 
-function DocEditor({ doc, setDoc, customers, vendors, items, businessInfo, userRole, onSave, onCancel, onAddCustomer, onAddVendor, onConvert, onOpenDoc, documents = [] }) {
+// ─── MEP Invoice Picker ──────────────────────────────────────────────────────
+function MEPInvoicePicker({ siteProjects, siteActivities, progressUpdates, onClose, onLoad }) {
+  const [selProject, setSelProject] = React.useState(siteProjects[0]?.id || '');
+  const [selected, setSelected] = React.useState({});
+  const project = siteProjects.find(p => p.id === selProject);
+  const acts = siteActivities.filter(a => a.projectId === selProject && (a.contractValue||0) > 0);
+
+  function getProgress(actId) {
+    const logs = progressUpdates.filter(u => u.activityId === actId);
+    if (!logs.length) return 0;
+    return Math.max(...logs.map(u => parseFloat(u.cumProgress)||0));
+  }
+
+  function toggle(id) { setSelected(p => ({ ...p, [id]: !p[id] })); }
+  function selectAll() {
+    const all = {};
+    acts.forEach(a => { all[a.id] = true; });
+    setSelected(all);
+  }
+
+  function handleLoad() {
+    const villas = project?.villas || [];
+    const lineItems = acts.filter(a => selected[a.id]).map(a => {
+      const villa = villas.find(v => v.id === a.villaId);
+      const pct = getProgress(a.id);
+      const amount = ((a.contractValue || 0) * pct / 100);
+      return {
+        id: crypto.randomUUID(),
+        itemId: '',
+        name: `${villa ? villa.name + ' — ' : ''}${a.discipline} — ${a.name} (${pct}% complete)`,
+        hsn: '', qty: 1, rate: Math.round(amount * 100) / 100,
+        unit: 'nos', discount: 0, tax: 0,
+        packages: 1, netWeight: 0, grossWeight: 0, dimensions: '',
+      };
+    });
+    onLoad(lineItems);
+  }
+
+  return (
+    <Modal onClose={onClose} title="📋 Load Activities into Invoice" width={580}>
+      <div style={{ marginBottom: 12 }}>
+        <label style={styles.label}>Project</label>
+        <select value={selProject} onChange={e => { setSelProject(e.target.value); setSelected({}); }} style={styles.input}>
+          {siteProjects.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
+        </select>
+      </div>
+      {acts.length === 0 ? (
+        <div style={{ color: '#aaa', fontSize: 13, padding: '12px 0' }}>
+          No activities with Contract Value set for this project.<br />
+          Go to <strong>Activity Planner → Edit activity</strong> and set the Contract Value first.
+        </div>
+      ) : (
+        <>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
+            <span style={{ fontSize: 12, color: '#888' }}>{acts.length} activities with contract value</span>
+            <button onClick={selectAll} style={styles.ghostBtn}>Select all</button>
+          </div>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 6, maxHeight: 320, overflowY: 'auto' }}>
+            {acts.map(a => {
+              const pct = getProgress(a.id);
+              const amount = ((a.contractValue || 0) * pct / 100);
+              const villa = (project?.villas||[]).find(v => v.id === a.villaId);
+              return (
+                <div key={a.id} onClick={() => toggle(a.id)}
+                  style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '8px 12px', borderRadius: 8,
+                    border: selected[a.id] ? '2px solid #1E7A9A' : '1px solid #EAE6DB',
+                    background: selected[a.id] ? '#E0F2F9' : '#FAFAF8', cursor: 'pointer' }}>
+                  <div style={{ width: 18, height: 18, borderRadius: 4, border: selected[a.id] ? '2px solid #1E7A9A' : '2px solid #ccc',
+                    background: selected[a.id] ? '#1E7A9A' : '#fff', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
+                    {selected[a.id] && <span style={{ color: '#fff', fontSize: 12 }}>✓</span>}
+                  </div>
+                  <div style={{ flex: 1 }}>
+                    <div style={{ fontWeight: 600, fontSize: 13 }}>{villa ? villa.name + ' — ' : ''}{a.discipline} — {a.name}</div>
+                    <div style={{ fontSize: 11, color: '#888' }}>{a.phase} · {pct}% complete · Contract: {(a.contractValue||0).toLocaleString()}</div>
+                  </div>
+                  <div style={{ textAlign: 'right', fontWeight: 700, fontSize: 13, color: '#1E2A4A' }}>
+                    {amount.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+          <div style={{ marginTop: 14, display: 'flex', justifyContent: 'flex-end', gap: 10 }}>
+            <button onClick={onClose} style={styles.ghostBtn}>Cancel</button>
+            <button onClick={handleLoad} disabled={!Object.values(selected).some(Boolean)}
+              style={{ ...styles.primaryBtn, background: '#1E7A9A', opacity: Object.values(selected).some(Boolean) ? 1 : 0.5 }}>
+              ✓ Add {Object.values(selected).filter(Boolean).length} line item(s)
+            </button>
+          </div>
+        </>
+      )}
+    </Modal>
+  );
+}
+
+
+function DocEditor({ doc, setDoc, customers, vendors, items, businessInfo, userRole, onSave, onCancel, onAddCustomer, onAddVendor, onConvert, onOpenDoc, documents = [], siteActivities = [], siteProjects = [], progressUpdates = [] }) {
+  // All hooks MUST come before any conditional returns (React Rules of Hooks)
+  const [rejectMode, setRejectMode] = useState(false);
+  const [rejectionNote, setRejectionNote] = useState('');
+  const [hsnSearchRow, setHsnSearchRow] = useState(null); // rowId being searched
+  const [mepPickerOpen, setMepPickerOpen] = useState(false);
+  const [useLH, setUseLH] = useState(!!businessInfo?.letterhead);
+  const [showScan, setShowScan] = useState(false);
+  const [pdfLoading, setPdfLoading] = useState(false);
+  const bizBadge = BIZ_BADGE[doc.bizType];
+  const showBizBadge = !!bizBadge;
+
   const t = DOC_TYPES[doc.type];
+  if (!t) return <div style={{ padding: 32, color: '#B5453A' }}>Unknown document type: "{doc.type}". Please go back and try again.</div>;
   const isVendorDoc = t.party === 'vendor';
   const partyList = isVendorDoc ? vendors : customers;
   const totals = computeTotals(doc, businessInfo.state, businessInfo.country);
@@ -1987,9 +3010,6 @@ function DocEditor({ doc, setDoc, customers, vendors, items, businessInfo, userR
   const template = businessInfo.template || 'classic';
   const cc = COUNTRY_CONFIG[businessInfo.country || 'india'];
   const fmt = (n) => currency(n, cc.currency);
-  const [rejectMode, setRejectMode] = useState(false);
-  const [rejectionNote, setRejectionNote] = useState('');
-  const [hsnSearchRow, setHsnSearchRow] = useState(null); // rowId being searched
 
   // Field editing rules
   const isApproved = doc.status === 'approved';
@@ -1999,6 +3019,39 @@ function DocEditor({ doc, setDoc, customers, vendors, items, businessInfo, userR
   const isEditable =
     userRole === 'admin' || userRole === 'manager' ||
     (doc.status === 'draft' || doc.status === 'rejected');
+
+  async function handleSaveAndDownload(status) {
+    setPdfLoading(true);
+    try {
+      const el = document.querySelector('.print-area');
+      const fname = `${(DOC_TYPES[doc.type]?.label || doc.type).replace(/\s+/g,'-')}-${doc.number || 'draft'}.pdf`;
+      if (el) await downloadDocPDF(el, fname);
+    } catch(e) { console.error(e); }
+    setPdfLoading(false);
+    onSave(status);
+  }
+
+  function applyScanData(extracted) {
+    setDoc(prev => {
+      const updates = {};
+      if (extracted.date) updates.date = extracted.date;
+      if (extracted.vendorName && !prev.customerName) updates.customerName = extracted.vendorName;
+      if (extracted.items?.length) {
+        updates.items = extracted.items.map(it => ({
+          id: crypto.randomUUID(),
+          name: it.name,
+          qty: it.qty || 1,
+          rate: it.rate || 0,
+          gst: it.gst || 18,
+          unit: 'pcs',
+          itemId: '',
+          description: '',
+        }));
+      }
+      return { ...prev, ...updates };
+    });
+    setShowScan(false);
+  }
 
   function handleReject() {
     onSave('rejected', rejectionNote);
@@ -2048,7 +3101,7 @@ function DocEditor({ doc, setDoc, customers, vendors, items, businessInfo, userR
     setDoc((d) => ({ ...d, customerId: id, customerSnapshot: c || null, placeOfSupply: c ? c.state : d.placeOfSupply }));
   }
 
-  const sameDocs = documents.filter(d => d.type === doc.type && d.id !== doc.id)
+  const sameDocs = documents.filter(d => d.type === doc.type && d.id !== doc.id && (d.bizType || 'trading') === (doc.bizType || 'trading'))
     .sort((a, b) => (b.number || '').localeCompare(a.number || ''));
 
   return (
@@ -2059,6 +3112,9 @@ function DocEditor({ doc, setDoc, customers, vendors, items, businessInfo, userR
           <t.icon size={18} color={t.color} />
           <span className="serif">{t.label}</span>
           <StatusBadge status={doc.status} />
+            {showBizBadge && bizBadge && (
+              <span style={{ fontSize: 10, fontWeight: 700, padding: '2px 7px', borderRadius: 6, background: bizBadge.bg, color: bizBadge.color, letterSpacing: '0.04em' }}>{bizBadge.label}</span>
+            )}
         </div>
         <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
           {/* Previous docs dropdown */}
@@ -2089,12 +3145,19 @@ function DocEditor({ doc, setDoc, customers, vendors, items, businessInfo, userR
               ])
             );
           }} style={styles.ghostBtn}><Download size={15} /> Export CSV</button>
+          {businessInfo?.letterhead && (
+            <button onClick={() => setUseLH(v => !v)} style={{ ...styles.ghostBtn, ...(useLH ? { background: '#EEF2FF', color: '#3D52A0', fontWeight: 600 } : {}) }}>
+              📃 {useLH ? 'Letterhead ON' : 'Use Letterhead'}
+            </button>
+          )}
+          <button onClick={() => setShowScan(true)} style={styles.ghostBtn}>📷 Scan Bill</button>
           <button onClick={() => window.print()} style={styles.ghostBtn}><Printer size={15} /> Print / PDF</button>
+          <button onClick={async () => { setPdfLoading(true); await downloadDocPDF('.print-area', `${(DOC_TYPES[doc.type]?.label||doc.type).replace(/\s+/g,'-')}-${doc.number||'draft'}.pdf`); setPdfLoading(false); }} style={styles.ghostBtn} disabled={pdfLoading}>{pdfLoading ? '⏳' : <Download size={15}/>} {pdfLoading ? 'Generating...' : 'Download PDF'}</button>
 
           {/* ── PREPARER (any non-admin): draft or rejected → Save / Forward ── */}
           {userRole !== 'admin' && (doc.status === 'draft' || doc.status === 'rejected') && (
             <>
-              <button onClick={() => onSave('draft')} style={styles.ghostBtn}>Save</button>
+              <button onClick={() => handleSaveAndDownload('draft')} style={styles.ghostBtn}>💾 Save</button>
               <button onClick={() => onSave('submitted')} style={styles.primaryBtn}>Forward for Approval →</button>
             </>
           )}
@@ -2108,19 +3171,19 @@ function DocEditor({ doc, setDoc, customers, vendors, items, businessInfo, userR
           {(userRole === 'admin' || userRole === 'manager') && !rejectMode && (
             <>
               {/* Can always save as draft */}
-              {!isApproved && <button onClick={() => onSave('draft')} style={styles.ghostBtn}>Save Draft</button>}
+              {!isApproved && <button onClick={() => handleSaveAndDownload('draft')} style={styles.ghostBtn}>💾 Save Draft</button>}
               {/* Reject button — shown when forwarded */}
               {isForwarded && (
                 <button onClick={() => setRejectMode(true)} style={{ ...styles.ghostBtn, color: '#B5453A', borderColor: '#B5453A' }}>Reject</button>
               )}
               {/* Approve — shown when forwarded; Save changes when already approved */}
               {!isApproved
-                ? isForwarded && <button onClick={() => onSave('approved')} style={{ ...styles.primaryBtn, background: '#3D7A5C' }}>Approve ✓</button>
-                : <button onClick={() => onSave('approved')} style={styles.primaryBtn}>Save changes</button>
+                ? isForwarded && <button onClick={() => handleSaveAndDownload('approved')} style={{ ...styles.primaryBtn, background: '#3D7A5C' }}>Approve ✓</button>
+                : <button onClick={() => handleSaveAndDownload('approved')} style={styles.primaryBtn}>💾 Save changes</button>
               }
               {/* Admin can also forward their own drafts */}
               {userRole === 'admin' && doc.status === 'draft' && (
-                <button onClick={() => onSave('approved')} style={{ ...styles.primaryBtn, background: '#3D7A5C' }}>Approve ✓</button>
+                <button onClick={() => handleSaveAndDownload('approved')} style={{ ...styles.primaryBtn, background: '#3D7A5C' }}>Approve ✓</button>
               )}
             </>
           )}
@@ -2352,15 +3415,29 @@ function DocEditor({ doc, setDoc, customers, vendors, items, businessInfo, userR
                   Line items <span style={{ background: '#EAE6DB', borderRadius: 10, padding: '1px 8px', fontSize: 11, fontWeight: 600, marginLeft: 6 }}>{doc.items.length}</span>
                 </label>
                 {isEditable && (
-                  <button onClick={addRow} style={{ ...styles.primaryBtn, fontSize: 12, padding: '5px 12px' }}>
-                    <Plus size={13} /> Add item
-                  </button>
+                  <div style={{ display:'flex', gap:8, alignItems:'center' }}>
+                    {doc.bizType !== 'service' && (
+                      <button onClick={addRow} style={{ ...styles.primaryBtn, fontSize: 12, padding: '5px 12px' }}>
+                        <Plus size={13} /> Add item
+                      </button>
+                    )}
+                    {doc.bizType === 'service' && ['invoice','quotation'].includes(doc.type) && (
+                      <button onClick={() => setMepPickerOpen(true)} style={{ ...styles.primaryBtn, fontSize: 12, padding: '5px 14px', background: '#1E7A9A' }}>
+                        📋 Load from activities
+                      </button>
+                    )}
+                    {doc.bizType === 'service' && !['invoice','quotation'].includes(doc.type) && (
+                      <button onClick={addRow} style={{ ...styles.primaryBtn, fontSize: 12, padding: '5px 12px' }}>
+                        <Plus size={13} /> Add item
+                      </button>
+                    )}
+                  </div>
                 )}
               </div>
               <div style={{ display: 'flex', flexDirection: 'column', gap: 6, maxHeight: 260, overflowY: 'auto' }}>
                 {doc.items.map((it, i) => (
                   <div key={it.id} style={{ background: '#FAFAF8', borderRadius: 6, padding: '6px 8px', fontSize: 12 }}>
-                    {isEditable && items.length > 0 && (
+                    {isEditable && items.length > 0 && doc.bizType !== 'service' && (
                       <select
                         value={it.itemId || ''}
                         onChange={(e) => selectItem(it.id, e.target.value)}
@@ -2419,8 +3496,14 @@ function DocEditor({ doc, setDoc, customers, vendors, items, businessInfo, userR
         </div>
 
         <div style={styles.preview} className="print-area">
+          {useLH && (businessInfo?.letterhead || businessInfo?.letterheadFooter) && <LetterpadPrintStyle />}
+          {useLH && businessInfo?.letterhead && (
+            <div className="lh-pad-header" style={{ background: '#fff' }}>
+              <img src={businessInfo.letterhead} alt="letterhead" style={{ width: '100%', display: 'block' }} />
+            </div>
+          )}
           {/* ── DRAFT watermark — visible on screen + print when not approved ── */}
-          {doc.status !== 'approved' && (
+          {doc.status === 'draft' && (
             <div style={{
               position: 'absolute', top: 0, left: 0, right: 0, bottom: 0,
               pointerEvents: 'none', zIndex: 9, display: 'flex',
@@ -2435,15 +3518,24 @@ function DocEditor({ doc, setDoc, customers, vendors, items, businessInfo, userR
             </div>
           )}
           {(() => {
+            // ── Letterhead mode: skip template header entirely ──
+            if (useLH && businessInfo?.letterhead) {
+              return (
+                <div style={{ textAlign: 'center', marginBottom: 14, paddingBottom: 10, borderBottom: '1px solid #EAE6DB' }}>
+                  <div className="serif" style={{ ...styles.previewDocType, color: t.color }}>{t.label}</div>
+                  <div style={styles.previewSmall}>No: {doc.number} &nbsp;·&nbsp; Date: {doc.date}{doc.refNumber ? ` · Ref: ${doc.refNumber}` : ''}</div>
+                </div>
+              );
+            }
             const logoStyle = { width: 64, height: 64, objectFit: 'contain', borderRadius: 8, display: 'block' };
             const logoWrap = (dark) => businessInfo.logo ? (
               <div style={{ background: dark ? '#fff' : 'transparent', borderRadius: 10, padding: dark ? 4 : 0, marginRight: 12, flexShrink: 0, alignSelf: 'flex-start' }}>
                 <img src={businessInfo.logo} alt="logo" style={logoStyle} />
               </div>
             ) : null;
-            const logo = logoWrap(false);
-            const logoDark = logoWrap(true);
-            const brandInfo = (
+            const logo = (useLH && businessInfo?.letterhead) ? null : logoWrap(false);
+            const logoDark = (useLH && businessInfo?.letterhead) ? null : logoWrap(true);
+            const brandInfo = (useLH && businessInfo?.letterhead) ? null : (
               <div>
                 <div className="serif" style={styles.previewBrand}>{businessInfo.name}</div>
                 <div style={styles.previewSmall}>{businessInfo.address}</div>
@@ -2475,12 +3567,12 @@ function DocEditor({ doc, setDoc, customers, vendors, items, businessInfo, userR
                   <div style={styles.previewHeader}>
                     <div style={{ ...styles.previewBrandRow, flex: 1, minWidth: 0 }}>
                       {logoDark}
-                      <div>
+                      {!(useLH && businessInfo?.letterhead) && <div>
                         <div className="serif" style={{ ...styles.previewBrand, color: '#fff' }}>{businessInfo.name}</div>
                         <div style={{ ...styles.previewSmall, color: 'rgba(255,255,255,0.8)' }}>{businessInfo.address}</div>
                         <div style={{ ...styles.previewSmall, color: 'rgba(255,255,255,0.8)' }}>{cc.taxIdLabel}: {businessInfo.gstin}</div>
                         <div style={{ ...styles.previewSmall, color: 'rgba(255,255,255,0.8)' }}>{businessInfo.phone} · {businessInfo.email}{businessInfo.website ? ' · ' + businessInfo.website : ''}</div>
-                      </div>
+                      </div>}
                     </div>
                     <div style={{ textAlign: 'right', flexShrink: 0, whiteSpace: 'nowrap', paddingLeft: 16 }}>
                       <div className="serif" style={{ ...styles.previewDocType, color: '#fff' }}>{t.label}</div>
@@ -2518,12 +3610,12 @@ function DocEditor({ doc, setDoc, customers, vendors, items, businessInfo, userR
                   <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
                     <div style={styles.previewBrandRow}>
                       {logoDark}
-                      <div>
+                      {!(useLH && businessInfo?.letterhead) && <div>
                         <div className="serif" style={{ ...styles.previewBrand, color: '#fff', fontSize: 21 }}>{businessInfo.name}</div>
                         <div style={{ ...styles.previewSmall, color: '#A9B8D4' }}>{businessInfo.address}</div>
                         <div style={{ ...styles.previewSmall, color: '#A9B8D4' }}>{cc.taxIdLabel}: {businessInfo.gstin}</div>
                         <div style={{ ...styles.previewSmall, color: '#A9B8D4' }}>{businessInfo.phone} · {businessInfo.email}{businessInfo.website ? ' · ' + businessInfo.website : ''}</div>
-                      </div>
+                      </div>}
                     </div>
                     <div style={{ textAlign: 'right', flexShrink: 0, whiteSpace: 'nowrap', paddingLeft: 16 }}>
                       <div style={{ background: t.color, borderRadius: 6, padding: '4px 14px', display: 'inline-block', marginBottom: 8 }}>
@@ -2566,12 +3658,12 @@ function DocEditor({ doc, setDoc, customers, vendors, items, businessInfo, userR
                   <div style={styles.previewHeader}>
                     <div style={styles.previewBrandRow}>
                       {logo}
-                      <div>
+                      {!(useLH && businessInfo?.letterhead) && <div>
                         <div className="serif" style={{ ...styles.previewBrand, color: '#1A4A33' }}>{businessInfo.name}</div>
                         <div style={{ ...styles.previewSmall, color: '#3A7A5A' }}>{businessInfo.address}</div>
                         <div style={{ ...styles.previewSmall, color: '#3A7A5A' }}>{cc.taxIdLabel}: {businessInfo.gstin}</div>
                         <div style={{ ...styles.previewSmall, color: '#3A7A5A' }}>{businessInfo.phone} · {businessInfo.email}{businessInfo.website ? ' · ' + businessInfo.website : ''}</div>
-                      </div>
+                      </div>}
                     </div>
                     <div style={{ textAlign: 'right', flexShrink: 0, whiteSpace: 'nowrap', paddingLeft: 16 }}>
                       <div className="serif" style={{ ...styles.previewDocType, color: '#1A7A3E' }}>{t.label}</div>
@@ -2599,15 +3691,15 @@ function DocEditor({ doc, setDoc, customers, vendors, items, businessInfo, userR
                   </div>
                   {/* Seller + Logo */}
                   <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', padding: '14px 18px', borderBottom: bdr }}>
-                    <div>
+                    {!(useLH && businessInfo?.letterhead) && <div>
                       <div style={{ fontWeight: 700, fontSize: 15 }}>{businessInfo.name}</div>
                       <div style={{ color: '#333' }}>{cc.taxIdLabel}: {businessInfo.gstin}</div>
                       <div style={{ color: '#333' }}>{businessInfo.address}</div>
                       {businessInfo.phone && <div style={{ color: '#333' }}>{businessInfo.phone}</div>}
                       {businessInfo.email && <div style={{ color: '#1A56DB', textDecoration: 'underline' }}>{businessInfo.email}</div>}
                       {businessInfo.website && <div style={{ color: '#1A56DB' }}>{businessInfo.website}</div>}
-                    </div>
-                    {businessInfo.logo && (
+                    </div>}
+                    {!(useLH && businessInfo?.letterhead) && businessInfo.logo && (
                       <div style={{ textAlign: 'center', flexShrink: 0, marginLeft: 20 }}>
                         <img src={businessInfo.logo} alt="logo" style={{ width: 84, height: 84, objectFit: 'contain', display: 'block' }} />
                         <div style={{ fontSize: 11, fontWeight: 600, marginTop: 4, maxWidth: 100 }}>{businessInfo.name}</div>
@@ -2789,7 +3881,7 @@ function DocEditor({ doc, setDoc, customers, vendors, items, businessInfo, userR
             <thead>
               <tr>
                 <th style={styles.th}>Item</th>
-                {doc.type !== 'packing_list' && <th style={styles.th}>HSN</th>}
+                {doc.type !== 'packing_list' && cc.splitTax && <th style={styles.th}>HSN</th>}
                 <th style={{ ...styles.th, textAlign: 'right' }}>Qty</th>
                 {doc.type === 'packing_list' ? (<>
                   <th style={{ ...styles.th, textAlign: 'right' }}>Pkgs</th>
@@ -2816,7 +3908,7 @@ function DocEditor({ doc, setDoc, customers, vendors, items, businessInfo, userR
                       </select>}
                       <input value={it.name} onChange={(e) => updateItem(it.id, 'name', e.target.value)} style={{ ...styles.inlineInput, ...(isEditable ? styles.inlineInputEditable : {}) }} placeholder="Item description" readOnly={!isEditable} />
                     </td>
-                    {doc.type !== 'packing_list' && (
+                    {doc.type !== 'packing_list' && cc.splitTax && (
                       <td style={styles.td}>
                         <div style={{ display: 'flex', alignItems: 'center', gap: 2 }}>
                           <input value={it.hsn} onChange={(e) => updateItem(it.id, 'hsn', e.target.value)} style={{ ...styles.inlineInput, width: 60, ...(isEditable ? styles.inlineInputEditable : {}) }} readOnly={!isEditable} />
@@ -2973,6 +4065,11 @@ function DocEditor({ doc, setDoc, customers, vendors, items, businessInfo, userR
               </div>
             </div>
           </div>
+          {useLH && businessInfo?.letterheadFooter && (
+            <div className="lh-pad-footer" style={{ background: '#fff' }}>
+              <img src={businessInfo.letterheadFooter} alt="letterhead footer" style={{ width:'100%', display:'block' }} />
+            </div>
+          )}
           </>)}
         </div>
       </div>
@@ -2982,6 +4079,19 @@ function DocEditor({ doc, setDoc, customers, vendors, items, businessInfo, userR
           onClose={() => setHsnSearchRow(null)}
         />
       )}
+      {mepPickerOpen && (
+        <MEPInvoicePicker
+          siteProjects={siteProjects}
+          siteActivities={siteActivities}
+          progressUpdates={progressUpdates}
+          onClose={() => setMepPickerOpen(false)}
+          onLoad={(lineItems) => {
+            setDoc(d => ({ ...d, items: [...d.items.filter(i=>i.name), ...lineItems] }));
+            setMepPickerOpen(false);
+          }}
+        />
+      )}
+      {showScan && <ScanBillModal onApply={applyScanData} onClose={() => setShowScan(false)} />}
     </div>
   );
 }
@@ -3221,6 +4331,7 @@ function PettyCashForm({ entry, onSave, onClose }) {
 }
 
 function StatementPanel({ rows, openingBalance, businessInfo, onClose }) {
+  const [useLH, setUseLH] = React.useState(!!businessInfo?.letterhead);
   // Build running balance
   let balance = parseFloat(openingBalance) || 0;
   const ledger = (rows || []).map(e => {
@@ -3237,16 +4348,20 @@ function StatementPanel({ rows, openingBalance, businessInfo, onClose }) {
         style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.55)', zIndex: 998 }} />
       <div className="no-print" style={{ position: 'fixed', top: 16, right: 24, zIndex: 1001, display: 'flex', gap: 8 }}>
         <button style={styles.ghostBtn} onClick={onClose}><X size={15} /> Close</button>
+        {businessInfo?.letterhead && <button onClick={() => setUseLH(v=>!v)} style={{ ...styles.ghostBtn, ...(useLH?{background:'#EEF2FF',color:'#3D52A0',fontWeight:600}:{}) }}>📃 {useLH?'Letterhead ON':'Use Letterhead'}</button>}
+        <button style={styles.ghostBtn} onClick={() => downloadDocPDF('.print-area','petty-cash-statement.pdf')}><Download size={15}/> PDF</button>
         <button style={styles.primaryBtn} onClick={() => window.print()}><Printer size={15} /> Print</button>
       </div>
       <div className="print-area" style={{ position: 'fixed', inset: 0, background: '#fff', zIndex: 999, overflowY: 'auto', padding: '40px 56px' }}>
+        {useLH && (businessInfo?.letterhead || businessInfo?.letterheadFooter) && <LetterpadPrintStyle />}
+        {useLH && businessInfo?.letterhead && <div className="lh-pad-header" style={{ background:'#fff' }}><img src={businessInfo.letterhead} alt="letterhead" style={{ width:'100%', display:'block' }} /></div>}
         {/* Header */}
-        <div style={{ borderBottom: '2px solid #1E2A4A', paddingBottom: 12, marginBottom: 20, display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
-          <div>
+        <div style={{ borderBottom: '2px solid #1E2A4A', paddingBottom: 12, marginBottom: 20, display: 'flex', justifyContent: useLH ? 'center' : 'space-between', alignItems: 'flex-start' }}>
+          {!useLH && <div>
             <div className="serif" style={{ fontSize: 20, fontWeight: 700, color: '#1E2A4A' }}>{businessInfo.name}</div>
             <div style={{ fontSize: 11, color: '#888780', marginTop: 2 }}>{businessInfo.address}</div>
-          </div>
-          <div style={{ textAlign: 'right' }}>
+          </div>}
+          <div style={{ textAlign: useLH ? 'center' : 'right' }}>
             <div style={{ fontSize: 15, fontWeight: 700, color: '#C9A24B', letterSpacing: '0.05em' }}>PETTY CASH STATEMENT</div>
             <div style={{ fontSize: 11, color: '#888780', marginTop: 3 }}>Printed: {new Date().toLocaleDateString('en-IN')}</div>
           </div>
@@ -3283,6 +4398,11 @@ function StatementPanel({ rows, openingBalance, businessInfo, onClose }) {
         <div style={{ marginTop: 20, textAlign: 'right', fontSize: 14, fontWeight: 700, color: '#1E2A4A', borderTop: '2px solid #1E2A4A', paddingTop: 10 }}>
           Closing Balance: {fmtStmt(ledger.length ? ledger[ledger.length - 1].runningBalance : openingBalance)}
         </div>
+        {useLH && businessInfo?.letterheadFooter && (
+          <div className="lh-pad-footer" style={{ background: '#fff' }}>
+            <img src={businessInfo.letterheadFooter} alt="letterhead footer" style={{ width:'100%', display:'block' }} />
+          </div>
+        )}
       </div>
     </div>
   );
@@ -3582,8 +4702,59 @@ function VoucherForm({ voucher, customers, vendors, onSave, onClose }) {
   );
 }
 
-function VoucherPrintHeader({ businessInfo }) {
+// Injects CSS so letterpad header/footer are fixed on every printed page
+function LetterpadPrintStyle() {
+  return (
+    <style>{`
+      /* ── Screen: force footer to fill full width edge-to-edge ── */
+      @media screen {
+        .lh-pad-footer {
+          height: 130px !important;
+          padding: 0 !important;
+          overflow: hidden !important;
+        }
+        .lh-pad-footer img {
+          width: 100% !important;
+          height: 130px !important;
+          object-fit: cover !important;
+          object-position: center !important;
+          display: block !important;
+        }
+        .lh-pad-header img {
+          width: 100% !important;
+          height: auto !important;
+          display: block !important;
+        }
+      }
+      /* ── Print: fixed position so header/footer repeat on every page ── */
+      @media print {
+        .lh-pad-header {
+          position: fixed !important; top: 0 !important; left: 0 !important;
+          right: 0 !important; width: 100% !important; background: white !important; z-index: 9999 !important;
+        }
+        .lh-pad-footer {
+          position: fixed !important; bottom: 0 !important; left: 0 !important;
+          right: 0 !important; width: 100% !important; background: white !important; z-index: 9999 !important;
+        }
+        .print-area { padding-top: 215px !important; padding-bottom: 135px !important; }
+      }
+    `}</style>
+  );
+}
+
+function VoucherPrintHeader({ businessInfo, useLH }) {
   const cc = COUNTRY_CONFIG[businessInfo.country || 'india'];
+  if (useLH && businessInfo?.letterhead) {
+    return (
+      <>
+        <LetterpadPrintStyle />
+        <div className="lh-pad-header" style={{ background: '#fff' }}>
+          <img src={businessInfo.letterhead} alt="letterhead" style={{ width: '100%', display: 'block' }} />
+        </div>
+        <div style={{ paddingTop: 215, paddingTop: 0 }} />
+      </>
+    );
+  }
   return (
     <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', paddingBottom: 14, marginBottom: 16, borderBottom: '2px solid #1E2A4A' }}>
       <div style={{ display: 'flex', alignItems: 'flex-start', gap: 12 }}>
@@ -3619,6 +4790,7 @@ function VoucherSignatory({ businessInfo, leftLabel }) {
 }
 
 function VoucherPrintModal({ voucher, businessInfo, onClose }) {
+  const [useLH, setUseLH] = React.useState(!!businessInfo?.letterhead);
   const isPayment = voucher.type === 'payment';
   const cc = COUNTRY_CONFIG[businessInfo.country || 'india'];
   const fmt = (n) => currency(n, cc.currency);
@@ -3637,18 +4809,13 @@ function VoucherPrintModal({ voucher, businessInfo, onClose }) {
       {/* Controls */}
       <div className="no-print" style={{ position: 'fixed', top: 16, right: 24, zIndex: 1001, display: 'flex', gap: 8 }}>
         <button style={styles.ghostBtn} onClick={onClose}><X size={15} /> Close</button>
-        <div style={{ display:'flex', gap:8 }}>
-          <button style={styles.secondaryBtn} onClick={() => downloadCSV('tax-report-' + from + '-to-' + to + '.csv',
-            ['Type','No','Date','Party','Taxable','Tax','Total'],
-            [...invRows.map(r=>['Sales',r.number,r.date,r.party,r.subtotal.toFixed(2),r.totalTax.toFixed(2),r.grandTotal.toFixed(2)]),
-             ...purRows.map(r=>['Purchase',r.number,r.date,r.party,r.subtotal.toFixed(2),r.totalTax.toFixed(2),r.grandTotal.toFixed(2)])])
-          }><Download size={15}/> Export CSV</button>
-          <button style={styles.primaryBtn} onClick={() => window.print()}><Printer size={15}/> Print / PDF</button>
-        </div>
+        {businessInfo?.letterhead && <button onClick={() => setUseLH(v=>!v)} style={{ ...styles.ghostBtn, ...(useLH?{background:'#EEF2FF',color:'#3D52A0',fontWeight:600}:{}) }}>📃 {useLH?'Letterhead ON':'Use Letterhead'}</button>}
+        <button style={styles.ghostBtn} onClick={() => downloadDocPDF('.print-area','voucher.pdf')}><Download size={15}/> PDF</button>
+        <button style={styles.primaryBtn} onClick={() => window.print()}><Printer size={15}/> Print / PDF</button>
       </div>
       {/* Print area — only this shows on print */}
       <div className="print-area" style={{ position: 'fixed', inset: 0, background: '#fff', zIndex: 999, overflowY: 'auto', padding: '40px 56px' }}>
-        <VoucherPrintHeader businessInfo={businessInfo} />
+        <VoucherPrintHeader businessInfo={businessInfo} useLH={useLH} />
         {/* Title */}
         <div style={{ textAlign: 'right', marginBottom: 20 }}>
           <div style={{ fontSize: 17, fontWeight: 700, color: isPayment ? '#B91C1C' : '#1A7A3E', letterSpacing: '0.07em' }}>
@@ -3693,6 +4860,7 @@ function VoucherPrintModal({ voucher, businessInfo, onClose }) {
 }
 
 function PartyStatementModal({ party, vouchers, businessInfo, onClose }) {
+  const [useLH, setUseLH] = React.useState(!!businessInfo?.letterhead);
   const cc = COUNTRY_CONFIG[businessInfo.country || 'india'];
   const fmt = (n) => currency(n, cc.currency);
   const partyVouchers = vouchers.filter(v => v.party === party).sort((a, b) => a.date > b.date ? 1 : -1);
@@ -3705,10 +4873,12 @@ function PartyStatementModal({ party, vouchers, businessInfo, onClose }) {
         style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.55)', zIndex: 998 }} />
       <div className="no-print" style={{ position: 'fixed', top: 16, right: 24, zIndex: 1001, display: 'flex', gap: 8 }}>
         <button style={styles.ghostBtn} onClick={onClose}><X size={15} /> Close</button>
+        {businessInfo?.letterhead && <button onClick={() => setUseLH(v=>!v)} style={{ ...styles.ghostBtn, ...(useLH?{background:'#EEF2FF',color:'#3D52A0',fontWeight:600}:{}) }}>📃 {useLH?'Letterhead ON':'Use Letterhead'}</button>}
+        <button style={styles.ghostBtn} onClick={() => downloadDocPDF('.print-area','statement.pdf')}><Download size={15}/> PDF</button>
         <button style={styles.primaryBtn} onClick={() => window.print()}><Printer size={15} /> Print</button>
       </div>
       <div className="print-area" style={{ position: 'fixed', inset: 0, background: '#fff', zIndex: 999, overflowY: 'auto', padding: '40px 56px' }}>
-        <VoucherPrintHeader businessInfo={businessInfo} />
+        <VoucherPrintHeader businessInfo={businessInfo} useLH={useLH} />
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-end', marginBottom: 20 }}>
           <div>
             <div style={{ fontSize: 10, color: '#888780', textTransform: 'uppercase', letterSpacing: 0.6, marginBottom: 3 }}>Party Statement</div>
@@ -3758,6 +4928,11 @@ function PartyStatementModal({ party, vouchers, businessInfo, onClose }) {
           </div>
         </div>
         <VoucherSignatory businessInfo={businessInfo} leftLabel="Prepared By" />
+        {useLH && businessInfo?.letterheadFooter && (
+          <div className="lh-pad-footer" style={{ background: '#fff' }}>
+            <img src={businessInfo.letterheadFooter} alt="letterhead footer" style={{ width:'100%', display:'block' }} />
+          </div>
+        )}
       </div>
     </div>
   );
@@ -4011,6 +5186,7 @@ function StockLedgerView({ items, stockLedger, setStockLedger, businessInfo }) {
 // HR / PAYROLL MODULE
 // ─────────────────────────────────────────────
 function BinCard({ items, stockLedger, businessInfo }) {
+  const [useLHBin, setUseLHBin] = React.useState(!!businessInfo?.letterhead);
   const [selectedItemId, setSelectedItemId] = useState(items[0]?.id || '');
   const item = items.find(i => i.id === selectedItemId);
 
@@ -4040,6 +5216,8 @@ function BinCard({ items, stockLedger, businessInfo }) {
           <h1 className="serif" style={styles.h1}>Bin Card</h1>
           <div style={{ fontSize: 13, color: '#888780' }}>Stock movement card per item</div>
         </div>
+        {businessInfo?.letterhead && <button onClick={() => setUseLHBin(v => !v)} style={{ ...styles.ghostBtn, ...(useLHBin ? { background: '#EEF2FF', color: '#3D52A0', fontWeight: 600 } : {}) }}>📃 {useLHBin ? 'Letterhead ON' : 'Use Letterhead'}</button>}
+        <button onClick={() => downloadDocPDF('.print-area','bin-card.pdf')} style={styles.ghostBtn}><Download size={15}/> PDF</button>
         <button onClick={() => window.print()} style={styles.primaryBtn}>🖨 Print</button>
       </div>
 
@@ -4053,12 +5231,14 @@ function BinCard({ items, stockLedger, businessInfo }) {
 
       {/* Print header */}
       <div className="print-only" style={{ marginBottom: 16 }}>
-        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
-          <div>
+        {useLHBin && (businessInfo?.letterhead || businessInfo?.letterheadFooter) && <LetterpadPrintStyle />}
+        {useLHBin && businessInfo?.letterhead && <div className="lh-pad-header" style={{ background:'#fff' }}><img src={businessInfo.letterhead} alt="letterhead" style={{ width:'100%', display:'block' }} /></div>}
+        <div style={{ display: 'flex', justifyContent: useLHBin ? 'center' : 'space-between', alignItems: 'flex-start' }}>
+          {!useLHBin && <div>
             <div style={{ fontWeight: 700, fontSize: 18 }}>{businessInfo.name}</div>
             <div style={{ fontSize: 12, color: '#555' }}>{businessInfo.address}</div>
-          </div>
-          <div style={{ textAlign: 'right' }}>
+          </div>}
+          <div style={{ textAlign: useLHBin ? 'center' : 'right' }}>
             <div style={{ fontWeight: 700, fontSize: 16 }}>BIN CARD</div>
             <div style={{ fontSize: 12 }}>Printed: {new Date().toLocaleDateString('en-IN')}</div>
           </div>
@@ -4116,6 +5296,11 @@ function BinCard({ items, stockLedger, businessInfo }) {
           ))}
         </tbody>
       </table>
+      {useLHBin && businessInfo?.letterheadFooter && (
+        <div className="lh-pad-footer print-only" style={{ background: '#fff' }}>
+          <img src={businessInfo.letterheadFooter} alt="letterhead footer" style={{ width:'100%', display:'block' }} />
+        </div>
+      )}
       <style>{`.print-only { display: none; } @media print { .print-only { display: block !important; } }`}</style>
     </div>
   );
@@ -4858,6 +6043,7 @@ function PayrollModal({ employees, payrollRuns, businessInfo, onSave, onClose })
 // ─── Pay Slip Print ───────────────────────────────────────────────────────────
 // Summary payroll sheet — all employees in one table
 function PaySlipPrint({ run, businessInfo, onClose }) {
+  const [useLH, setUseLH] = React.useState(!!businessInfo?.letterhead);
   const cc = COUNTRY_CONFIG[businessInfo.country || 'india'];
   const fmt = (n) => currency(n, cc.currency);
   const lines = run?.lines || [];
@@ -4867,15 +6053,19 @@ function PaySlipPrint({ run, businessInfo, onClose }) {
       <div className="no-print" onClick={onClose} style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.4)', zIndex: 998 }} />
       <div className="no-print" style={{ position: 'fixed', top: 16, right: 24, zIndex: 1001, display: 'flex', gap: 8 }}>
         <button style={styles.ghostBtn} onClick={onClose}><X size={15}/> Close</button>
+        {businessInfo?.letterhead && <button onClick={() => setUseLH(v=>!v)} style={{ ...styles.ghostBtn, ...(useLH?{background:'#EEF2FF',color:'#3D52A0',fontWeight:600}:{}) }}>📃 {useLH?'Letterhead ON':'Use Letterhead'}</button>}
+        <button style={styles.ghostBtn} onClick={() => downloadDocPDF('.print-area','payroll-summary.pdf')}><Download size={15}/> PDF</button>
         <button style={styles.primaryBtn} onClick={() => window.print()}><Printer size={15}/> Print</button>
       </div>
       <div className="print-area" style={{ position: 'fixed', inset: 0, background: '#fff', zIndex: 999, overflowY: 'auto', padding: '40px 48px' }}>
-        <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 20, borderBottom: '2px solid #1E2A4A', paddingBottom: 12 }}>
-          <div>
+        {useLH && (businessInfo?.letterhead || businessInfo?.letterheadFooter) && <LetterpadPrintStyle />}
+        {useLH && businessInfo?.letterhead && <div className="lh-pad-header" style={{ background:'#fff' }}><img src={businessInfo.letterhead} alt="letterhead" style={{ width:'100%', display:'block' }} /></div>}
+        <div style={{ display: 'flex', justifyContent: useLH ? 'center' : 'space-between', marginBottom: 20, borderBottom: '2px solid #1E2A4A', paddingBottom: 12 }}>
+          {!useLH && <div>
             <div className="serif" style={{ fontWeight: 700, fontSize: 20, color: '#1E2A4A' }}>{businessInfo.name}</div>
             <div style={{ fontSize: 11, color: '#888' }}>{businessInfo.address}</div>
-          </div>
-          <div style={{ textAlign: 'right' }}>
+          </div>}
+          <div style={{ textAlign: useLH ? 'center' : 'right' }}>
             <div style={{ fontWeight: 700, fontSize: 15, color: '#C9A24B' }}>PAYROLL SUMMARY</div>
             <div style={{ fontSize: 12, color: '#888', marginTop: 3 }}>{period}</div>
           </div>
@@ -4929,6 +6119,11 @@ function PaySlipPrint({ run, businessInfo, onClose }) {
             </tr>
           </tfoot>
         </table>
+        {useLH && businessInfo?.letterheadFooter && (
+          <div className="lh-pad-footer" style={{ background: '#fff' }}>
+            <img src={businessInfo.letterheadFooter} alt="letterhead footer" style={{ width:'100%', display:'block' }} />
+          </div>
+        )}
       </div>
     </div>
   );
@@ -4936,6 +6131,7 @@ function PaySlipPrint({ run, businessInfo, onClose }) {
 
 // Individual payslips — one per employee, page-break between each
 function IndividualPaySlips({ run, businessInfo, onClose }) {
+  const [useLH, setUseLH] = React.useState(!!businessInfo?.letterhead);
   const cc = COUNTRY_CONFIG[businessInfo.country || 'india'];
   const fmt = (n) => currency(n, cc.currency);
   const lines = run?.lines || [];
@@ -4946,18 +6142,22 @@ function IndividualPaySlips({ run, businessInfo, onClose }) {
       <div className="no-print" onClick={onClose} style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.4)', zIndex: 998 }} />
       <div className="no-print" style={{ position: 'fixed', top: 16, right: 24, zIndex: 1001, display: 'flex', gap: 8 }}>
         <button style={styles.ghostBtn} onClick={onClose}><X size={15}/> Close</button>
+        {businessInfo?.letterhead && <button onClick={() => setUseLH(v=>!v)} style={{ ...styles.ghostBtn, ...(useLH?{background:'#EEF2FF',color:'#3D52A0',fontWeight:600}:{}) }}>📃 {useLH?'Letterhead ON':'Use Letterhead'}</button>}
+        <button style={styles.ghostBtn} onClick={() => downloadDocPDF('.print-area','payslips.pdf')}><Download size={15}/> PDF</button>
         <button style={styles.primaryBtn} onClick={() => window.print()}><Printer size={15}/> Print All ({lines.length})</button>
       </div>
       <div className="print-area" style={{ position: 'fixed', inset: 0, background: '#fff', zIndex: 999, overflowY: 'auto' }}>
         {lines.map((l, i) => (
           <div key={i} style={{ padding: '36px 48px', pageBreakAfter: i < lines.length - 1 ? 'always' : 'auto', borderBottom: i < lines.length - 1 ? '3px dashed #EAE6DB' : 'none' }}>
+            {useLH && (businessInfo?.letterhead || businessInfo?.letterheadFooter) && <LetterpadPrintStyle />}
+            {useLH && businessInfo?.letterhead && <div className="lh-pad-header" style={{ background:'#fff' }}><img src={businessInfo.letterhead} alt="letterhead" style={{ width:'100%', display:'block' }} /></div>}
             {/* Header */}
-            <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 16, borderBottom: '2px solid #1E2A4A', paddingBottom: 10 }}>
-              <div>
+            <div style={{ display: 'flex', justifyContent: useLH ? 'center' : 'space-between', marginBottom: 16, paddingBottom: 10 }}>
+              {!useLH && <div>
                 <div className="serif" style={{ fontWeight: 700, fontSize: 18, color: '#1E2A4A' }}>{businessInfo.name}</div>
                 <div style={{ fontSize: 11, color: '#888' }}>{businessInfo.address}</div>
-              </div>
-              <div style={{ textAlign: 'right' }}>
+              </div>}
+              <div style={{ textAlign: useLH ? 'center' : 'right' }}>
                 <div style={{ fontWeight: 900, fontSize: 18, color: '#1E2A4A', letterSpacing: 2, textTransform: 'uppercase' }}>PAY SLIP</div>
                 <div style={{ fontSize: 12, color: '#555', marginTop: 2 }}>{period}</div>
               </div>
@@ -5009,6 +6209,11 @@ function IndividualPaySlips({ run, businessInfo, onClose }) {
             </div>
           </div>
         ))}
+        {useLH && businessInfo?.letterheadFooter && (
+          <div className="lh-pad-footer" style={{ background: '#fff' }}>
+            <img src={businessInfo.letterheadFooter} alt="letterhead footer" style={{ width:'100%', display:'block' }} />
+          </div>
+        )}
       </div>
     </div>
   );
@@ -5264,6 +6469,7 @@ function ServiceOrderForm({ order, customers, businessInfo, onSave, onCancel }) 
 }
 
 function ServiceOrderPrint({ order, businessInfo, onClose }) {
+  const [useLH, setUseLH] = React.useState(!!businessInfo?.letterhead);
   const cc = COUNTRY_CONFIG[businessInfo.country || 'india'];
   const fmt = (n) => currency(n, cc.currency);
   const subtotal = (order.services||[]).reduce((s,l)=>s+(parseFloat(l.qty)||0)*(parseFloat(l.rate)||0),0);
@@ -5276,18 +6482,22 @@ function ServiceOrderPrint({ order, businessInfo, onClose }) {
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16 }}>
           <div style={{ fontWeight: 700, fontSize: 16 }}>Service Order — {order.number}</div>
           <div style={{ display: 'flex', gap: 8 }}>
+            {businessInfo?.letterhead && <button onClick={() => setUseLH(v=>!v)} style={{ ...styles.ghostBtn, ...(useLH?{background:'#EEF2FF',color:'#3D52A0',fontWeight:600}:{}) }}>📃 {useLH?'Letterhead ON':'Use Letterhead'}</button>}
+            <button style={styles.ghostBtn} onClick={() => downloadDocPDF('.print-area',`service-order-${order.number||'so'}.pdf`)}><Download size={14}/> PDF</button>
             <button style={styles.primaryBtn} onClick={() => window.print()}><Printer size={14}/> Print</button>
             <button style={styles.secondaryBtn} onClick={onClose}>Close</button>
           </div>
         </div>
         <div className="print-area" style={{ background: '#fff', padding: 32, fontFamily: 'Georgia, serif' }}>
-          <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 28 }}>
-            <div>
+          {useLH && (businessInfo?.letterhead || businessInfo?.letterheadFooter) && <LetterpadPrintStyle />}
+        {useLH && businessInfo?.letterhead && <div className="lh-pad-header" style={{ background:'#fff' }}><img src={businessInfo.letterhead} alt="letterhead" style={{ width:'100%', display:'block' }} /></div>}
+          <div style={{ display: 'flex', justifyContent: useLH ? 'center' : 'space-between', marginBottom: 28 }}>
+            {!useLH && <div>
               <div style={{ fontSize: 22, fontWeight: 700 }}>{businessInfo.name || 'Company Name'}</div>
               <div style={{ fontSize: 12, color: '#555', maxWidth: 240 }}>{businessInfo.address}</div>
               {businessInfo.gstin && <div style={{ fontSize: 11 }}>GSTIN: {businessInfo.gstin}</div>}
-            </div>
-            <div style={{ textAlign: 'right' }}>
+            </div>}
+            <div style={{ textAlign: useLH ? 'center' : 'right' }}>
               <div style={{ fontSize: 20, fontWeight: 700, letterSpacing: 1 }}>SERVICE ORDER</div>
               <div style={{ fontSize: 13, marginTop: 4 }}>#{order.number}</div>
               <div style={{ fontSize: 12, color: '#555' }}>Date: {order.date}</div>
@@ -5354,6 +6564,11 @@ function ServiceOrderPrint({ order, businessInfo, onClose }) {
             <div style={{ textAlign: 'center' }}><div style={{ borderTop: '1px solid #333', paddingTop: 4, width: 140 }}>Customer Signature</div></div>
             <div style={{ textAlign: 'center' }}><div style={{ borderTop: '1px solid #333', paddingTop: 4, width: 140 }}>Authorised Signatory</div></div>
           </div>
+          {useLH && businessInfo?.letterheadFooter && (
+            <div className="lh-pad-footer" style={{ background: '#fff' }}>
+              <img src={businessInfo.letterheadFooter} alt="letterhead footer" style={{ width:'100%', display:'block' }} />
+            </div>
+          )}
         </div>
       </div>
     </div>
@@ -5398,6 +6613,7 @@ function PrintModal({ title, children, onClose }) {
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '12px 16px', borderBottom: '1px solid #eee' }}>
           <span style={{ fontWeight: 700, fontSize: 15 }}>{title}</span>
           <div style={{ display: 'flex', gap: 8 }}>
+            <button style={styles.ghostBtn} onClick={() => downloadDocPDF('.print-area','bin-card.pdf')}><Download size={14}/> PDF</button>
             <button style={styles.primaryBtn} onClick={() => window.print()}><Printer size={14}/> Print / Save PDF</button>
             <button style={styles.secondaryBtn} onClick={onClose}><X size={14}/> Close</button>
           </div>
@@ -5845,6 +7061,7 @@ function VATReport({ documents, customers, businessInfo }) {
 // GENERIC TAX REPORT (Other countries)
 // ─────────────────────────────────────────────
 function TaxReport({ documents, customers, businessInfo }) {
+  const [useLHTax, setUseLHTax] = React.useState(!!businessInfo?.letterhead);
   const now = new Date();
   const [from, setFrom] = useState(now.toISOString().slice(0, 7) + '-01');
   const [to, setTo] = useState(now.toISOString().slice(0, 10));
@@ -5871,15 +7088,19 @@ function TaxReport({ documents, customers, businessInfo }) {
   const thStyle   = { ...styles.th, fontSize: 11 };
 
   return (
-    <div style={styles.page}>
+    <div style={styles.page} id="tax-report-page">
       <div style={styles.pageHeader}>
         <div>
           <h2 className="serif" style={styles.pageTitle}>Tax Report</h2>
           <div style={{ fontSize: 13, color: '#888780' }}>Sales & purchase tax summary</div>
         </div>
+        {businessInfo?.letterhead && <button onClick={() => setUseLHTax(v=>!v)} style={{ ...styles.ghostBtn, ...(useLHTax?{background:'#EEF2FF',color:'#3D52A0',fontWeight:600}:{}) }}>📃 {useLHTax?'Letterhead ON':'Use Letterhead'}</button>}
+        <button style={styles.ghostBtn} onClick={() => downloadDocPDF('#tax-report-page','tax-report.pdf')}><Download size={15}/> PDF</button>
         <button style={styles.primaryBtn} onClick={() => window.print()}><Printer size={15} /> Print</button>
       </div>
 
+      {useLHTax && (businessInfo?.letterhead || businessInfo?.letterheadFooter) && <LetterpadPrintStyle />}
+      {useLHTax && businessInfo?.letterhead && <div className="lh-pad-header" style={{ background:'#fff' }}><img src={businessInfo.letterhead} alt="letterhead" style={{ width:'100%', display:'block' }} /></div>}
       <DateRangePicker from={from} setFrom={setFrom} to={to} setTo={setTo} count={invRows.length} label="invoice(s)" />
 
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3,1fr)', gap: 14, marginBottom: 24 }}>
@@ -5934,6 +7155,11 @@ function TaxReport({ documents, customers, businessInfo }) {
       </>)}
 
       {invRows.length === 0 && purRows.length === 0 && <div style={styles.emptyBox}>No approved documents found for the selected period.</div>}
+      {useLHTax && businessInfo?.letterheadFooter && (
+        <div className="lh-pad-footer" style={{ background: '#fff' }}>
+          <img src={businessInfo.letterheadFooter} alt="letterhead footer" style={{ width:'100%', display:'block' }} />
+        </div>
+      )}
     </div>
   );
 }
@@ -6865,9 +8091,11 @@ function ProductionOrdersList({ productionOrders, setProductionOrders, boms, raw
             <div key={o.id} style={styles.recordRow}>
               <div style={{ flex: 1 }}>
                 <div style={{ fontWeight: 600, fontSize: 14 }}>{o.number} — {bom?.name || 'Unknown BOM'}</div>
-                <div style={{ fontSize: 12, color: '#888', marginTop: 2 }}>{o.quantity} units · {o.startDate || ''}</div>
+                <div style={{ fontSize: 12, color: '#888', marginTop: 2 }}>
+                  {o.quantity} units · {o.startDate || ''}{o.batchNumber ? ` · Batch: ${o.batchNumber}` : ''}
+                </div>
               </div>
-              <span style={{ background: bg, color: col, padding: '3px 10px', borderRadius: 20, fontSize: 12, fontWeight: 600 }}>{o.status?.replace('_',' ')}</span>
+              <span style={{ background: bg, color: col, padding: '3px 10px', borderRadius: 20, fontSize: 12, fontWeight: 600 }}>{o.status?.replace(/_/g,' ')}</span>
               <div style={{ display: 'flex', flexDirection: 'column', gap: 4, alignItems: 'flex-end' }}>
                 <StatusBadge status={o.approvalStatus || 'draft'} />
                 <ApprovalActions
@@ -6877,7 +8105,13 @@ function ProductionOrdersList({ productionOrders, setProductionOrders, boms, raw
                   compact
                 />
               </div>
-              <div style={{ display: 'flex', gap: 6 }}>
+              <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', justifyContent: 'flex-end' }}>
+                {(o.status === 'in_progress' || o.status === 'planned') && o.approvalStatus === 'approved' && (
+                  <button onClick={() => updateStatus(o.id, 'pending_qa')}
+                    style={{ ...styles.ghostBtn, fontSize: 11, background: '#EDE6F9', color: '#5B2DA0', border: 'none' }}>
+                    → QA
+                  </button>
+                )}
                 {o.approvalStatus !== 'submitted' && <button onClick={() => setEditing(o)} style={styles.iconBtn}><Pencil size={14} /></button>}
                 {o.approvalStatus !== 'submitted' && <button onClick={() => deleteOrder(o.id)} style={{ ...styles.iconBtn, color: '#B5453A' }}><Trash2 size={14} /></button>}
               </div>
@@ -6894,10 +8128,18 @@ function ProductionOrdersList({ productionOrders, setProductionOrders, boms, raw
   );
 }
 
+function genBatchNumber() {
+  const now = new Date();
+  const mm = String(now.getMonth() + 1).padStart(2, '0');
+  const seq = String(Math.floor(Math.random() * 9000) + 1000);
+  return `BN-${mm}-${seq}`;
+}
+
 function ProductionOrderForm({ order, boms, items, onSave, onClose }) {
   const [form, setForm] = useState({
     id: order?.id || '',
     number: order?.number || '',
+    batchNumber: order?.batchNumber || genBatchNumber(),
     bomId: order?.bomId || '',
     quantity: order?.quantity || 1,
     startDate: order?.startDate || new Date().toISOString().split('T')[0],
@@ -6921,6 +8163,13 @@ function ProductionOrderForm({ order, boms, items, onSave, onClose }) {
       <div style={styles.formGroup}>
         <label style={styles.label}>Order Number *</label>
         <input value={form.number} onChange={e => set('number', e.target.value)} style={styles.input} placeholder="PO-001" />
+      </div>
+      <div style={styles.formGroup}>
+        <label style={styles.label}>Batch Number</label>
+        <div style={{ display: 'flex', gap: 6 }}>
+          <input value={form.batchNumber} onChange={e => set('batchNumber', e.target.value)} style={{ ...styles.input, flex: 1 }} placeholder="BN-MM-XXXX" />
+          <button type="button" onClick={() => set('batchNumber', genBatchNumber())} style={{ ...styles.ghostBtn, whiteSpace: 'nowrap', fontSize: 11 }}>New #</button>
+        </div>
       </div>
       <div style={styles.formGroup}>
         <label style={styles.label}>BOM / Product *</label>
@@ -7234,6 +8483,24 @@ function EnquiryList({ enquiries, setEnquiries, customers, userRole, onConvertTo
 // ─── Terms Library ────────────────────────────────────────────────────────────
 const CLAUSE_CATEGORIES = ['Payment', 'Delivery', 'Warranty', 'Liability', 'Force Majeure', 'Confidentiality', 'Termination', 'Dispute Resolution', 'Other'];
 
+const DEFAULT_PO_CLAUSES = [
+  { id:'dc1',  category:'Other',            title:'Clause 1: Scope of Supply',                        text:'1.1 The Supplier shall design, manufacture, supply, inspect, test, pack, and deliver the equipment/materials as detailed in the Purchase Order (PO) and its annexures, which form an integral part of this PO.\n1.2 The scope includes all necessary accessories, fittings, hardware, documentation, drawings, operation & maintenance manuals, and test certificates as applicable.\n1.3 Any item not explicitly mentioned but necessary to complete the intended function of the supplied equipment shall be deemed included in the scope at no extra cost.\n1.4 Deviations from the scope, if any, shall only be accepted in writing from the authorised representative of the Buyer prior to execution.' },
+  { id:'dc2',  category:'Payment',          title:'Clause 2: Payment Terms',                          text:'2.1 Payment shall be made as per the schedule defined in the PO. Typical structure: 30% advance against Bank Guarantee, 60% against dispatch documents, 10% after successful commissioning and acceptance.\n2.2 All invoices shall be submitted with supporting documents including dispatch advice, inspection report, test certificates, and packing list.\n2.3 Payment shall be released within 30 days of receipt of invoice subject to verification and acceptance of documents.\n2.4 The Supplier shall submit a Bank Guarantee (BG) for advance payment, valid until delivery and acceptance.\n2.5 Taxes and duties shall be paid as applicable and indicated separately on the invoice as per prevailing statutory requirements.' },
+  { id:'dc3',  category:'Delivery',         title:'Clause 3: Delivery',                               text:'3.1 The Supplier shall deliver the goods to the destination specified in the PO within the agreed delivery schedule.\n3.2 Time is of the essence. Any delay beyond the agreed delivery date shall attract Liquidated Damages as per Clause 6.\n3.3 Partial deliveries are permitted only with prior written approval from the Buyer.\n3.4 The Supplier shall submit a delivery schedule within 7 days of PO placement and provide weekly updates on progress.\n3.5 Risk and title shall transfer to the Buyer upon delivery at the designated destination and acceptance by the Buyer\'s representative.' },
+  { id:'dc4',  category:'Other',            title:'Clause 4: Packing & Freight',                      text:'4.1 All equipment and materials shall be packed suitably to prevent damage during transport, storage, and handling. Packing shall be sea/air-worthy as applicable.\n4.2 Each package shall be clearly marked with PO number, item description, gross/net weight, dimensions, and handling instructions (e.g., "Fragile", "This Side Up").\n4.3 Freight shall be on FOR/CIF/DDP basis as specified in the PO. Unless otherwise stated, all freight, insurance, and handling charges are included in the PO price.\n4.4 A detailed packing list and material dispatch advice (MDA) shall be submitted to the Buyer prior to or at the time of dispatch.\n4.5 Any loss or damage due to inadequate packing shall be borne entirely by the Supplier.' },
+  { id:'dc5',  category:'Other',            title:'Clause 5: Technical Terms',                        text:'5.1 All equipment shall strictly conform to the technical specifications, standards, and drawings referenced in the PO or its annexures.\n5.2 The Supplier shall comply with applicable national and international standards (IS, IEC, ISO, ASME, etc.) as specified.\n5.3 Any change in design, material, or specifications shall require prior written approval from the Buyer\'s engineering team.\n5.4 The Supplier shall provide detailed engineering drawings, GA drawings, wiring diagrams, and documentation for Buyer\'s review and approval before commencing manufacturing.\n5.5 The equipment shall be designed for the site conditions (temperature, humidity, power supply, etc.) as specified in the technical specification document.' },
+  { id:'dc6',  category:'Liability',        title:'Clause 6: Liquidated Damages (Delay Penalty)',     text:'6.1 In the event of delay in delivery beyond the agreed schedule, the Supplier shall be liable to pay Liquidated Damages (LD) at the rate of 0.5% of the total PO value per week of delay, subject to a maximum of 5% of the total PO value.\n6.2 LD shall be deducted from the Supplier\'s pending invoices or the retention amount.\n6.3 LD shall apply unless the delay is caused by Force Majeure as defined in Clause 14 or by delays attributable to the Buyer.\n6.4 The Buyer reserves the right to cancel the PO if delay exceeds 8 weeks beyond the agreed delivery date, without prejudice to any other remedy available.' },
+  { id:'dc7',  category:'Warranty',         title:'Clause 7: Performance Guarantee',                  text:'7.1 The Supplier guarantees that the equipment shall achieve the performance parameters specified in the technical specification and PO annexures.\n7.2 The Supplier shall furnish a Performance Bank Guarantee (PBG) of 10% of the PO value, valid for the warranty period plus 3 months.\n7.3 If the equipment fails to meet the specified performance parameters during commissioning or the warranty period, the Supplier shall rectify or replace at no cost to the Buyer.\n7.4 The PBG shall be returned to the Supplier upon successful completion of the warranty period, provided all obligations under the PO are fulfilled.' },
+  { id:'dc8',  category:'Other',            title:'Clause 8: Spare Parts & Service Support',          text:'8.1 The Supplier shall provide a recommended list of spare parts (consumable and critical) along with unit prices, valid for at least 2 years from the date of supply.\n8.2 The Supplier shall guarantee availability of spare parts for a minimum period of 10 years from the date of commissioning.\n8.3 The Supplier shall provide trained service engineers for installation, commissioning, and any warranty-related repairs at site.\n8.4 Emergency service support shall be made available within 48 hours of intimation.\n8.5 Operation & Maintenance (O&M) manuals, spare parts catalogue, and as-built drawings shall be provided in both hard copy and soft copy formats.' },
+  { id:'dc9',  category:'Other',            title:'Clause 9: Trial & Final Acceptance',                text:'9.1 Upon completion of installation, the Supplier shall conduct trial runs of the equipment in the presence of the Buyer\'s representatives.\n9.2 The trial run period shall be as specified in the PO. During this period, the equipment shall demonstrate stable operation meeting all performance parameters.\n9.3 Final Acceptance shall be issued by the Buyer only after successful completion of the trial run and verification of all performance parameters.\n9.4 The warranty period shall commence from the date of Final Acceptance.\n9.5 Any defects or deficiencies identified during trial shall be rectified by the Supplier at no cost before Final Acceptance is granted.' },
+  { id:'dc10', category:'Other',            title:'Clause 10: Factory Acceptance Test (FAT)',          text:'10.1 The equipment shall be subjected to a Factory Acceptance Test (FAT) at the Supplier\'s works prior to dispatch.\n10.2 The Buyer reserves the right to depute inspection personnel to witness the FAT. The Supplier shall provide a minimum of 14 days\' advance notice for FAT.\n10.3 FAT shall be conducted as per the agreed test procedure and shall include functional testing, performance testing, safety checks, and documentation review.\n10.4 Any non-conformances identified during FAT shall be rectified before the equipment is cleared for dispatch.\n10.5 An FAT report duly signed by both parties shall be submitted along with dispatch documents.' },
+  { id:'dc11', category:'Other',            title:'Clause 11: Material Consumption & Process Efficiency', text:'11.1 The equipment shall achieve the material consumption and process efficiency figures specified in the technical specifications.\n11.2 The Supplier shall provide guaranteed figures for raw material consumption per unit output, energy consumption, water consumption, and waste generation.\n11.3 Performance tests at site shall verify these figures. Any shortfall shall be subject to price adjustment as per Clause 12.\n11.4 The Supplier shall provide process flow diagrams and material balance sheets as part of the documentation package.' },
+  { id:'dc12', category:'Liability',        title:'Clause 12: Performance Shortfall & Price Adjustment', text:'12.1 If the equipment fails to achieve the guaranteed performance parameters (capacity, efficiency, consumption) during the acceptance test, a price adjustment shall be applied.\n12.2 For shortfall up to 5% of guaranteed parameters: proportionate price reduction shall be applied.\n12.3 For shortfall exceeding 5%: the Buyer reserves the right to reject the equipment or demand replacement/modification at the Supplier\'s cost.\n12.4 The price adjustment formula and tolerance bands shall be as mutually agreed and documented in the PO annexure.\n12.5 Acceptance of price adjustment by the Buyer does not relieve the Supplier of its warranty obligations.' },
+  { id:'dc13', category:'Dispute Resolution',title:'Clause 13: Governing Law & Jurisdiction',         text:'13.1 This Purchase Order shall be governed by and construed in accordance with the laws of India.\n13.2 Any disputes arising out of or in connection with this PO shall first be resolved through mutual negotiation within 30 days of written notice.\n13.3 If not resolved through negotiation, disputes shall be referred to arbitration under the Arbitration and Conciliation Act, 1996.\n13.4 The seat of arbitration shall be [City], and proceedings shall be conducted in English.\n13.5 The courts of [City] shall have exclusive jurisdiction over any matters not subject to arbitration.' },
+  { id:'dc14', category:'Force Majeure',    title:'Clause 14: Force Majeure',                         text:'14.1 Neither party shall be liable for delay or failure to perform obligations under this PO if such delay or failure is caused by events beyond the reasonable control of the affected party, including but not limited to acts of God, war, natural disasters, government actions, pandemics, or strikes.\n14.2 The affected party shall notify the other party in writing within 7 days of the occurrence of the Force Majeure event, providing details and estimated duration.\n14.3 The delivery schedule shall be extended by the period of Force Majeure, provided timely notice is given.\n14.4 If the Force Majeure event continues for more than 90 days, either party may terminate this PO by giving 14 days written notice.' },
+  { id:'dc15', category:'Termination',      title:'Clause 15: Termination',                           text:'15.1 The Buyer may terminate this PO in whole or in part by giving 30 days written notice to the Supplier.\n15.2 In the event of termination for convenience, the Buyer shall pay for work completed up to the date of termination and reasonable documented costs incurred.\n15.3 The Buyer may terminate this PO immediately for cause if the Supplier: (a) becomes insolvent or files for bankruptcy; (b) commits a material breach that remains unrectified for 14 days after notice; (c) fails to deliver within the LD cap period.\n15.4 Upon termination, the Supplier shall promptly return any advance paid (less work completed) and hand over all work in progress, drawings, and documents related to the PO.' },
+];
+
 function TermsLibraryView({ termsLibrary, setTermsLibrary, userRole }) {
   const [tab, setTab] = useState('clauses'); // 'clauses' | 'templates'
   const [clauseModal, setClauseModal] = useState(null); // null | clause obj
@@ -7244,8 +8511,30 @@ function TermsLibraryView({ termsLibrary, setTermsLibrary, userRole }) {
   const clauses   = termsLibrary.clauses   || [];
   const templates = termsLibrary.templates || [];
 
-  function saveClauses(next)   { setTermsLibrary(prev => ({ ...prev, clauses: next })); }
-  function saveTemplates(next) { setTermsLibrary(prev => ({ ...prev, templates: next })); }
+  function saveClauses(updater) {
+    setTermsLibrary(prev => {
+      const prevClauses = prev.clauses || [];
+      const next = typeof updater === 'function' ? updater(prevClauses) : updater;
+      return { ...prev, clauses: next };
+    });
+  }
+  function saveTemplates(updater) {
+    setTermsLibrary(prev => {
+      const prevTemplates = prev.templates || [];
+      const next = typeof updater === 'function' ? updater(prevTemplates) : updater;
+      return { ...prev, templates: next };
+    });
+  }
+
+  // ── Load standard clauses ──
+  function loadDefaultClauses() {
+    const existing = (termsLibrary.clauses || []).map(c => c.title);
+    const toAdd = DEFAULT_PO_CLAUSES.filter(c => !existing.includes(c.title))
+      .map(c => ({ ...c, id: Date.now().toString(36) + Math.random().toString(36).slice(2) + c.id }));
+    if (toAdd.length === 0) { alert('All standard clauses already loaded.'); return; }
+    saveClauses(prev => [...(prev||[]), ...toAdd]);
+    alert(`✅ ${toAdd.length} standard clause(s) added.`);
+  }
 
   // ── Clause CRUD ──
   function handleSaveClause(form) {
@@ -7287,11 +8576,19 @@ function TermsLibraryView({ termsLibrary, setTermsLibrary, userRole }) {
           <p style={{ margin: '4px 0 0', color: '#888', fontSize: 13 }}>Reusable clauses and full terms templates for contracts & documents</p>
         </div>
         {canEdit && (
-          <button
-            onClick={() => tab === 'clauses' ? setClauseModal({ title: '', category: 'Payment', text: '' }) : setTmplModal({ name: '', description: '', clauseIds: [], customText: '' })}
-            style={{ padding: '9px 20px', background: '#1E2A4A', color: '#fff', border: 'none', borderRadius: 8, fontSize: 14, fontWeight: 600 }}>
-            + {tab === 'clauses' ? 'New Clause' : 'New Template'}
-          </button>
+          <div style={{ display:'flex', gap:8 }}>
+            {tab === 'clauses' && (
+              <button onClick={loadDefaultClauses}
+                style={{ padding:'9px 16px', background:'#fff', color:'#1E2A4A', border:'1px solid #1E2A4A', borderRadius:8, fontSize:13, fontWeight:600, cursor:'pointer' }}>
+                📋 Load Standard Clauses
+              </button>
+            )}
+            <button
+              onClick={() => tab === 'clauses' ? setClauseModal({ title: '', category: 'Payment', text: '' }) : setTmplModal({ name: '', description: '', clauseIds: [], customText: '' })}
+              style={{ padding: '9px 20px', background: '#1E2A4A', color: '#fff', border: 'none', borderRadius: 8, fontSize: 14, fontWeight: 600 }}>
+              + {tab === 'clauses' ? 'New Clause' : 'New Template'}
+            </button>
+          </div>
         )}
       </div>
 
@@ -7450,8 +8747,9 @@ function TemplateModal({ template, clauses, onSave, onClose }) {
 }
 
 // ─── Contracts ────────────────────────────────────────────────────────────────
-const CONTRACT_STATUSES = ['Draft', 'Sent', 'Under Review', 'Signed', 'Active', 'Completed', 'Terminated'];
-const CONTRACT_STATUS_COLOR = { Draft: '#888', Sent: '#2563EB', 'Under Review': '#D97706', Signed: '#7C3AED', Active: '#059669', Completed: '#1E2A4A', Terminated: '#B5453A' };
+const CONTRACT_STATUSES = ['draft', 'submitted', 'approved', 'rejected', 'Signed', 'Active', 'Completed', 'Terminated'];
+const CONTRACT_STATUS_COLOR = { draft: '#888', submitted: '#2563EB', approved: '#059669', rejected: '#B5453A', Signed: '#7C3AED', Active: '#059669', Completed: '#1E2A4A', Terminated: '#B5453A' };
+const CONTRACT_STATUS_LABEL = { draft: 'Draft', submitted: 'Forwarded', approved: 'Approved', rejected: 'Rejected' };
 const SCOPE_SECTIONS = [
   { key: 'supply',          label: 'Supply' },
   { key: 'installation',    label: 'Installation' },
@@ -7468,18 +8766,25 @@ function blankContract() {
     customerId: '',
     customerSnapshot: null,
     contractValue: 0,
-    scope: { supply: { enabled: true, description: '', value: 0, timeline: '' }, installation: { enabled: false, description: '', value: 0, timeline: '' }, testing: { enabled: false, description: '', value: 0, timeline: '' }, commissioning: { enabled: false, description: '', value: 0, timeline: '' } },
+    scope: { supply: { enabled: true, description: '', value: 0, gstRate: 18, timeline: '' }, installation: { enabled: false, description: '', value: 0, gstRate: 18, timeline: '' }, testing: { enabled: false, description: '', value: 0, gstRate: 18, timeline: '' }, commissioning: { enabled: false, description: '', value: 0, gstRate: 18, timeline: '' } },
     paymentMilestones: [],
     termsTemplateId: '',
     customTerms: '',
-    status: 'Draft',
+    status: 'draft',
+    rejectionNote: '',
     signatoryOurName: '', signatoryOurDesignation: '',
     signatoryClientName: '', signatoryClientDesignation: '',
+    buyerContactPerson: '', buyerGst: '',
+    vendorContactPerson: '', vendorGst: '', vendorAuthorized: '', vendorAuthorizedDesig: '',
+    poRef: '', poRefNumber: '',
+    buyerRole: 'Buyer', supplierRole: 'Supplier',
+    deliveryAddress: '',
+    selectedClauseIds: [],
     notes: '',
   };
 }
 
-function ContractList({ contracts, setContracts, customers, termsLibrary, businessInfo, userRole }) {
+function ContractList({ contracts, setContracts, customers, vendors, documents, termsLibrary, businessInfo, userRole }) {
   const [editing, setEditing] = useState(null); // null | contract obj | 'new'
   const [printing, setPrinting] = useState(null);
   const [search, setSearch] = useState('');
@@ -7493,13 +8798,18 @@ function ContractList({ contracts, setContracts, customers, termsLibrary, busine
 
   function handleSave(form) {
     if (!form.number) form.number = nextConNum();
-    setContracts(prev => form._isNew ? [...prev, { ...form, _isNew: undefined }] : prev.map(c => c.id === form.id ? form : c));
+    const { _isNew, ...rest } = form; // strip _isNew so Firestore doesn't reject undefined field
+    setContracts(prev => _isNew ? [...prev, rest] : prev.map(c => c.id === rest.id ? rest : c));
     setEditing(null);
   }
 
   function handleDelete(id) {
     if (!window.confirm('Delete this contract?')) return;
     setContracts(prev => prev.filter(c => c.id !== id));
+  }
+
+  function updateContractStatus(id, patch) {
+    setContracts(prev => prev.map(c => c.id === id ? { ...c, ...patch } : c));
   }
 
   const filtered = contracts.filter(c => {
@@ -7518,6 +8828,8 @@ function ContractList({ contracts, setContracts, customers, termsLibrary, busine
     <ContractEditor
       contract={editing === 'new' ? { ...blankContract(), number: nextConNum(), _isNew: true } : editing}
       customers={customers}
+      vendors={vendors || []}
+      documents={documents || []}
       termsLibrary={termsLibrary}
       businessInfo={businessInfo}
       userRole={userRole}
@@ -7564,13 +8876,14 @@ function ContractList({ contracts, setContracts, customers, termsLibrary, busine
             <div style={{ flex: 1 }}>
               <div style={{ display: 'flex', gap: 10, alignItems: 'center', marginBottom: 4 }}>
                 <span style={{ fontWeight: 700, fontSize: 15, color: '#1E2A4A' }}>{c.number}</span>
-                <span style={{ background: CONTRACT_STATUS_COLOR[c.status] || '#888', color: '#fff', borderRadius: 10, padding: '2px 10px', fontSize: 11, fontWeight: 700 }}>{c.status}</span>
+                <span style={{ background: CONTRACT_STATUS_COLOR[c.status] || '#888', color: '#fff', borderRadius: 10, padding: '2px 10px', fontSize: 11, fontWeight: 700 }}>{CONTRACT_STATUS_LABEL[c.status] || c.status}</span>
                 {scopeLabels && <span style={{ fontSize: 11, color: '#888', background: '#F0EDE6', borderRadius: 8, padding: '2px 8px' }}>{scopeLabels}</span>}
               </div>
               <div style={{ fontSize: 14, fontWeight: 600, color: '#333', marginBottom: 2 }}>{c.title}</div>
               <div style={{ fontSize: 12, color: '#888' }}>{cust?.name || '—'} &nbsp;·&nbsp; {c.date} &nbsp;·&nbsp; {fmt(c.contractValue || 0)}</div>
             </div>
-            <div style={{ display: 'flex', gap: 8 }}>
+            <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+              <ApprovalActions item={c} onUpdate={(patch) => updateContractStatus(c.id, patch)} userRole={userRole} compact />
               <button onClick={() => setPrinting(c)} style={{ border: '1px solid #DDD8CE', borderRadius: 6, padding: '6px 12px', background: '#fff', fontSize: 12, cursor: 'pointer' }}><Printer size={13} style={{ marginRight: 4 }} />Print</button>
               {canEdit && <button onClick={() => setEditing(c)} style={{ border: '1px solid #DDD8CE', borderRadius: 6, padding: '6px 12px', background: '#fff', fontSize: 12, cursor: 'pointer' }}>Edit</button>}
               {canEdit && <button onClick={() => handleDelete(c.id)} style={{ border: '1px solid #F3C5C5', borderRadius: 6, padding: '6px 10px', background: '#fff', fontSize: 12, color: '#B5453A', cursor: 'pointer' }}><Trash2 size={13} /></button>}
@@ -7582,7 +8895,7 @@ function ContractList({ contracts, setContracts, customers, termsLibrary, busine
   );
 }
 
-function ContractEditor({ contract, customers, termsLibrary, businessInfo, userRole, onSave, onBack }) {
+function ContractEditor({ contract, customers, vendors, documents, termsLibrary, businessInfo, userRole, onSave, onBack }) {
   const [form, setForm] = useState(contract);
   const set = (k, v) => setForm(p => ({ ...p, [k]: v }));
   const setScope = (section, field, val) => setForm(p => ({ ...p, scope: { ...p.scope, [section]: { ...p.scope[section], [field]: val } } }));
@@ -7604,6 +8917,12 @@ function ContractEditor({ contract, customers, termsLibrary, businessInfo, userR
         }).filter(Boolean);
         return [...clauseTexts, tmpl.customText].filter(Boolean).join('\n\n');
       }
+    }
+    if ((form.selectedClauseIds||[]).length > 0) {
+      return form.selectedClauseIds.map(id => {
+        const c = clauses.find(x => x.id === id);
+        return c ? `${c.title}\n${c.text}` : '';
+      }).filter(Boolean).join('\n\n');
     }
     return form.customTerms || '';
   }
@@ -7633,11 +8952,106 @@ function ContractEditor({ contract, customers, termsLibrary, businessInfo, userR
       </div>
       <div style={{ marginTop: 14 }}><label style={labelStyle}>Contract Title</label><input value={form.title} onChange={e => set('title', e.target.value)} placeholder="e.g. Supply & Installation of Solar Panels" style={inputStyle} /></div>
       <div style={{ marginTop: 14 }}>
-        <label style={labelStyle}>Customer / Client</label>
-        <select value={form.customerId} onChange={e => { const c = customers.find(x => x.id === e.target.value); set('customerId', e.target.value); set('customerSnapshot', c || null); }} style={inputStyle}>
-          <option value="">— Select customer —</option>
-          {customers.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
+        <label style={labelStyle}>Customer / Client (Vendor)</label>
+        <select value={form.customerId} onChange={e => {
+          const allParties = [...(customers||[]), ...(vendors||[])];
+          const c = allParties.find(x => x.id === e.target.value);
+          set('customerId', e.target.value);
+          set('customerSnapshot', c || null);
+          if (c?.taxId && !form.vendorGst) set('vendorGst', c.taxId);
+        }} style={inputStyle}>
+          <option value="">— Select customer / vendor —</option>
+          {(customers||[]).length > 0 && <optgroup label="Customers">{customers.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}</optgroup>}
+          {(vendors||[]).length > 0 && <optgroup label="Vendors">{vendors.map(v => <option key={v.id} value={v.id}>{v.name}</option>)}</optgroup>}
         </select>
+      </div>
+
+      <div style={{ marginTop: 14 }}>
+        <label style={labelStyle}>Linked Purchase Order (PO Reference)</label>
+        <select value={form.poRef || ''} onChange={e => {
+          const po = (documents||[]).find(d => d.id === e.target.value);
+          set('poRef', e.target.value);
+          set('poRefNumber', po?.number || '');
+        }} style={inputStyle}>
+          <option value="">— None / not linked to a PO —</option>
+          {(documents||[]).filter(d => d.type === 'purchase' || d.type === 'purchase_order' || d.type === 'po').map(po => (
+            <option key={po.id} value={po.id}>{po.number}{po.customerSnapshot?.name ? ` — ${po.customerSnapshot.name}` : ''}{po.date ? ` (${po.date})` : ''}</option>
+          ))}
+        </select>
+        {form.poRefNumber && <div style={{ fontSize:11, color:'#1A7A3E', marginTop:4 }}>✓ Linked: <b>{form.poRefNumber}</b></div>}
+      </div>
+
+      <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:14, marginTop:14 }}>
+        <div>
+          <label style={labelStyle}>Our Company Role Label</label>
+          <select value={form.buyerRole||'Buyer'} onChange={e=>set('buyerRole',e.target.value)} style={inputStyle}>
+            <option value="Buyer">Buyer</option>
+            <option value="Contractor">Contractor</option>
+            <option value="the Company">the Company</option>
+            <option value="Purchaser">Purchaser</option>
+          </select>
+        </div>
+        <div>
+          <label style={labelStyle}>Other Party Role Label</label>
+          <select value={form.supplierRole||'Supplier'} onChange={e=>set('supplierRole',e.target.value)} style={inputStyle}>
+            <option value="Supplier">Supplier</option>
+            <option value="Seller">Seller</option>
+            <option value="Vendor">Vendor</option>
+            <option value="Client">Client</option>
+          </select>
+        </div>
+      </div>
+
+      <div style={sectionHead}>Preamble — Buyer &amp; Vendor Details</div>
+      <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:16 }}>
+        <div style={{ background:'#F5F3EE', borderRadius:8, padding:'14px 16px' }}>
+          <div style={{ fontWeight:700, fontSize:12, color:'#1E2A4A', marginBottom:10 }}>BUYER (Your Company)</div>
+          <div style={{ fontSize:12, color:'#555', marginBottom:6 }}><b>{businessInfo?.name || businessInfo?.companyName || '—'}</b></div>
+          <div style={{ fontSize:11, color:'#888', marginBottom:8 }}>{businessInfo?.address || ''}</div>
+          {(businessInfo?.country === 'india' || businessInfo?.country === 'India') && (
+            <div style={styles.formGroup}>
+              <label style={labelStyle}>Buyer GST No.</label>
+              <input value={form.buyerGst} onChange={e=>set('buyerGst',e.target.value)}
+                placeholder={businessInfo?.gstin || 'e.g. 29ABCDE1234F1Z5'} style={inputStyle} />
+            </div>
+          )}
+          <div style={styles.formGroup}>
+            <label style={labelStyle}>Contact Person</label>
+            <input value={form.buyerContactPerson} onChange={e=>set('buyerContactPerson',e.target.value)} style={inputStyle} placeholder="Name / Designation" />
+          </div>
+          <div style={styles.formGroup}>
+            <label style={labelStyle}>Authorized Signatory</label>
+            <input value={form.signatoryOurName} onChange={e=>set('signatoryOurName',e.target.value)} style={inputStyle} placeholder="Full name" />
+          </div>
+          <div style={styles.formGroup}>
+            <label style={labelStyle}>Designation</label>
+            <input value={form.signatoryOurDesignation} onChange={e=>set('signatoryOurDesignation',e.target.value)} style={inputStyle} placeholder="e.g. Director / Manager" />
+          </div>
+        </div>
+        <div style={{ background:'#F5F3EE', borderRadius:8, padding:'14px 16px' }}>
+          <div style={{ fontWeight:700, fontSize:12, color:'#1E2A4A', marginBottom:10 }}>SUPPLIER</div>
+          <div style={{ fontSize:12, color:'#555', marginBottom:6 }}><b>{form.customerSnapshot?.name || '—'}</b></div>
+          <div style={{ fontSize:11, color:'#888', marginBottom:8 }}>{form.customerSnapshot?.address || ''}</div>
+          {(businessInfo?.country === 'india' || businessInfo?.country === 'India') && (
+            <div style={styles.formGroup}>
+              <label style={labelStyle}>Vendor GST No.</label>
+              <input value={form.vendorGst} onChange={e=>set('vendorGst',e.target.value)}
+                placeholder={form.customerSnapshot?.taxId || 'e.g. 33ABCDE1234F1Z5'} style={inputStyle} />
+            </div>
+          )}
+          <div style={styles.formGroup}>
+            <label style={labelStyle}>Contact Person</label>
+            <input value={form.vendorContactPerson} onChange={e=>set('vendorContactPerson',e.target.value)} style={inputStyle} placeholder="Name / Phone" />
+          </div>
+          <div style={styles.formGroup}>
+            <label style={labelStyle}>Authorized Signatory</label>
+            <input value={form.signatoryClientName} onChange={e=>set('signatoryClientName',e.target.value)} style={inputStyle} placeholder="Full name" />
+          </div>
+          <div style={styles.formGroup}>
+            <label style={labelStyle}>Designation</label>
+            <input value={form.signatoryClientDesignation} onChange={e=>set('signatoryClientDesignation',e.target.value)} style={inputStyle} placeholder="e.g. Proprietor / MD" />
+          </div>
+        </div>
       </div>
       <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 14, marginTop: 14 }}>
         <div><label style={labelStyle}>Status</label>
@@ -7650,6 +9064,12 @@ function ContractEditor({ contract, customers, termsLibrary, businessInfo, userR
         </div>
       </div>
 
+      <div style={styles.formGroup}>
+        <label style={labelStyle}>Delivery / Site Address</label>
+        <input value={form.deliveryAddress || ''} onChange={e => set('deliveryAddress', e.target.value)}
+          placeholder="e.g. Plot 12, Industrial Estate, Chennai - 600002" style={inputStyle} />
+      </div>
+
       <div style={sectionHead}>Scope of Work</div>
       {SCOPE_SECTIONS.map(({ key, label }) => (
         <div key={key} style={{ background: form.scope[key]?.enabled ? '#FAFAF8' : '#F7F6F3', border: '1px solid #EAE6DB', borderRadius: 8, padding: '12px 16px', marginBottom: 10 }}>
@@ -7658,15 +9078,31 @@ function ContractEditor({ contract, customers, termsLibrary, businessInfo, userR
             <span style={{ fontWeight: 700, fontSize: 14, color: '#1E2A4A' }}>{label}</span>
           </label>
           {form.scope[key]?.enabled && (
-            <div style={{ display: 'grid', gridTemplateColumns: '1fr 120px 160px', gap: 10 }}>
-              <div><label style={labelStyle}>Scope Description</label><input value={form.scope[key]?.description || ''} onChange={e => setScope(key, 'description', e.target.value)} placeholder={`Describe ${label.toLowerCase()} scope`} style={inputStyle} /></div>
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 110px 70px 150px', gap: 10 }}>
+              <div><label style={labelStyle}>Description</label><input value={form.scope[key]?.description || ''} onChange={e => setScope(key, 'description', e.target.value)} placeholder={`Describe ${label.toLowerCase()} scope`} style={inputStyle} /></div>
               <div><label style={labelStyle}>Value</label><input type="number" value={form.scope[key]?.value || 0} onChange={e => setScope(key, 'value', parseFloat(e.target.value) || 0)} style={inputStyle} /></div>
+              <div><label style={labelStyle}>GST %</label><input type="number" value={form.scope[key]?.gstRate ?? 18} onChange={e => setScope(key, 'gstRate', parseFloat(e.target.value) || 0)} style={inputStyle} /></div>
               <div><label style={labelStyle}>Timeline</label><input value={form.scope[key]?.timeline || ''} onChange={e => setScope(key, 'timeline', e.target.value)} placeholder="e.g. 45 days" style={inputStyle} /></div>
             </div>
           )}
         </div>
       ))}
-      {totalScopeValue > 0 && <div style={{ textAlign: 'right', fontSize: 13, color: '#888', marginBottom: 4 }}>Total scope: <strong style={{ color: '#1E2A4A' }}>{makeFmt(businessInfo)(totalScopeValue)}</strong></div>}
+{(() => {
+        const isInd = (businessInfo?.country||'').toLowerCase() === 'india';
+        const totalGst = SCOPE_SECTIONS.filter(s => form.scope[s.key]?.enabled).reduce((sum, s) => {
+          const val = parseFloat(form.scope[s.key]?.value)||0;
+          const rate = parseFloat(form.scope[s.key]?.gstRate)||0;
+          return sum + (val*rate/100);
+        }, 0);
+        const grandTotal = totalScopeValue + totalGst;
+        return totalScopeValue > 0 ? (
+          <div style={{ background:'#F5F3EE', border:'1px solid #EAE6DB', borderRadius:8, padding:'10px 16px', marginTop:4, marginBottom:4, fontSize:13 }}>
+            <div style={{ display:'flex', justifyContent:'space-between', color:'#555' }}><span>Total</span><strong>{makeFmt(businessInfo)(totalScopeValue)}</strong></div>
+            {isInd && <div style={{ display:'flex', justifyContent:'space-between', color:'#888' }}><span>GST</span><span>{makeFmt(businessInfo)(totalGst)}</span></div>}
+            <div style={{ display:'flex', justifyContent:'space-between', color:'#1E2A4A', fontWeight:700, fontSize:14, borderTop:'1px solid #DDD8CE', marginTop:6, paddingTop:6 }}><span>Grand Total (incl. GST)</span><span>{makeFmt(businessInfo)(grandTotal)}</span></div>
+          </div>
+        ) : null;
+      })()}
 
       <div style={sectionHead}>Payment Milestones</div>
       <div style={{ display: 'grid', gridTemplateColumns: '2fr 80px 140px 36px', gap: 8, marginBottom: 8, alignItems: 'flex-end' }}>
@@ -7684,21 +9120,51 @@ function ContractEditor({ contract, customers, termsLibrary, businessInfo, userR
         </div>
       ))}
 
-      <div style={sectionHead}>Terms & Conditions</div>
+      <div style={sectionHead}>Terms &amp; Conditions</div>
       {templates.length > 0 && (
         <div style={{ marginBottom: 14 }}>
-          <label style={labelStyle}>Apply from Terms Library</label>
-          <select value={form.termsTemplateId || ''} onChange={e => { set('termsTemplateId', e.target.value); if (e.target.value) set('customTerms', ''); }} style={inputStyle}>
-            <option value="">— None / use custom text below —</option>
+          <label style={labelStyle}>Apply a Template from Terms Library</label>
+          <select value={form.termsTemplateId || ''} onChange={e => { set('termsTemplateId', e.target.value); if (e.target.value) { set('customTerms', ''); set('selectedClauseIds', []); } }} style={inputStyle}>
+            <option value="">— None —</option>
             {templates.map(t => <option key={t.id} value={t.id}>{t.name}</option>)}
           </select>
         </div>
       )}
-      {!form.termsTemplateId && <div><label style={labelStyle}>Custom Terms</label><textarea value={form.customTerms || ''} onChange={e => set('customTerms', e.target.value)} rows={6} style={{ ...inputStyle, resize: 'vertical' }} /></div>}
+      {!form.termsTemplateId && clauses.length > 0 && (
+        <div style={{ marginBottom: 14 }}>
+          <label style={labelStyle}>Select Clauses from Terms Library ({clauses.length} available)</label>
+          <div style={{ border:'1px solid #DDD8CE', borderRadius:8, maxHeight:220, overflowY:'auto', padding:'4px 0', background:'#fff' }}>
+            {clauses.map(cl => {
+              const sel = (form.selectedClauseIds||[]).includes(cl.id);
+              return (
+                <label key={cl.id} style={{ display:'flex', alignItems:'flex-start', gap:8, padding:'7px 12px', cursor:'pointer', background:sel?'#EFF6FF':'transparent', borderBottom:'1px solid #f0ede6' }}>
+                  <input type="checkbox" checked={sel} onChange={e => {
+                    const cur = form.selectedClauseIds||[];
+                    set('selectedClauseIds', e.target.checked ? [...cur,cl.id] : cur.filter(x=>x!==cl.id));
+                  }} style={{ marginTop:2, accentColor:'#1E2A4A' }} />
+                  <div>
+                    <div style={{ fontWeight:600, fontSize:12, color:'#1E2A4A' }}>{cl.title}</div>
+                    <div style={{ fontSize:11, color:'#888' }}>{cl.category}</div>
+                  </div>
+                </label>
+              );
+            })}
+          </div>
+          {(form.selectedClauseIds||[]).length > 0 && (
+            <div style={{ fontSize:11, color:'#1A7A3E', marginTop:4 }}>✓ {(form.selectedClauseIds||[]).length} clause(s) selected — will appear in print</div>
+          )}
+        </div>
+      )}
+      {!form.termsTemplateId && (
+        <div style={{ marginBottom:14 }}>
+          <label style={labelStyle}>Additional / Custom Terms</label>
+          <textarea value={form.customTerms || ''} onChange={e => set('customTerms', e.target.value)} rows={4}
+            placeholder="Type any additional terms here..." style={{ ...inputStyle, resize: 'vertical' }} />
+        </div>
+      )}
       {form.termsTemplateId && (
         <div style={{ background: '#F7F6F3', border: '1px solid #EAE6DB', borderRadius: 8, padding: 14, fontSize: 12, color: '#666', whiteSpace: 'pre-wrap', lineHeight: 1.8, maxHeight: 200, overflowY: 'auto' }}>{buildTermsPreview()}</div>
       )}
-
       <div style={sectionHead}>Signatories</div>
       <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 14 }}>
         <div>
@@ -7726,6 +9192,12 @@ function ContractPrint({ contract: c, businessInfo: bi, termsLibrary, onBack }) 
   const clauses   = termsLibrary?.clauses   || [];
   const templates = termsLibrary?.templates || [];
   const fmt = makeFmt(bi);
+  const [useLH, setUseLH] = React.useState(!!(bi?.letterhead || bi?.letterheadFooter));
+  const [orient, setOrient] = React.useState('portrait');
+  const effLHH = useLH ? bi?.letterhead : null;
+  const effLHF = useLH ? bi?.letterheadFooter : null;
+  const isIndia = (bi?.country||'').toLowerCase() === 'india';
+  const isDraft = c.status !== 'Approved';
 
   function getTermsText() {
     if (c.termsTemplateId) {
@@ -7735,50 +9207,275 @@ function ContractPrint({ contract: c, businessInfo: bi, termsLibrary, onBack }) 
         return { items, extra: tmpl.customText };
       }
     }
+    if ((c.selectedClauseIds||[]).length > 0) {
+      const items = c.selectedClauseIds.map(id => { const cl = clauses.find(x => x.id === id); return cl ? { title: cl.title, text: cl.text } : null; }).filter(Boolean);
+      return { items, extra: c.customTerms || '' };
+    }
     if (c.customTerms) return { items: c.customTerms.split('\n').filter(Boolean).map(t => ({ title: null, text: t })), extra: '' };
     return { items: [], extra: '' };
   }
 
   const terms = getTermsText();
   const enabledScopes = SCOPE_SECTIONS.filter(s => c.scope?.[s.key]?.enabled);
+  const totalVal = c.contractValue || enabledScopes.reduce((s,sc)=>s+(parseFloat(c.scope?.[sc.key]?.value)||0),0);
+
+  function handlePrint() {
+    const lhImg = effLHH ? `<div style="position:fixed;top:0;left:0;right:0;background:#fff;z-index:9999;padding-bottom:8px;border-bottom:2px solid #1E2A4A;"><img src="${effLHH}" style="width:100%;max-height:200px;object-fit:contain;object-position:top;display:block;" /></div>` : '';
+    const lhFooterImg = effLHF ? `<div style="position:fixed;bottom:0;left:0;right:0;background:#fff;z-index:9999;padding-top:8px;border-top:2px solid #1E2A4A;"><img src="${effLHF}" style="width:100%;max-height:120px;object-fit:contain;object-position:bottom;display:block;" /></div>` : '';
+    const companyHeader = !lhImg ? `
+      <div style="text-align:center;border-bottom:2px solid #1E2A4A;padding-bottom:16px;margin-bottom:24px;">
+        ${bi?.logo ? `<img src="${bi.logo}" style="height:60px;object-fit:contain;display:block;margin:0 auto 8px;" />` : ''}
+        <div style="font-size:20px;font-weight:700;color:#1E2A4A;">${bi?.name||bi?.companyName||''}</div>
+        <div style="font-size:11px;color:#666;margin-top:4px;">${bi?.address||''}</div>
+        ${isIndia && bi?.gstin ? `<div style="font-size:11px;color:#666;">GSTIN: ${bi.gstin}</div>` : ''}
+      </div>` : '';
+
+    const draftWm = isDraft ? `
+      <style>
+        body::before { content:'DRAFT'; position:fixed; top:38%;left:12%;font-size:130px;font-weight:900;
+          color:rgba(200,0,0,0.10);transform:rotate(-35deg);z-index:9999;pointer-events:none;letter-spacing:10px; }
+      </style>` : '';
+
+    const preamble = `
+      <table style="width:100%;border-collapse:collapse;margin-bottom:24px;font-size:12px;">
+        <tr style="background:#1E2A4A;color:#fff;">
+          <th style="padding:8px 12px;text-align:left;width:50%">${(c.buyerRole||'BUYER').toUpperCase()}</th>
+          <th style="padding:8px 12px;text-align:left;width:50%">${(c.supplierRole||'SUPPLIER').toUpperCase()}</th>
+        </tr>
+        <tr>
+          <td style="padding:10px 12px;border:1px solid #ddd;vertical-align:top;">
+            <b>${bi?.name||bi?.companyName||''}</b><br/>
+            <span style="color:#555;font-size:11px;">${bi?.address||''}</span><br/>
+            ${isIndia ? `<span style="font-size:11px;">GSTIN: <b>${c.buyerGst||bi?.gstin||'—'}</b></span><br/>` : ''}
+            <span style="font-size:11px;">Contact: ${c.buyerContactPerson||'—'}</span>
+          </td>
+          <td style="padding:10px 12px;border:1px solid #ddd;vertical-align:top;">
+            <b>${c.customerSnapshot?.name||'—'}</b><br/>
+            <span style="color:#555;font-size:11px;">${c.customerSnapshot?.address||''}</span><br/>
+            ${isIndia ? `<span style="font-size:11px;">GSTIN: <b>${c.vendorGst||c.customerSnapshot?.taxId||'—'}</b></span><br/>` : ''}
+            <span style="font-size:11px;">Contact: ${c.vendorContactPerson||'—'}</span>
+          </td>
+        </tr>
+      </table>`;
+
+    const scopeSubtotal = enabledScopes.reduce((s,sc)=>s+(parseFloat(c.scope?.[sc.key]?.value)||0),0);
+    const scopeGst = enabledScopes.reduce((s,sc)=>{
+      const v=parseFloat(c.scope?.[sc.key]?.value)||0, r=parseFloat(c.scope?.[sc.key]?.gstRate)||0;
+      return s+(v*r/100);
+    },0);
+    const scopeGrandTotal = scopeSubtotal + scopeGst;
+    const deliveryRow = c.deliveryAddress ? `<p style="font-size:12px;margin-bottom:16px;"><strong>Delivery / Site Address:</strong> ${c.deliveryAddress}</p>` : '';
+    const scopeTable = enabledScopes.length > 0 ? `
+      <h3>Scope of Work</h3>
+      <table style="width:100%;border-collapse:collapse;font-size:12px;margin-bottom:20px;">
+        <thead><tr style="background:#1E2A4A;color:#fff;">
+          <th style="padding:7px 10px;text-align:left">Section</th>
+          <th style="padding:7px 10px;text-align:left">Description</th>
+          <th style="padding:7px 10px;text-align:right">Value</th>
+          ${isIndia ? '<th style="padding:7px 10px;text-align:center">GST%</th><th style="padding:7px 10px;text-align:right">GST Amt</th>' : ''}
+          <th style="padding:7px 10px;text-align:center">Timeline</th>
+        </tr></thead>
+        <tbody>
+          ${enabledScopes.map((sc,i)=>{
+            const val=parseFloat(c.scope[sc.key]?.value)||0;
+            const rate=parseFloat(c.scope[sc.key]?.gstRate)||0;
+            const gstAmt=val*rate/100;
+            return `<tr style="background:${i%2===0?'#fff':'#fafaf8'};border-bottom:1px solid #eee;">
+              <td style="padding:7px 10px;font-weight:600">${sc.label}</td>
+              <td style="padding:7px 10px">${c.scope[sc.key]?.description||'—'}</td>
+              <td style="padding:7px 10px;text-align:right">${fmt(val)}</td>
+              ${isIndia ? `<td style="padding:7px 10px;text-align:center">${rate}%</td><td style="padding:7px 10px;text-align:right">${fmt(gstAmt)}</td>` : ''}
+              <td style="padding:7px 10px;text-align:center">${c.scope[sc.key]?.timeline||'—'}</td>
+            </tr>`;
+          }).join('')}
+          <tr style="background:#f0ede6;">
+            <td colspan="${isIndia?'5':'3'}" style="padding:7px 10px;text-align:right;font-weight:600">Total</td>
+            <td style="padding:7px 10px;text-align:right;font-weight:600">${fmt(scopeSubtotal)}</td>
+          </tr>
+          ${isIndia ? `<tr style="background:#f5f3ee;">
+            <td colspan="5" style="padding:7px 10px;text-align:right;color:#555">GST</td>
+            <td style="padding:7px 10px;text-align:right;color:#555">${fmt(scopeGst)}</td>
+          </tr>` : ''}
+          <tr style="background:#1E2A4A;color:#fff;font-weight:700;">
+            <td colspan="${isIndia?'5':'3'}" style="padding:8px 10px;text-align:right">Grand Total (incl. GST)</td>
+            <td style="padding:8px 10px;text-align:right;font-size:13px">${fmt(scopeGrandTotal)}</td>
+          </tr>
+        </tbody>
+      </table>` : '';
+
+    const milestoneTable = (c.paymentMilestones||[]).length > 0 ? `
+      <h3>Payment Schedule</h3>
+      <table style="width:100%;border-collapse:collapse;font-size:12px;margin-bottom:20px;">
+        <thead><tr style="background:#1E2A4A;color:#fff;">
+          <th style="padding:7px 10px;text-align:left">Milestone</th>
+          <th style="padding:7px 10px;text-align:right">%</th>
+          <th style="padding:7px 10px;text-align:right">Amount</th>
+          <th style="padding:7px 10px;text-align:center">Due Date</th>
+        </tr></thead>
+        <tbody>
+          ${c.paymentMilestones.map((m,i)=>`<tr style="background:${i%2===0?'#fff':'#fafaf8'};border-bottom:1px solid #eee;">
+            <td style="padding:7px 10px">${m.milestone}</td>
+            <td style="padding:7px 10px;text-align:right">${m.percentage}%</td>
+            <td style="padding:7px 10px;text-align:right">${fmt((parseFloat(m.percentage)/100)*totalVal)}</td>
+            <td style="padding:7px 10px;text-align:center">${m.dueDate||'—'}</td>
+          </tr>`).join('')}
+        </tbody>
+      </table>` : '';
+
+    // Split sub-clause text (e.g. "1.1 text 1.2 text") into separate numbered lines
+    const fmtClause = (text) => (text||'').replace(/ (?=\d+\.\d+\s)/g, '\n');
+    const termsHTML = terms.items.length > 0 ? `
+      <h3>Terms &amp; Conditions</h3>
+      ${terms.items.map((item,i)=>`
+        <div style="margin-bottom:16px;font-size:12px;line-height:1.8;">
+          ${item.title ? `<div style="font-weight:700;color:#1E2A4A;margin-bottom:6px;">${item.title}</div>` : ''}
+          <div style="margin-left:${item.title?14:0}px;">
+            ${fmtClause(item.text).split('\n').filter(l=>l.trim()).map(line=>`
+              <div style="margin-bottom:4px;">${line.trim()}</div>`).join('')}
+          </div>
+        </div>`).join('')}
+      ${terms.extra ? `<div style="font-size:12px;margin-top:10px">${terms.extra}</div>` : ''}` : '';
+
+    const sigBlock = `
+      <div style="margin-top:48px;border-top:1px solid #ccc;padding-top:28px;display:grid;grid-template-columns:1fr 1fr;gap:60px;font-size:12px;">
+        <div>
+          <div style="font-weight:700;color:#1E2A4A;margin-bottom:4px;font-size:13px;">For the ${c.buyerRole||'Buyer'}</div>
+          <div style="font-size:11px;color:#555;margin-bottom:36px;">${bi?.name||bi?.companyName||''}</div>
+          <div style="border-top:1px solid #333;padding-top:6px;">
+            <b>${c.signatoryOurName||'Authorised Signatory'}</b>
+            ${c.signatoryOurDesignation ? `<div style="color:#888;font-size:11px">${c.signatoryOurDesignation}</div>` : ''}
+            ${c.buyerContactPerson ? `<div style="color:#888;font-size:11px">${c.buyerContactPerson}</div>` : ''}
+          </div>
+        </div>
+        <div>
+          <div style="font-weight:700;color:#1E2A4A;margin-bottom:4px;font-size:13px;">For the ${c.supplierRole||'Supplier'}</div>
+          <div style="font-size:11px;color:#555;margin-bottom:36px;">${c.customerSnapshot?.name||''}</div>
+          <div style="border-top:1px solid #333;padding-top:6px;">
+            <b>${c.signatoryClientName||'Authorised Signatory'}</b>
+            ${c.signatoryClientDesignation ? `<div style="color:#888;font-size:11px">${c.signatoryClientDesignation}</div>` : ''}
+            ${c.vendorContactPerson ? `<div style="color:#888;font-size:11px">${c.vendorContactPerson}</div>` : ''}
+          </div>
+        </div>
+      </div>`;
+
+    const html = `<!DOCTYPE html><html><head>
+      <meta charset="utf-8"/>
+      <title>Contract — ${c.number}</title>
+      <style>
+        @page { size: A4 ${orient}; margin: ${lhImg ? '220px' : '15mm'} 15mm ${lhFooterImg ? '140px' : '20mm'} 15mm; ${!lhFooterImg ? `@bottom-center { content: "Page " counter(page) " of " counter(pages); font-family: Arial, sans-serif; font-size: 9px; color: #888; }` : ''} }
+        body { font-family: Georgia, serif; font-size: 13px; color: #222; line-height: 1.7; }
+        h3 { font-size: 14px; font-weight: 700; color: #1E2A4A; border-bottom: 1px solid #ccc;
+             padding-bottom: 6px; margin: 20px 0 12px; text-transform: uppercase; letter-spacing: 0.5px; }
+      </style>
+      ${draftWm}
+    </head><body>
+      ${lhImg}
+      ${companyHeader}
+      <div style="text-align:center;margin-bottom:20px;">
+        <div style="font-size:17px;font-weight:700;letter-spacing:2px;color:#1E2A4A;text-transform:uppercase;">CONTRACT AGREEMENT</div>
+        <div style="font-size:12px;color:#888;margin-top:4px;">Contract No: ${c.number} &nbsp;|&nbsp; Date: ${c.date}${c.poRefNumber ? ` &nbsp;|&nbsp; PO Ref: <b>${c.poRefNumber}</b>` : ''}${isDraft?' &nbsp;|&nbsp; <span style="color:red;font-weight:700">DRAFT</span>':''}</div>
+      </div>
+      <div style="background:#f7f6f3;border:1px solid #ddd;border-radius:4px;padding:10px 16px;margin-bottom:20px;font-size:14px;font-weight:700;color:#1E2A4A;">
+        Subject: ${c.title}
+      </div>
+      <p style="font-size:12px;margin-bottom:16px;">This Contract Agreement is entered into between <b>${bi?.name||bi?.companyName||'the Buyer'}</b> (hereinafter referred to as the "${c.buyerRole||'Buyer'}") and <b>${c.customerSnapshot?.name||'the Supplier'}</b> (hereinafter referred to as the "${c.supplierRole||'Supplier'}"), both parties agreeing to the terms set forth below.</p>
+      ${preamble}
+      ${deliveryRow}
+      ${scopeTable}
+      ${milestoneTable}
+      ${termsHTML}
+      ${sigBlock}
+      ${lhFooterImg}
+    </body></html>`;
+
+    const w = window.open('', '_blank', 'width=900,height=750');
+    w.document.write(html);
+    w.document.close();
+    setTimeout(() => { w.focus(); w.print(); }, 600);
+  }
 
   return (
     <div>
-      <div className="no-print" style={{ padding: '14px 28px', borderBottom: '1px solid #EAE6DB', display: 'flex', gap: 12 }}>
+      <div className="no-print" style={{ padding: '14px 28px', borderBottom: '1px solid #EAE6DB', display: 'flex', gap: 12, alignItems:'center', flexWrap:'wrap' }}>
         <button onClick={onBack} style={{ border: 'none', background: 'none', color: '#888', fontSize: 13, cursor: 'pointer' }}>← Back</button>
-        <button onClick={() => window.print()} style={{ padding: '8px 20px', background: '#1E2A4A', color: '#fff', border: 'none', borderRadius: 8, fontSize: 13, fontWeight: 600 }}><Printer size={13} style={{ marginRight: 6 }} />Print / PDF</button>
+        <label style={{ display:'flex', alignItems:'center', gap:6, fontSize:13, cursor:'pointer' }}>
+          <input type="checkbox" checked={useLH} onChange={e=>setUseLH(e.target.checked)} />
+          Use letterpad
+        </label>
+        {useLH && effLHH && <span style={{ fontSize:11, color:'#1A7A3E', background:'#EEF9F0', border:'1px solid #B7E5C6', borderRadius:6, padding:'4px 10px' }}>✓ Header from Settings</span>}
+        {useLH && effLHF && <span style={{ fontSize:11, color:'#1A7A3E', background:'#EEF9F0', border:'1px solid #B7E5C6', borderRadius:6, padding:'4px 10px' }}>✓ Footer from Settings</span>}
+        {useLH && !effLHH && !effLHF && <span style={{ fontSize:11, color:'#B45309', background:'#FEF3C7', border:'1px solid #FCD34D', borderRadius:6, padding:'4px 10px' }}>No header/footer saved — add in Settings</span>}
+        <div style={{ display:'flex', border:'1px solid #DDD8CC', borderRadius:7, overflow:'hidden', fontSize:12 }}>
+          {[['portrait','📄 Portrait'],['landscape','⬜ Landscape']].map(([v,l])=>(
+            <button key={v} onClick={()=>setOrient(v)}
+              style={{ padding:'6px 12px', background:orient===v?'#1E2A4A':'#fff', color:orient===v?'#fff':'#555', border:'none', cursor:'pointer', fontWeight:orient===v?600:400 }}>
+              {l}
+            </button>
+          ))}
+        </div>
+        <button onClick={handlePrint} style={{ padding: '8px 20px', background: '#1E2A4A', color: '#fff', border: 'none', borderRadius: 8, fontSize: 13, fontWeight: 600, display:'flex', alignItems:'center', gap:6 }}>🖨 Print / PDF</button>
+        {c.status === 'Draft' && <span style={{ background:'#FEE2E2', color:'#B91C1C', padding:'4px 12px', borderRadius:20, fontSize:12, fontWeight:700 }}>DRAFT status — change to Approved to remove watermark</span>}
       </div>
-      <div className="print-area" style={{ maxWidth: 780, margin: '28px auto', background: '#fff', padding: '48px 56px', fontFamily: 'Georgia, serif', fontSize: 13, lineHeight: 1.8, color: '#222', boxShadow: '0 2px 20px rgba(0,0,0,0.08)' }}>
+      <div className="print-area contract-print-area" style={{ maxWidth: 780, margin: '28px auto', background: '#fff', fontFamily: 'Georgia, serif', fontSize: 13, lineHeight: 1.8, color: '#222', boxShadow: '0 2px 20px rgba(0,0,0,0.08)', overflow:'hidden' }}>
+        {effLHH && <div style={{ background:'#fff', lineHeight:0 }}><img src={effLHH} alt="letterpad header" style={{ width:'100%', display:'block' }} /></div>}
+        <div style={{ padding: '32px 56px' }}>
         <div style={{ textAlign: 'center', borderBottom: '2px solid #1E2A4A', paddingBottom: 24, marginBottom: 32 }}>
-          {bi.companyName && <div style={{ fontSize: 22, fontWeight: 700, color: '#1E2A4A' }}>{bi.companyName}</div>}
-          {bi.address && <div style={{ fontSize: 12, color: '#666', marginTop: 4 }}>{bi.address}</div>}
+          {!effLHH && bi.name && <div style={{ fontSize: 22, fontWeight: 700, color: '#1E2A4A' }}>{bi.name || bi.companyName}</div>}
+          {!effLHH && bi.address && <div style={{ fontSize: 12, color: '#666', marginTop: 4 }}>{bi.address}</div>}
           <div style={{ fontSize: 18, fontWeight: 700, letterSpacing: 2, marginTop: 20, color: '#1E2A4A', textTransform: 'uppercase' }}>CONTRACT AGREEMENT</div>
-          <div style={{ fontSize: 13, color: '#888', marginTop: 6 }}>Contract No: {c.number} | Date: {c.date}</div>
+          <div style={{ fontSize: 13, color: '#888', marginTop: 6 }}>Contract No: {c.number} | Date: {c.date}{c.poRefNumber ? ` | PO Ref: ${c.poRefNumber}` : ''}</div>
         </div>
         <div style={{ marginBottom: 28 }}>
           <div style={{ fontWeight: 700, fontSize: 14, marginBottom: 10, color: '#1E2A4A', textTransform: 'uppercase' }}>Parties</div>
-          <p>This Contract Agreement is entered into between <strong>{bi.companyName || 'the Company'}</strong> (the "Contractor") and <strong>{c.customerSnapshot?.name || '___________________'}</strong> (the "Client").</p>
+          <p>This Contract Agreement is entered into between <strong>{bi.name || bi.companyName || 'the Company'}</strong> (the "{c.buyerRole || 'Buyer'}") and <strong>{c.customerSnapshot?.name || '___________________'}</strong> (the "{c.supplierRole || 'Supplier'}").</p>
         </div>
         <div style={{ background: '#F7F6F3', border: '1px solid #DDD8CE', borderRadius: 6, padding: '14px 20px', marginBottom: 28, fontWeight: 700, fontSize: 15, color: '#1E2A4A' }}>Subject: {c.title}</div>
+        {c.deliveryAddress && (
+          <div style={{ marginBottom: 20, fontSize: 13 }}>
+            <span style={{ fontWeight: 700, color: '#1E2A4A' }}>Delivery / Site Address: </span>
+            <span style={{ color: '#555' }}>{c.deliveryAddress}</span>
+          </div>
+        )}
         {enabledScopes.length > 0 && (
           <div style={{ marginBottom: 28 }}>
             <div style={{ fontWeight: 700, fontSize: 14, marginBottom: 14, color: '#1E2A4A', textTransform: 'uppercase' }}>Scope of Work</div>
             <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
-              <thead><tr style={{ background: '#1E2A4A', color: '#fff' }}><th style={{ padding: '8px 12px', textAlign: 'left' }}>Section</th><th style={{ padding: '8px 12px', textAlign: 'left' }}>Description</th><th style={{ padding: '8px 12px', textAlign: 'right' }}>Value</th><th style={{ padding: '8px 12px', textAlign: 'center' }}>Timeline</th></tr></thead>
+              <thead><tr style={{ background: '#1E2A4A', color: '#fff' }}><th style={{ padding: '8px 12px', textAlign: 'left' }}>Section</th><th style={{ padding: '8px 12px', textAlign: 'left' }}>Description</th><th style={{ padding: '8px 12px', textAlign: 'right' }}>Value</th>{isIndia && <><th style={{ padding: '8px 12px', textAlign: 'center' }}>GST%</th><th style={{ padding: '8px 12px', textAlign: 'right' }}>GST Amt</th></>}<th style={{ padding: '8px 12px', textAlign: 'center' }}>Timeline</th></tr></thead>
               <tbody>
-                {enabledScopes.map(({ key, label }, i) => (
-                  <tr key={key} style={{ background: i % 2 === 0 ? '#fff' : '#FAFAF8', borderBottom: '1px solid #EAE6DB' }}>
-                    <td style={{ padding: '8px 12px', fontWeight: 600 }}>{label}</td>
-                    <td style={{ padding: '8px 12px' }}>{c.scope[key]?.description || '—'}</td>
-                    <td style={{ padding: '8px 12px', textAlign: 'right' }}>{fmt(c.scope[key]?.value || 0)}</td>
-                    <td style={{ padding: '8px 12px', textAlign: 'center' }}>{c.scope[key]?.timeline || '—'}</td>
-                  </tr>
-                ))}
-                <tr style={{ background: '#F0EDE6', fontWeight: 700 }}>
-                  <td colSpan={2} style={{ padding: '8px 12px' }}>Total Contract Value</td>
-                  <td style={{ padding: '8px 12px', textAlign: 'right' }}>{fmt(c.contractValue || 0)}</td>
-                  <td />
-                </tr>
+                {enabledScopes.map(({ key, label }, i) => {
+                    const val = parseFloat(c.scope[key]?.value)||0;
+                    const rate = parseFloat(c.scope[key]?.gstRate)||0;
+                    const gstAmt = val*rate/100;
+                    return <tr key={key} style={{ background: i % 2 === 0 ? '#fff' : '#FAFAF8', borderBottom: '1px solid #EAE6DB' }}>
+                      <td style={{ padding: '8px 12px', fontWeight: 600 }}>{label}</td>
+                      <td style={{ padding: '8px 12px' }}>{c.scope[key]?.description || '—'}</td>
+                      <td style={{ padding: '8px 12px', textAlign: 'right' }}>{fmt(val)}</td>
+                      {isIndia && <><td style={{ padding: '8px 12px', textAlign: 'center' }}>{rate}%</td><td style={{ padding: '8px 12px', textAlign: 'right' }}>{fmt(gstAmt)}</td></>}
+                      <td style={{ padding: '8px 12px', textAlign: 'center' }}>{c.scope[key]?.timeline || '—'}</td>
+                    </tr>;
+                })}
+                {(() => {
+                  const subtotal = enabledScopes.reduce((s,sc)=>s+(parseFloat(c.scope?.[sc.key]?.value)||0),0);
+                  const gstTotal = enabledScopes.reduce((s,sc)=>{
+                    const v=parseFloat(c.scope?.[sc.key]?.value)||0, r=parseFloat(c.scope?.[sc.key]?.gstRate)||0;
+                    return s+(v*r/100);
+                  },0);
+                  const numCols = isIndia ? 6 : 4;
+                  return <>
+                    <tr style={{ background: '#F0EDE6' }}>
+                      <td colSpan={numCols - 1} style={{ padding: '8px 12px', textAlign: 'right', fontWeight: 600 }}>Total</td>
+                      <td style={{ padding: '8px 12px', textAlign: 'right', fontWeight: 600 }}>{fmt(subtotal)}</td>
+                    </tr>
+                    {isIndia && <tr style={{ background: '#F5F3EE' }}>
+                      <td colSpan={numCols - 1} style={{ padding: '8px 12px', textAlign: 'right', color: '#555' }}>GST</td>
+                      <td style={{ padding: '8px 12px', textAlign: 'right', color: '#555' }}>{fmt(gstTotal)}</td>
+                    </tr>}
+                    <tr style={{ background: '#1E2A4A', color: '#fff', fontWeight: 700 }}>
+                      <td colSpan={numCols - 1} style={{ padding: '8px 12px', textAlign: 'right' }}>Grand Total (incl. GST)</td>
+                      <td style={{ padding: '8px 12px', textAlign: 'right', fontSize: 14 }}>{fmt(subtotal+gstTotal)}</td>
+                    </tr>
+                  </>;
+                })()}
               </tbody>
             </table>
           </div>
@@ -7804,17 +9501,22 @@ function ContractPrint({ contract: c, businessInfo: bi, termsLibrary, onBack }) 
         {terms.items.length > 0 && (
           <div style={{ marginBottom: 32 }}>
             <div style={{ fontWeight: 700, fontSize: 14, marginBottom: 14, color: '#1E2A4A', textTransform: 'uppercase' }}>Terms & Conditions</div>
-            {terms.items.map((item, i) => (
-              <div key={i} style={{ marginBottom: 12 }}>
-                {item.title && <div style={{ fontWeight: 700 }}>{i + 1}. {item.title}</div>}
-                <div style={{ marginLeft: item.title ? 16 : 0 }}>{item.title ? '' : `${i + 1}. `}{item.text}</div>
-              </div>
-            ))}
+            {terms.items.map((item, i) => {
+              const clauseLines = (item.text||'').replace(/ (?=\d+\.\d+\s)/g, '\n').split('\n').filter(l=>l.trim());
+              return (
+                <div key={i} style={{ marginBottom: 14 }}>
+                  {item.title && <div style={{ fontWeight: 700, color:'#1E2A4A', marginBottom:4 }}>{i + 1}. {item.title}</div>}
+                  <div style={{ marginLeft: item.title ? 16 : 0, lineHeight: 1.9 }}>
+                    {clauseLines.map((line, j) => <div key={j} style={{ marginBottom: 2 }}>{j===0&&!item.title?`${i+1}. `:''}{line.trim()}</div>)}
+                  </div>
+                </div>
+              );
+            })}
             {terms.extra && <div style={{ marginTop: 12 }}>{terms.extra}</div>}
           </div>
         )}
         <div style={{ marginTop: 48, borderTop: '1px solid #DDD8CE', paddingTop: 32, display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 48 }}>
-          {[{ label: 'For ' + (bi.companyName || 'the Contractor'), name: c.signatoryOurName, desig: c.signatoryOurDesignation }, { label: 'For ' + (c.customerSnapshot?.name || 'the Client'), name: c.signatoryClientName, desig: c.signatoryClientDesignation }].map((sig, i) => (
+          {[{ label: 'For the ' + (c.buyerRole || 'Buyer') + ' (' + (bi.name || bi.companyName || '') + ')', name: c.signatoryOurName, desig: c.signatoryOurDesignation }, { label: 'For the ' + (c.supplierRole || 'Supplier') + ' (' + (c.customerSnapshot?.name || '') + ')', name: c.signatoryClientName, desig: c.signatoryClientDesignation }].map((sig, i) => (
             <div key={i}>
               <div style={{ fontWeight: 700, marginBottom: 40, fontSize: 13, color: '#555' }}>{sig.label}</div>
               <div style={{ borderTop: '1px solid #333', paddingTop: 8 }}>
@@ -7824,6 +9526,8 @@ function ContractPrint({ contract: c, businessInfo: bi, termsLibrary, onBack }) 
             </div>
           ))}
         </div>
+        </div>{/* end inner content */}
+        {effLHF && <div style={{ background:'#fff', width:'100%', height:130, overflow:'hidden' }}><img src={effLHF} alt="letterpad footer" style={{ width:'100%', height:130, objectFit:'cover', objectPosition:'center', display:'block' }} /></div>}
       </div>
     </div>
   );
@@ -7859,7 +9563,8 @@ function ChannelPartnerList({ channelPartners, setChannelPartners, documents, te
 
   function handleSave(form) {
     if (!form.number) form.number = nextCPNum();
-    setChannelPartners(prev => form._isNew ? [...prev, { ...form, _isNew: undefined }] : prev.map(p => p.id === form.id ? form : p));
+    const { _isNew, ...rest } = form; // strip _isNew so Firestore doesn't reject undefined field
+    setChannelPartners(prev => _isNew ? [...prev, rest] : prev.map(p => p.id === rest.id ? rest : p));
     setEditing(null);
   }
 
@@ -8004,6 +9709,7 @@ function ChannelPartnerForm({ partner, termsLibrary, businessInfo, documents, on
 }
 
 function PartnerAgreement({ partner: p, termsLibrary, businessInfo: bi, documents, onBack }) {
+  const [useLHPartner, setUseLHPartner] = React.useState(!!bi?.letterhead);
   const clauses   = termsLibrary?.clauses   || [];
   const templates = termsLibrary?.templates || [];
   const linkedDocs = documents.filter(d => d.channelPartnerId === p.id);
@@ -8025,16 +9731,20 @@ function PartnerAgreement({ partner: p, termsLibrary, businessInfo: bi, document
     <div>
       <div className="no-print" style={{ padding: '14px 28px', borderBottom: '1px solid #EAE6DB', display: 'flex', gap: 12, alignItems: 'center' }}>
         <button onClick={onBack} style={{ border: 'none', background: 'none', color: '#888', fontSize: 13, cursor: 'pointer' }}>← Back</button>
+        {bi?.letterhead && <button onClick={() => setUseLHPartner(v=>!v)} style={{ ...styles.ghostBtn, ...(useLHPartner?{background:'#EEF2FF',color:'#3D52A0',fontWeight:600}:{}) }}>📃 {useLHPartner?'Letterhead ON':'Use Letterhead'}</button>}
+        <button onClick={() => downloadDocPDF('.print-area','partner-agreement.pdf')} style={styles.ghostBtn}><Download size={13} style={{ marginRight: 4 }}/> PDF</button>
         <button onClick={() => window.print()} style={{ padding: '8px 20px', background: '#1E2A4A', color: '#fff', border: 'none', borderRadius: 8, fontSize: 13, fontWeight: 600 }}><Printer size={13} style={{ marginRight: 6 }} />Print Agreement</button>
         {linkedDocs.length > 0 && <span style={{ fontSize: 13, color: '#888' }}>{linkedDocs.length} linked document{linkedDocs.length !== 1 ? 's' : ''}</span>}
       </div>
       <div className="print-area" style={{ maxWidth: 780, margin: '28px auto', background: '#fff', padding: '48px 56px', fontFamily: 'Georgia, serif', fontSize: 13, lineHeight: 1.8, color: '#222', boxShadow: '0 2px 20px rgba(0,0,0,0.08)' }}>
+        {useLHPartner && (bi?.letterhead || bi?.letterheadFooter) && <LetterpadPrintStyle />}
+        {useLHPartner && bi?.letterhead && <div className="lh-pad-header" style={{ background:'#fff' }}><img src={bi.letterhead} alt="letterhead" style={{ width:'100%', display:'block' }} /></div>}
         <div style={{ textAlign: 'center', borderBottom: '2px solid #1E2A4A', paddingBottom: 24, marginBottom: 32 }}>
-          {bi.companyName && <div style={{ fontSize: 22, fontWeight: 700, color: '#1E2A4A' }}>{bi.companyName}</div>}
+          {!useLHPartner && (bi.name || bi.companyName) && <div style={{ fontSize: 22, fontWeight: 700, color: '#1E2A4A' }}>{bi.name || bi.companyName}</div>}
           <div style={{ fontSize: 18, fontWeight: 700, letterSpacing: 2, marginTop: 20, color: '#1E2A4A', textTransform: 'uppercase' }}>Dealership / Channel Partner Agreement</div>
           <div style={{ fontSize: 13, color: '#888', marginTop: 6 }}>{p.number} | {p.agreementDate}</div>
         </div>
-        <p style={{ marginBottom: 24 }}>This Agreement is made between <strong>{bi.companyName || 'the Company'}</strong> and <strong>{p.name}</strong> ({p.type}), referred to as "the Partner".</p>
+        <p style={{ marginBottom: 24 }}>This Agreement is made between <strong>{bi.name || bi.companyName || 'the Company'}</strong> and <strong>{p.name}</strong> ({p.type}), referred to as "the Partner".</p>
         <div style={{ marginBottom: 20 }}>
           <div style={{ fontWeight: 700, fontSize: 13, color: '#1E2A4A', marginBottom: 8, textTransform: 'uppercase' }}>Partner Details</div>
           <table style={{ width: '100%', fontSize: 13, borderCollapse: 'collapse' }}>
@@ -8068,17 +9778,2472 @@ function PartnerAgreement({ partner: p, termsLibrary, businessInfo: bi, document
           </div>
         )}
         <div style={{ marginTop: 48, borderTop: '1px solid #DDD8CE', paddingTop: 32, display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 48 }}>
-          {['For ' + (bi.companyName || 'the Company'), 'For ' + p.name].map((label, i) => (
+          {['For ' + (bi.name || bi.companyName || 'the Company'), 'For ' + p.name].map((label, i) => (
             <div key={i}>
               <div style={{ fontWeight: 700, marginBottom: 40, fontSize: 13, color: '#555' }}>{label}</div>
               <div style={{ borderTop: '1px solid #333', paddingTop: 8, color: '#888', fontSize: 12 }}>Authorised Signatory | Date: ___________</div>
             </div>
           ))}
         </div>
+        {useLHPartner && bi?.letterheadFooter && (
+          <div className="lh-pad-footer" style={{ background: '#fff' }}>
+            <img src={bi.letterheadFooter} alt="letterhead footer" style={{ width:'100%', display:'block' }} />
+          </div>
+        )}
       </div>
     </div>
   );
 }
+
+
+// ─── Scope of Work (Service companies) ───────────────────────────────────────
+function ScopeOfWorkView({ scopeOfWork, setScopeOfWork, userRole }) {
+  const [editing, setEditing] = useState(null);
+  const [creating, setCreating] = useState(false);
+  const canEdit = userRole === 'admin' || userRole === 'manager' || userRole === 'sales';
+
+  function saveScope(form) {
+    const { _isNew, ...rest } = form;
+    setScopeOfWork(prev => _isNew ? [...prev, { ...rest, id: crypto.randomUUID(), createdAt: Date.now() }] : prev.map(s => s.id === rest.id ? rest : s));
+    setEditing(null); setCreating(false);
+  }
+
+  return (
+    <div style={styles.page}>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 24 }}>
+        <div>
+          <h1 className="serif" style={styles.h1}>Scope of Work</h1>
+          <p style={styles.muted}>Service catalogue — link items to quotations and invoices.</p>
+        </div>
+        {canEdit && <button onClick={() => { setCreating(true); setEditing({ _isNew: true, name: '', category: '', description: '', unit: 'hrs', rate: '' }); }} style={styles.primaryBtn}><Plus size={15} /> New Scope Item</button>}
+      </div>
+      <div style={styles.list}>
+        {scopeOfWork.length === 0 && <div style={styles.emptyBox}>No scope items yet. Add your services and packages here.</div>}
+        {scopeOfWork.map(s => (
+          <div key={s.id} style={styles.recordRow}>
+            <div style={{ flex: 1 }}>
+              <div style={{ fontWeight: 600, fontSize: 14 }}>{s.name}</div>
+              <div style={{ fontSize: 12, color: '#888', marginTop: 2 }}>{s.category || 'General'} · {s.unit || 'hrs'} · Rate: {s.rate || '—'}</div>
+              {s.description && <div style={{ fontSize: 12, color: '#555', marginTop: 4, maxWidth: 500 }}>{s.description}</div>}
+            </div>
+            {canEdit && (
+              <div style={{ display: 'flex', gap: 6 }}>
+                <button onClick={() => { setEditing(s); setCreating(false); }} style={styles.iconBtn}><Pencil size={14} /></button>
+                <button onClick={() => { if (window.confirm('Delete this scope item?')) setScopeOfWork(prev => prev.filter(x => x.id !== s.id)); }} style={{ ...styles.iconBtn, color: '#B5453A' }}><Trash2 size={14} /></button>
+              </div>
+            )}
+          </div>
+        ))}
+      </div>
+      {(creating || editing) && (
+        <Modal title={creating ? 'New Scope Item' : 'Edit Scope Item'} onClose={() => { setEditing(null); setCreating(false); }}>
+          <ScopeItemForm item={editing} onSave={saveScope} onClose={() => { setEditing(null); setCreating(false); }} />
+        </Modal>
+      )}
+    </div>
+  );
+}
+
+function ScopeItemForm({ item, onSave, onClose }) {
+  const [form, setForm] = useState({ _isNew: !!item?._isNew, id: item?.id || crypto.randomUUID(), name: item?.name || '', category: item?.category || '', description: item?.description || '', unit: item?.unit || 'hrs', rate: item?.rate || '' });
+  function set(k, v) { setForm(f => ({ ...f, [k]: v })); }
+  return (
+    <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 14 }}>
+      <div style={styles.formGroup}><label style={styles.label}>Item Name *</label><input value={form.name} onChange={e => set('name', e.target.value)} style={styles.input} placeholder="e.g. Software Development" /></div>
+      <div style={styles.formGroup}><label style={styles.label}>Category</label><input value={form.category} onChange={e => set('category', e.target.value)} style={styles.input} placeholder="e.g. Consulting" /></div>
+      <div style={styles.formGroup}><label style={styles.label}>Unit</label>
+        <select value={form.unit} onChange={e => set('unit', e.target.value)} style={styles.input}>
+          {['hrs','days','project','lump sum','visit','month','year'].map(u => <option key={u} value={u}>{u}</option>)}
+        </select>
+      </div>
+      <div style={styles.formGroup}><label style={styles.label}>Rate</label><input type="number" value={form.rate} onChange={e => set('rate', e.target.value)} style={styles.input} placeholder="0.00" /></div>
+      <div style={{ ...styles.formGroup, gridColumn: '1 / -1' }}><label style={styles.label}>Description</label><textarea value={form.description} onChange={e => set('description', e.target.value)} style={{ ...styles.input, minHeight: 70 }} placeholder="Detailed description of the scope..." /></div>
+      <div style={{ gridColumn: '1 / -1', display: 'flex', justifyContent: 'flex-end', gap: 10 }}>
+        <button style={styles.ghostBtn} onClick={onClose}>Cancel</button>
+        <button style={styles.primaryBtn} onClick={() => { if (!form.name) return alert('Name required'); onSave(form); }}>Save</button>
+      </div>
+    </div>
+  );
+}
+
+// ─── Quality Modules (Manufacturing) ──────────────────────────────────────────
+
+function ISOPrinciplesView({ qualityDocs, setQualityDocs, userRole }) {
+  const [editing, setEditing] = useState(null);
+  const canEdit = userRole === 'admin' || userRole === 'manager';
+  const items = qualityDocs.isoPrinciples || [];
+
+  function save(form) {
+    const { _isNew, ...rest } = form;
+    setQualityDocs(prev => ({ ...prev, isoPrinciples: _isNew ? [...(prev.isoPrinciples || []), { ...rest, id: crypto.randomUUID(), createdAt: Date.now() }] : (prev.isoPrinciples || []).map(x => x.id === rest.id ? rest : x) }));
+    setEditing(null);
+  }
+
+  return (
+    <div style={styles.page}>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 24 }}>
+        <div><h1 className="serif" style={styles.h1}>ISO Principles</h1><p style={styles.muted}>Document your ISO quality management framework and principles.</p></div>
+        {canEdit && <button onClick={() => setEditing({ _isNew: true, title: '', clause: '', description: '', evidence: '' })} style={styles.primaryBtn}><Plus size={15} /> Add Principle</button>}
+      </div>
+      <div style={styles.list}>
+        {items.length === 0 && <div style={styles.emptyBox}>No ISO principles documented yet.</div>}
+        {items.map(item => (
+          <div key={item.id} style={styles.recordRow}>
+            <div style={{ flex: 1 }}>
+              <div style={{ fontWeight: 600, fontSize: 14 }}>{item.clause && <span style={{ color: '#C9A24B', marginRight: 8 }}>§{item.clause}</span>}{item.title}</div>
+              {item.description && <div style={{ fontSize: 12, color: '#555', marginTop: 4 }}>{item.description}</div>}
+              {item.evidence && <div style={{ fontSize: 11, color: '#888', marginTop: 2 }}>Evidence: {item.evidence}</div>}
+            </div>
+            {canEdit && <div style={{ display: 'flex', gap: 6 }}><button onClick={() => setEditing(item)} style={styles.iconBtn}><Pencil size={14} /></button><button onClick={() => { if (window.confirm('Delete?')) setQualityDocs(prev => ({ ...prev, isoPrinciples: prev.isoPrinciples.filter(x => x.id !== item.id) })); }} style={{ ...styles.iconBtn, color: '#B5453A' }}><Trash2 size={14} /></button></div>}
+          </div>
+        ))}
+      </div>
+      {editing && (
+        <Modal title={editing._isNew ? 'Add ISO Principle' : 'Edit ISO Principle'} onClose={() => setEditing(null)}>
+          <QualityDocForm item={editing} fields={[{ key: 'clause', label: 'ISO Clause', placeholder: 'e.g. 4.1' }, { key: 'title', label: 'Title *', placeholder: 'Principle name' }, { key: 'description', label: 'Description', multiline: true }, { key: 'evidence', label: 'Evidence / Records' }]} onSave={save} onClose={() => setEditing(null)} />
+        </Modal>
+      )}
+    </div>
+  );
+}
+
+function DeptProceduresView({ qualityDocs, setQualityDocs, userRole }) {
+  const [editing, setEditing] = useState(null);
+  const canEdit = userRole === 'admin' || userRole === 'manager';
+  const items = qualityDocs.deptProcedures || [];
+
+  function save(form) {
+    const { _isNew, ...rest } = form;
+    const updated = { ...rest, approvalStatus: _isNew ? 'draft' : rest.approvalStatus };
+    setQualityDocs(prev => ({ ...prev, deptProcedures: _isNew ? [...(prev.deptProcedures || []), { ...updated, id: crypto.randomUUID(), createdAt: Date.now() }] : (prev.deptProcedures || []).map(x => x.id === updated.id ? updated : x) }));
+    setEditing(null);
+  }
+
+  function approve(id) {
+    setQualityDocs(prev => ({ ...prev, deptProcedures: prev.deptProcedures.map(x => x.id === id ? { ...x, approvalStatus: 'approved', approvedAt: Date.now() } : x) }));
+  }
+
+  const statusBg = { draft: '#EEEDE6', approved: '#D6F0E0', review: '#FFF3CD' };
+  const statusCol = { draft: '#5F5E5A', approved: '#1A5C35', review: '#856404' };
+
+  return (
+    <div style={styles.page}>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 24 }}>
+        <div><h1 className="serif" style={styles.h1}>Dept Procedures</h1><p style={styles.muted}>Department-level procedures. Approved by Management before use.</p></div>
+        {canEdit && <button onClick={() => setEditing({ _isNew: true, title: '', department: '', procNumber: '', version: '1.0', description: '', steps: '', approvalStatus: 'draft' })} style={styles.primaryBtn}><Plus size={15} /> New Procedure</button>}
+      </div>
+      <div style={styles.list}>
+        {items.length === 0 && <div style={styles.emptyBox}>No procedures yet. Document your department-level SOPs here.</div>}
+        {items.map(item => (
+          <div key={item.id} style={styles.recordRow}>
+            <div style={{ flex: 1 }}>
+              <div style={{ fontWeight: 600, fontSize: 14 }}>{item.procNumber && <span style={{ color: '#6B5BAE', marginRight: 8 }}>{item.procNumber}</span>}{item.title}</div>
+              <div style={{ fontSize: 12, color: '#888', marginTop: 2 }}>{item.department} · v{item.version || '1.0'}</div>
+              {item.description && <div style={{ fontSize: 12, color: '#555', marginTop: 3 }}>{item.description}</div>}
+            </div>
+            <span style={{ background: statusBg[item.approvalStatus] || '#EEEDE6', color: statusCol[item.approvalStatus] || '#5F5E5A', padding: '3px 10px', borderRadius: 20, fontSize: 12, fontWeight: 600, whiteSpace: 'nowrap' }}>
+              {item.approvalStatus || 'draft'}
+            </span>
+            {userRole === 'admin' && item.approvalStatus !== 'approved' && (
+              <button onClick={() => approve(item.id)} style={{ ...styles.ghostBtn, fontSize: 11, background: '#D6F0E0', color: '#1A5C35', border: 'none' }}>Approve</button>
+            )}
+            {canEdit && <div style={{ display: 'flex', gap: 6 }}><button onClick={() => setEditing(item)} style={styles.iconBtn}><Pencil size={14} /></button><button onClick={() => { if (window.confirm('Delete?')) setQualityDocs(prev => ({ ...prev, deptProcedures: prev.deptProcedures.filter(x => x.id !== item.id) })); }} style={{ ...styles.iconBtn, color: '#B5453A' }}><Trash2 size={14} /></button></div>}
+          </div>
+        ))}
+      </div>
+      {editing && (
+        <Modal title={editing._isNew ? 'New Procedure' : 'Edit Procedure'} onClose={() => setEditing(null)} wide>
+          <QualityDocForm item={editing} fields={[{ key: 'procNumber', label: 'Proc. Number', placeholder: 'e.g. QP-001' }, { key: 'title', label: 'Title *', placeholder: 'Procedure name' }, { key: 'department', label: 'Department', placeholder: 'e.g. Production' }, { key: 'version', label: 'Version', placeholder: '1.0' }, { key: 'description', label: 'Objective', multiline: true }, { key: 'steps', label: 'Procedure Steps', multiline: true, placeholder: 'Step 1: ...\nStep 2: ...' }]} onSave={save} onClose={() => setEditing(null)} />
+        </Modal>
+      )}
+    </div>
+  );
+}
+
+function InprocessQAView({ qualityDocs, setQualityDocs, productionOrders, userRole }) {
+  const [editing, setEditing] = useState(null);
+  const canEdit = userRole === 'admin' || userRole === 'manager' || userRole === 'inventory';
+  const items = qualityDocs.inprocessQA || [];
+
+  function save(form) {
+    const { _isNew, ...rest } = form;
+    setQualityDocs(prev => ({ ...prev, inprocessQA: _isNew ? [...(prev.inprocessQA || []), { ...rest, id: crypto.randomUUID(), createdAt: Date.now() }] : (prev.inprocessQA || []).map(x => x.id === rest.id ? rest : x) }));
+    setEditing(null);
+  }
+
+  const resultColor = { pass: '#1A5C35', fail: '#B5453A', conditional: '#856404' };
+  const resultBg = { pass: '#D6F0E0', fail: '#FBEAE7', conditional: '#FFF3CD' };
+
+  return (
+    <div style={styles.page}>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 24 }}>
+        <div><h1 className="serif" style={styles.h1}>Inprocess QA</h1><p style={styles.muted}>Record quality checks done during production.</p></div>
+        {canEdit && <button onClick={() => setEditing({ _isNew: true, date: new Date().toISOString().slice(0,10), productionOrderId: '', checkType: '', findings: '', result: 'pass', checkedBy: '' })} style={styles.primaryBtn}><Plus size={15} /> New QA Record</button>}
+      </div>
+      <div style={styles.list}>
+        {items.length === 0 && <div style={styles.emptyBox}>No inprocess QA records yet.</div>}
+        {items.map(item => {
+          const po = productionOrders.find(p => p.id === item.productionOrderId);
+          return (
+            <div key={item.id} style={styles.recordRow}>
+              <div style={{ flex: 1 }}>
+                <div style={{ fontWeight: 600, fontSize: 14 }}>{item.checkType || 'QA Check'} · {item.date}</div>
+                <div style={{ fontSize: 12, color: '#888', marginTop: 2 }}>{po ? `${po.number}${po.batchNumber ? ` · Batch: ${po.batchNumber}` : ''}` : 'No order linked'} · By: {item.checkedBy || '—'}</div>
+                {item.findings && <div style={{ fontSize: 12, color: '#555', marginTop: 3 }}>{item.findings}</div>}
+              </div>
+              <span style={{ background: resultBg[item.result] || '#EEEDE6', color: resultColor[item.result] || '#5F5E5A', padding: '3px 10px', borderRadius: 20, fontSize: 12, fontWeight: 600 }}>{item.result || 'pass'}</span>
+              {canEdit && <div style={{ display: 'flex', gap: 6 }}><button onClick={() => setEditing(item)} style={styles.iconBtn}><Pencil size={14} /></button><button onClick={() => { if (window.confirm('Delete?')) setQualityDocs(prev => ({ ...prev, inprocessQA: prev.inprocessQA.filter(x => x.id !== item.id) })); }} style={{ ...styles.iconBtn, color: '#B5453A' }}><Trash2 size={14} /></button></div>}
+            </div>
+          );
+        })}
+      </div>
+      {editing && (
+        <Modal title={editing._isNew ? 'New Inprocess QA' : 'Edit QA Record'} onClose={() => setEditing(null)} wide>
+          <InprocessQAForm item={editing} productionOrders={productionOrders} onSave={save} onClose={() => setEditing(null)} />
+        </Modal>
+      )}
+    </div>
+  );
+}
+
+function InprocessQAForm({ item, productionOrders, onSave, onClose }) {
+  const [form, setForm] = useState({ ...item });
+  function set(k, v) { setForm(f => ({ ...f, [k]: v })); }
+  return (
+    <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 14 }}>
+      <div style={styles.formGroup}><label style={styles.label}>Date</label><input type="date" value={form.date} onChange={e => set('date', e.target.value)} style={styles.input} /></div>
+      <div style={styles.formGroup}><label style={styles.label}>Production Order</label>
+        <select value={form.productionOrderId} onChange={e => set('productionOrderId', e.target.value)} style={styles.input}>
+          <option value="">— None —</option>
+          {productionOrders.map(p => <option key={p.id} value={p.id}>{p.number}{p.batchNumber ? ` (${p.batchNumber})` : ''}</option>)}
+        </select>
+      </div>
+      <div style={styles.formGroup}><label style={styles.label}>Check Type</label><input value={form.checkType} onChange={e => set('checkType', e.target.value)} style={styles.input} placeholder="e.g. Dimensional, Visual, Functional" /></div>
+      <div style={styles.formGroup}><label style={styles.label}>Checked By</label><input value={form.checkedBy} onChange={e => set('checkedBy', e.target.value)} style={styles.input} placeholder="Inspector name" /></div>
+      <div style={styles.formGroup}><label style={styles.label}>Result</label>
+        <select value={form.result} onChange={e => set('result', e.target.value)} style={styles.input}>
+          <option value="pass">Pass</option><option value="conditional">Conditional Pass</option><option value="fail">Fail</option>
+        </select>
+      </div>
+      <div style={styles.formGroup}><label style={styles.label}>Reference Standard</label><input value={form.standard || ''} onChange={e => set('standard', e.target.value)} style={styles.input} placeholder="e.g. ISO 9001:2015" /></div>
+      <div style={{ ...styles.formGroup, gridColumn: '1 / -1' }}><label style={styles.label}>Findings / Observations</label><textarea value={form.findings} onChange={e => set('findings', e.target.value)} style={{ ...styles.input, minHeight: 70 }} /></div>
+      <div style={{ gridColumn: '1 / -1', display: 'flex', justifyContent: 'flex-end', gap: 10 }}>
+        <button style={styles.ghostBtn} onClick={onClose}>Cancel</button>
+        <button style={styles.primaryBtn} onClick={() => { if (!form.checkType) return alert('Check type required'); onSave(form); }}>Save</button>
+      </div>
+    </div>
+  );
+}
+
+// ─── QA Testing + PDV (Production Delivery Voucher) ───────────────────────────
+function QATestingView({ productionOrders, setProductionOrders, pdvs, setPdvs, setStockLedger, boms, items, userRole, businessInfo }) {
+  const [viewingPdv, setViewingPdv] = useState(null);
+  const pending = productionOrders.filter(o => o.status === 'pending_qa');
+  const approved = pdvs;
+  const canApprove = userRole === 'admin' || userRole === 'manager' || userRole === 'inventory';
+
+  function handleQADecision(orderId, decision, note = '') {
+    const now = Date.now();
+    const order = productionOrders.find(o => o.id === orderId);
+    if (!order) return;
+
+    if (decision === 'approve') {
+      // Generate PDV
+      const pdv = {
+        id: crypto.randomUUID(),
+        pdvNumber: `PDV-${new Date().toISOString().slice(0,7).replace('-','/')}-${String(pdvs.length + 1).padStart(3,'0')}`,
+        productionOrderId: orderId,
+        orderNumber: order.number,
+        batchNumber: order.batchNumber || '',
+        bomId: order.bomId,
+        quantity: order.quantity,
+        date: new Date().toISOString().slice(0,10),
+        approvedAt: now,
+        approvedBy: userRole,
+        status: 'approved',
+        note,
+      };
+      setPdvs(prev => [...prev, pdv]);
+
+      // Auto-update stock ledger (same logic as completed)
+      const bom = boms.find(b => b.id === order.bomId);
+      if (bom && setStockLedger) {
+        const factor = (order.quantity || 1) / (bom.outputQty || 1);
+        const date = new Date().toISOString().slice(0,10);
+        const entries = [];
+        (bom.materials || []).forEach(m => {
+          const rm = items.find(i => i.name === (m.name || ''));
+          if (!rm) return;
+          entries.push({ id: crypto.randomUUID(), date, itemId: rm.id, itemName: rm.name, type: 'out', qty: (parseFloat(m.qty)||0)*factor, sourceType: 'pdv', sourceId: pdv.id, sourceNumber: pdv.pdvNumber, createdAt: now });
+        });
+        const finItem = items.find(i => i.name === bom.outputItem || i.name === bom.name);
+        if (finItem) {
+          entries.push({ id: crypto.randomUUID(), date, itemId: finItem.id, itemName: finItem.name, type: 'in', qty: order.quantity || 1, sourceType: 'pdv', sourceId: pdv.id, sourceNumber: pdv.pdvNumber, createdAt: now });
+        }
+        if (entries.length) setStockLedger(prev => [...prev, ...entries]);
+      }
+
+      setProductionOrders(prev => prev.map(o => o.id === orderId ? { ...o, status: 'completed', completedAt: now, qaApprovedAt: now } : o));
+    } else if (decision === 'reject') {
+      setProductionOrders(prev => prev.map(o => o.id === orderId ? { ...o, status: 'failed', qaRejectedAt: now, qaNote: note } : o));
+    } else if (decision === 'resend') {
+      setProductionOrders(prev => prev.map(o => o.id === orderId ? { ...o, status: 'in_progress', qaResendAt: now, qaNote: note } : o));
+    }
+  }
+
+  return (
+    <div style={styles.page}>
+      <h1 className="serif" style={styles.h1}>QA Testing</h1>
+      <p style={{ ...styles.muted, marginBottom: 24 }}>Review production orders forwarded for quality approval. Approved orders generate a PDV and auto-update stock.</p>
+
+      {/* Pending QA */}
+      <div style={{ fontWeight: 700, fontSize: 13, color: '#1E2A4A', textTransform: 'uppercase', letterSpacing: '0.06em', marginBottom: 10 }}>
+        Pending QA Approval ({pending.length})
+      </div>
+      <div style={styles.list}>
+        {pending.length === 0 && <div style={styles.emptyBox}>No production orders pending QA. Orders forwarded from Production Orders will appear here.</div>}
+        {pending.map(o => (
+          <QAOrderCard key={o.id} order={o} boms={boms} canApprove={canApprove} onDecision={(d, note) => handleQADecision(o.id, d, note)} />
+        ))}
+      </div>
+
+      {/* PDVs issued */}
+      <div style={{ fontWeight: 700, fontSize: 13, color: '#1E2A4A', textTransform: 'uppercase', letterSpacing: '0.06em', margin: '32px 0 10px' }}>
+        Production Delivery Vouchers — PDV ({approved.length})
+      </div>
+      <div style={styles.list}>
+        {approved.length === 0 && <div style={styles.emptyBox}>No PDVs generated yet.</div>}
+        {approved.map(pdv => (
+          <div key={pdv.id} style={styles.recordRow}>
+            <div style={{ flex: 1 }}>
+              <div style={{ fontWeight: 600, fontSize: 14 }}>{pdv.pdvNumber}</div>
+              <div style={{ fontSize: 12, color: '#888', marginTop: 2 }}>Order: {pdv.orderNumber}{pdv.batchNumber ? ` · Batch: ${pdv.batchNumber}` : ''} · {pdv.date} · Qty: {pdv.quantity}</div>
+            </div>
+            <span style={{ background: '#D6F0E0', color: '#1A5C35', padding: '3px 10px', borderRadius: 20, fontSize: 12, fontWeight: 600 }}>QA Approved</span>
+            <button onClick={() => setViewingPdv(pdv)} style={styles.iconBtn}><Printer size={14} /></button>
+          </div>
+        ))}
+      </div>
+
+      {viewingPdv && <PDVPrintModal pdv={viewingPdv} boms={boms} items={items} businessInfo={businessInfo} onClose={() => setViewingPdv(null)} />}
+    </div>
+  );
+}
+
+function QAOrderCard({ order, boms, canApprove, onDecision }) {
+  const [mode, setMode] = useState(null); // null | 'approve' | 'reject' | 'resend'
+  const [note, setNote] = useState('');
+  const bom = boms.find(b => b.id === order.bomId);
+
+  function submit() {
+    onDecision(mode, note);
+    setMode(null); setNote('');
+  }
+
+  return (
+    <div style={{ ...styles.recordRow, flexDirection: 'column', alignItems: 'stretch', gap: 10 }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+        <div style={{ flex: 1 }}>
+          <div style={{ fontWeight: 600, fontSize: 14 }}>{order.number} — {bom?.name || 'Unknown BOM'}</div>
+          <div style={{ fontSize: 12, color: '#888', marginTop: 2 }}>
+            {order.quantity} units{order.batchNumber ? ` · Batch: ${order.batchNumber}` : ''} · Start: {order.startDate || '—'}
+          </div>
+          {order.qaNote && <div style={{ fontSize: 12, color: '#B5453A', marginTop: 3 }}>Previous note: {order.qaNote}</div>}
+        </div>
+        <span style={{ background: '#EDE6F9', color: '#5B2DA0', padding: '3px 10px', borderRadius: 20, fontSize: 12, fontWeight: 600 }}>Pending QA</span>
+        {canApprove && !mode && (
+          <div style={{ display: 'flex', gap: 6 }}>
+            <button onClick={() => setMode('approve')} style={{ ...styles.ghostBtn, fontSize: 12, background: '#D6F0E0', color: '#1A5C35', border: 'none' }}>Approve</button>
+            <button onClick={() => setMode('resend')} style={{ ...styles.ghostBtn, fontSize: 12, background: '#FFF3CD', color: '#856404', border: 'none' }}>Resend</button>
+            <button onClick={() => setMode('reject')} style={{ ...styles.ghostBtn, fontSize: 12, background: '#FBEAE7', color: '#B5453A', border: 'none' }}>Reject</button>
+          </div>
+        )}
+      </div>
+      {mode && (
+        <div style={{ background: '#F8F5EE', borderRadius: 8, padding: 12, display: 'flex', gap: 10, alignItems: 'flex-end' }}>
+          <div style={{ flex: 1 }}>
+            <label style={{ fontSize: 12, fontWeight: 600, color: '#555', display: 'block', marginBottom: 4 }}>
+              {mode === 'approve' ? 'Approval note (optional)' : mode === 'resend' ? 'Reason to resend' : 'Rejection reason'}
+            </label>
+            <input value={note} onChange={e => setNote(e.target.value)} style={{ ...styles.input, margin: 0 }} placeholder={mode === 'approve' ? 'All checks passed...' : 'Describe the issue...'} />
+          </div>
+          <button onClick={submit} style={{ ...styles.primaryBtn, background: mode === 'approve' ? '#1A5C35' : mode === 'reject' ? '#B5453A' : '#856404' }}>
+            {mode === 'approve' ? 'Confirm Approve' : mode === 'resend' ? 'Resend to Production' : 'Confirm Reject'}
+          </button>
+          <button onClick={() => setMode(null)} style={styles.ghostBtn}>Cancel</button>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function PDVPrintModal({ pdv, boms, items, businessInfo, onClose }) {
+  const bom = boms.find(b => b.id === pdv.bomId);
+  const bi = businessInfo || {};
+  return (
+    <PrintModal title="Production Delivery Voucher" onClose={onClose}>
+      <div style={{ padding: '0 8px' }}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 24 }}>
+          <div>
+            <div style={{ fontWeight: 700, fontSize: 20, color: '#1E2A4A' }}>{bi.name || 'Company Name'}</div>
+            <div style={{ fontSize: 12, color: '#888' }}>{bi.address}</div>
+          </div>
+          <div style={{ textAlign: 'right' }}>
+            <div style={{ fontSize: 22, fontWeight: 700, color: '#1E2A4A' }}>PDV</div>
+            <div style={{ fontSize: 13, color: '#666' }}>{pdv.pdvNumber}</div>
+          </div>
+        </div>
+        <table style={{ width: '100%', borderCollapse: 'collapse', marginBottom: 20, fontSize: 13 }}>
+          <tbody>
+            {[['Production Order', pdv.orderNumber], ['Batch Number', pdv.batchNumber || '—'], ['Date', pdv.date], ['Quantity', pdv.quantity], ['Status', 'QA Approved']].map(([k,v]) => (
+              <tr key={k} style={{ borderBottom: '1px solid #EAE6DB' }}>
+                <td style={{ padding: '7px 0', fontWeight: 600, color: '#555', width: '40%' }}>{k}</td>
+                <td style={{ padding: '7px 0' }}>{v}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+        {bom && (
+          <div>
+            <div style={{ fontWeight: 700, marginBottom: 8 }}>Output: {bom.outputItem || bom.name}</div>
+            <div style={{ fontWeight: 600, fontSize: 12, color: '#888', marginBottom: 6 }}>COMPONENTS CONSUMED</div>
+            <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12 }}>
+              <thead><tr style={{ background: '#1E2A4A', color: '#fff' }}><th style={{ padding: '6px 10px', textAlign: 'left' }}>Material</th><th style={{ padding: '6px 10px', textAlign: 'right' }}>Qty</th></tr></thead>
+              <tbody>{(bom.materials || []).map((m, i) => <tr key={i} style={{ borderBottom: '1px solid #EAE6DB' }}><td style={{ padding: '6px 10px' }}>{m.name || m.materialId}</td><td style={{ padding: '6px 10px', textAlign: 'right' }}>{(parseFloat(m.qty)||0) * (pdv.quantity||1)} {m.unit}</td></tr>)}</tbody>
+            </table>
+          </div>
+        )}
+        {pdv.note && <div style={{ marginTop: 16, background: '#F8F5EE', padding: 12, borderRadius: 8, fontSize: 13 }}><strong>QA Note:</strong> {pdv.note}</div>}
+        <div style={{ marginTop: 48, display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 24 }}>
+          {['Production', 'QA', 'Store'].map(label => (
+            <div key={label} style={{ textAlign: 'center' }}>
+              <div style={{ borderTop: '1px solid #333', paddingTop: 8, fontSize: 11, color: '#888' }}>{label} Signature</div>
+            </div>
+          ))}
+        </div>
+      </div>
+    </PrintModal>
+  );
+}
+
+// ─── Shared Quality Doc Form ──────────────────────────────────────────────────
+function QualityDocForm({ item, fields, onSave, onClose }) {
+  const [form, setForm] = React.useState({ ...item });
+  function set(k, v) { setForm(f => ({ ...f, [k]: v })); }
+  const titleField = fields.find(f => f.key === 'title');
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
+      {fields.map(f => (
+        <div key={f.key} style={styles.formGroup}>
+          <label style={styles.label}>{f.label}</label>
+          {f.multiline
+            ? <textarea value={form[f.key] || ''} onChange={e => set(f.key, e.target.value)} style={{ ...styles.input, minHeight: 90, resize: 'vertical' }} placeholder={f.placeholder || ''} />
+            : <input value={form[f.key] || ''} onChange={e => set(f.key, e.target.value)} style={styles.input} placeholder={f.placeholder || ''} />
+          }
+        </div>
+      ))}
+      <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 10 }}>
+        <button style={styles.ghostBtn} onClick={onClose}>Cancel</button>
+        <button style={styles.primaryBtn} onClick={() => { if (titleField && !form[titleField.key]) return alert(`${titleField.label} required`); onSave(form); }}>Save</button>
+      </div>
+    </div>
+  );
+}
+
+// ─── MEP Suite (Primavera-style Project Control) ──────────────────────────────
+
+// ── MEP Constants ──────────────────────────────────────────────────────────────
+const MEP_DISCIPLINES = ['Electrical','Plumbing','HVAC','Firefighting','Civil','IT/Networking','Other'];
+const MEP_PHASES = ['Mobilisation','Rough-in / First Fix','Second Fix','Testing & Commissioning','Snagging','Handover'];
+const MEP_UNITS = ['%','m','m²','m³','kg','nos','sets','points','circuits','floors','rooms'];
+
+// ── Helper: compute activity progress (latest cumulative %) ────────────────────
+function getActivityProgress(actId, progressUpdates) {
+  const updates = progressUpdates.filter(u => u.activityId === actId).sort((a,b)=>(b.date||'').localeCompare(a.date||''));
+  return updates.length ? (updates[0].cumulativePct || 0) : 0;
+}
+
+// ── Site Projects (MEP) ────────────────────────────────────────────────────────
+function MEPProjectsView({ siteProjects, setSiteProjects, employees, siteActivities, progressUpdates, userRole }) {
+  const [editing, setEditing] = useState(null);
+  const [selected, setSelected] = useState(null);
+  const canEdit = userRole === 'admin' || userRole === 'manager';
+
+  function save(form) {
+    const rec = { ...form, id: form.id || crypto.randomUUID() };
+    setSiteProjects(prev => form.id ? prev.map(p => p.id === form.id ? rec : p) : [...prev, rec]);
+    setEditing(null);
+  }
+  function del(id) { if (confirm('Delete project and all its data?')) setSiteProjects(prev => prev.filter(p => p.id !== id)); }
+
+  function projectProgress(proj) {
+    const acts = siteActivities.filter(a => a.projectId === proj.id);
+    if (!acts.length) return 0;
+    const totalWeight = acts.reduce((s,a) => s + (parseFloat(a.weight)||1), 0);
+    const weightedPct = acts.reduce((s,a) => {
+      const pct = getActivityProgress(a.id, progressUpdates);
+      return s + pct * (parseFloat(a.weight)||1);
+    }, 0);
+    return totalWeight ? Math.round(weightedPct / totalWeight) : 0;
+  }
+
+  const STATUS_COLOR = { planning:'#C9A24B', active:'#1A7A3E', on_hold:'#B5453A', completed:'#3D7A5C' };
+
+  if (selected) {
+    const proj = siteProjects.find(p => p.id === selected);
+    if (!proj) { setSelected(null); return null; }
+    const acts = siteActivities.filter(a => a.projectId === proj.id);
+    const overallPct = projectProgress(proj);
+    // Group by villa
+    const villas = proj.villas || [];
+    return (
+      <div style={styles.page}>
+        <div style={{ display:'flex', alignItems:'center', gap:10, marginBottom:18 }}>
+          <button style={styles.ghostBtn} onClick={() => setSelected(null)}>← Back</button>
+          <div>
+            <h2 className="serif" style={styles.h2}>{proj.name}</h2>
+            <div style={{ fontSize:12, color:'#888' }}>{proj.client} · {proj.location}</div>
+          </div>
+          <div style={{ marginLeft:'auto', display:'flex', gap:8 }}>
+            {canEdit && <button style={styles.ghostBtn} onClick={() => setEditing(proj)}>Edit Project</button>}
+          </div>
+        </div>
+        {/* Overall progress */}
+        <div style={{ background:'#fff', border:'1px solid #EAE6DB', borderRadius:12, padding:'16px 20px', marginBottom:16 }}>
+          <div style={{ display:'flex', justifyContent:'space-between', marginBottom:8 }}>
+            <span style={{ fontWeight:600, fontSize:14 }}>Overall Completion</span>
+            <span style={{ fontWeight:700, fontSize:18, color: overallPct===100?'#1A7A3E':'#1E2A4A' }}>{overallPct}%</span>
+          </div>
+          <div style={{ background:'#EAE6DB', borderRadius:6, height:10 }}>
+            <div style={{ width:`${overallPct}%`, background:overallPct===100?'#1A7A3E':'#1E2A4A', borderRadius:6, height:10, transition:'width 0.4s' }} />
+          </div>
+          <div style={{ display:'grid', gridTemplateColumns:'repeat(4,1fr)', gap:10, marginTop:14 }}>
+            {[['Villas',(proj.villas||[]).length,''],['Activities',acts.length,''],
+              ['In Progress',acts.filter(a=>getActivityProgress(a.id,progressUpdates)>0&&getActivityProgress(a.id,progressUpdates)<100).length,'#C9A24B'],
+              ['Completed',acts.filter(a=>getActivityProgress(a.id,progressUpdates)>=100).length,'#1A7A3E']].map(([l,v,c])=>(
+              <div key={l} style={{ textAlign:'center', background:'#FAF8F4', borderRadius:8, padding:'8px 4px' }}>
+                <div style={{ fontSize:20, fontWeight:700, color:c||'#1E2A4A' }}>{v}</div>
+                <div style={{ fontSize:11, color:'#888' }}>{l}</div>
+              </div>
+            ))}
+          </div>
+        </div>
+        {/* Villa progress cards */}
+        <div style={{ display:'grid', gridTemplateColumns:'repeat(auto-fill, minmax(280px, 1fr))', gap:12 }}>
+          {villas.map(v => {
+            const villActs = acts.filter(a => a.villaId === v.id);
+            const villaPct = villActs.length ? Math.round(villActs.reduce((s,a)=>s+getActivityProgress(a.id,progressUpdates),0)/villActs.length) : 0;
+            return (
+              <div key={v.id} style={{ background:'#fff', border:'1px solid #EAE6DB', borderRadius:10, padding:'14px 16px' }}>
+                <div style={{ display:'flex', justifyContent:'space-between', marginBottom:8 }}>
+                  <span style={{ fontWeight:600, fontSize:13 }}>{v.name}</span>
+                  <span style={{ fontWeight:700, fontSize:15, color:villaPct===100?'#1A7A3E':'#1E2A4A' }}>{villaPct}%</span>
+                </div>
+                <div style={{ background:'#EAE6DB', borderRadius:4, height:6, marginBottom:10 }}>
+                  <div style={{ width:`${villaPct}%`, background:villaPct===100?'#1A7A3E':'#C9A24B', borderRadius:4, height:6 }} />
+                </div>
+                {MEP_DISCIPLINES.slice(0,6).map(disc => {
+                  const discActs = villActs.filter(a=>a.discipline===disc);
+                  if (!discActs.length) return null;
+                  const discPct = Math.round(discActs.reduce((s,a)=>s+getActivityProgress(a.id,progressUpdates),0)/discActs.length);
+                  return (
+                    <div key={disc} style={{ display:'flex', justifyContent:'space-between', fontSize:12, color:'#555', marginBottom:3 }}>
+                      <span>{disc}</span>
+                      <span style={{ fontWeight:600, color:discPct===100?'#1A7A3E':discPct>0?'#C9A24B':'#aaa' }}>{discPct}%</span>
+                    </div>
+                  );
+                })}
+                <div style={{ fontSize:11, color:'#aaa', marginTop:6 }}>{villActs.length} activities</div>
+              </div>
+            );
+          })}
+          {villas.length === 0 && <div style={{ color:'#aaa', fontSize:13 }}>No villas set up. Edit the project to add villas.</div>}
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div style={styles.page}>
+      <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', marginBottom:18 }}>
+        <div>
+          <h2 className="serif" style={styles.h2}>MEP Projects</h2>
+          <p style={styles.muted}>{siteProjects.length} project{siteProjects.length!==1?'s':''}</p>
+        </div>
+        {canEdit && <button style={styles.primaryBtn} onClick={() => setEditing({ _isNew:true, status:'active', villas:[], disciplines:[...MEP_DISCIPLINES] })}>+ New Project</button>}
+      </div>
+      <div style={{ display:'grid', gridTemplateColumns:'repeat(auto-fill, minmax(320px, 1fr))', gap:14 }}>
+        {siteProjects.map(proj => {
+          const pct = projectProgress(proj);
+          const acts = siteActivities.filter(a=>a.projectId===proj.id);
+          return (
+            <div key={proj.id} style={{ background:'#fff', border:'1px solid #EAE6DB', borderRadius:12, padding:'16px 18px', cursor:'pointer' }} onClick={() => setSelected(proj.id)}>
+              <div style={{ display:'flex', justifyContent:'space-between', marginBottom:6 }}>
+                <div style={{ fontWeight:600, fontSize:14, color:'#1E2A4A' }}>{proj.name}</div>
+                <span style={{ fontSize:11, fontWeight:700, color:STATUS_COLOR[proj.status]||'#888', background:'#F5F3EE', borderRadius:6, padding:'2px 8px', textTransform:'uppercase' }}>{proj.status}</span>
+              </div>
+              <div style={{ fontSize:12, color:'#666', marginBottom:8 }}>📍 {proj.location} · {proj.client}</div>
+              <div style={{ marginBottom:6 }}>
+                <div style={{ display:'flex', justifyContent:'space-between', fontSize:12, marginBottom:4 }}>
+                  <span>{(proj.villas||[]).length} villas · {acts.length} activities</span>
+                  <span style={{ fontWeight:700, color:pct===100?'#1A7A3E':'#1E2A4A' }}>{pct}%</span>
+                </div>
+                <div style={{ background:'#EAE6DB', borderRadius:4, height:6 }}>
+                  <div style={{ width:`${pct}%`, background:pct===100?'#1A7A3E':'#C9A24B', borderRadius:4, height:6 }} />
+                </div>
+              </div>
+              <div style={{ fontSize:11.5, color:'#888' }}>{proj.startDate} → {proj.endDate||'ongoing'}</div>
+              {canEdit && (
+                <div style={{ display:'flex', gap:8, marginTop:10 }} onClick={e=>e.stopPropagation()}>
+                  <button style={{ ...styles.ghostBtn, fontSize:12 }} onClick={() => setEditing(proj)}>Edit</button>
+                  <button style={{ ...styles.ghostBtn, fontSize:12, color:'#B5453A' }} onClick={() => del(proj.id)}>Delete</button>
+                </div>
+              )}
+            </div>
+          );
+        })}
+        {siteProjects.length===0 && <div style={{ color:'#aaa', padding:24 }}>No projects yet.</div>}
+      </div>
+      {editing && <MEPProjectForm project={editing} employees={employees} onSave={save} onClose={()=>setEditing(null)} />}
+    </div>
+  );
+}
+
+function MEPProjectForm({ project, employees, onSave, onClose }) {
+  const [form, setForm] = useState({
+    name:'', client:'', location:'', startDate:'', endDate:'', status:'active',
+    teamIds:[], disciplines:[...MEP_DISCIPLINES], villas:[], description:'', contractRef:'',
+    ...project,
+  });
+  const [newVilla, setNewVilla] = useState('');
+  function set(k,v) { setForm(f=>({...f,[k]:v})); }
+  function addVilla() {
+    if (!newVilla.trim()) return;
+    set('villas', [...form.villas, { id: crypto.randomUUID(), name: newVilla.trim() }]);
+    setNewVilla('');
+  }
+  function removeVilla(id) { set('villas', form.villas.filter(v=>v.id!==id)); }
+  function toggleDisc(d) { set('disciplines', form.disciplines.includes(d) ? form.disciplines.filter(x=>x!==d) : [...form.disciplines, d]); }
+  function toggleTeam(id) { set('teamIds', form.teamIds.includes(id) ? form.teamIds.filter(x=>x!==id) : [...form.teamIds, id]); }
+  // Bulk add villas
+  function bulkAdd() {
+    const prefix = prompt('Villa name prefix (e.g. "Villa"):', 'Villa');
+    if (!prefix) return;
+    const count = parseInt(prompt('How many villas to add?', '10'), 10);
+    if (!count || count < 1) return;
+    const existing = form.villas.length;
+    const newOnes = Array.from({ length: count }, (_,i) => ({ id: crypto.randomUUID(), name: `${prefix} ${existing + i + 1}` }));
+    set('villas', [...form.villas, ...newOnes]);
+  }
+  return (
+    <Modal title={form._isNew ? 'New MEP Project' : 'Edit Project'} onClose={onClose} width={600}>
+      <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:12 }}>
+        {[['name','Project Name *'],['client','Client / Developer *'],['location','Site Location'],['contractRef','Contract / PO Ref']].map(([k,l])=>(
+          <div key={k} style={{ gridColumn: k==='location'||k==='contractRef'?'1/-1':undefined, ...styles.formGroup }}>
+            <label style={styles.label}>{l}</label>
+            <input value={form[k]||''} onChange={e=>set(k,e.target.value)} style={styles.input} />
+          </div>
+        ))}
+        <div style={styles.formGroup}>
+          <label style={styles.label}>Status</label>
+          <select value={form.status} onChange={e=>set('status',e.target.value)} style={styles.input}>
+            {['planning','active','on_hold','completed'].map(s=><option key={s} value={s}>{s.replace('_',' ')}</option>)}
+          </select>
+        </div>
+        <div style={styles.formGroup}></div>
+        <div style={styles.formGroup}>
+          <label style={styles.label}>Start Date</label>
+          <input type="date" value={form.startDate||''} onChange={e=>set('startDate',e.target.value)} style={styles.input} />
+        </div>
+        <div style={styles.formGroup}>
+          <label style={styles.label}>End Date</label>
+          <input type="date" value={form.endDate||''} onChange={e=>set('endDate',e.target.value)} style={styles.input} />
+        </div>
+        <div style={{ gridColumn:'1/-1', ...styles.formGroup }}>
+          <label style={styles.label}>Disciplines in scope</label>
+          <div style={{ display:'flex', flexWrap:'wrap', gap:6, marginTop:6 }}>
+            {MEP_DISCIPLINES.map(d=>(
+              <button key={d} onClick={()=>toggleDisc(d)} style={{ fontSize:12, padding:'4px 10px', borderRadius:20, border:'1px solid #DDD8CC', cursor:'pointer', background:form.disciplines.includes(d)?'#1E2A4A':'#F5F3EE', color:form.disciplines.includes(d)?'#fff':'#444' }}>{d}</button>
+            ))}
+          </div>
+        </div>
+        {/* Villas */}
+        <div style={{ gridColumn:'1/-1', ...styles.formGroup }}>
+          <div style={{ display:'flex', justifyContent:'space-between', marginBottom:6 }}>
+            <label style={styles.label}>Villas / Units ({form.villas.length})</label>
+            <button style={{ ...styles.ghostBtn, fontSize:11 }} onClick={bulkAdd}>+ Bulk add</button>
+          </div>
+          <div style={{ display:'flex', gap:8, marginBottom:8 }}>
+            <input value={newVilla} onChange={e=>setNewVilla(e.target.value)} onKeyDown={e=>e.key==='Enter'&&addVilla()}
+              style={{ ...styles.input, flex:1 }} placeholder='e.g. "Villa 1" then press Enter' />
+            <button style={styles.primaryBtn} onClick={addVilla}>Add</button>
+          </div>
+          <div style={{ display:'flex', flexWrap:'wrap', gap:6, maxHeight:120, overflowY:'auto' }}>
+            {form.villas.map(v=>(
+              <span key={v.id} style={{ fontSize:12, background:'#EAE6DB', borderRadius:8, padding:'3px 10px', display:'flex', alignItems:'center', gap:6 }}>
+                {v.name}
+                <button onClick={()=>removeVilla(v.id)} style={{ border:'none', background:'none', cursor:'pointer', color:'#888', fontSize:12, padding:0 }}>×</button>
+              </span>
+            ))}
+          </div>
+        </div>
+        {/* Team */}
+        {employees.length > 0 && (
+          <div style={{ gridColumn:'1/-1', ...styles.formGroup }}>
+            <label style={styles.label}>Assign Team</label>
+            <div style={{ display:'flex', flexWrap:'wrap', gap:6, marginTop:6 }}>
+              {employees.map(e=>(
+                <button key={e.id} onClick={()=>toggleTeam(e.id)} style={{ fontSize:12, padding:'4px 10px', borderRadius:20, border:'1px solid #DDD8CC', cursor:'pointer', background:form.teamIds.includes(e.id)?'#1E2A4A':'#F5F3EE', color:form.teamIds.includes(e.id)?'#fff':'#444' }}>{e.name}</button>
+              ))}
+            </div>
+          </div>
+        )}
+        <div style={{ gridColumn:'1/-1', ...styles.formGroup }}>
+          <label style={styles.label}>Description / Scope summary</label>
+          <textarea value={form.description||''} onChange={e=>set('description',e.target.value)} style={{ ...styles.input, height:56 }} />
+        </div>
+      </div>
+      <div style={{ display:'flex', justifyContent:'flex-end', gap:10, marginTop:16 }}>
+        <button style={styles.ghostBtn} onClick={onClose}>Cancel</button>
+        <button style={styles.primaryBtn} onClick={()=>{ if(!form.name||!form.client) return alert('Name and client required'); onSave(form); }}>Save Project</button>
+      </div>
+    </Modal>
+  );
+}
+
+// ── Activity Planner (WBS + BOM) ────────────────────────────────────────────────
+// ─── MEP Gantt Chart + Activity Planner ──────────────────────────────────────
+function ActivityPlannerView({ siteActivities, setSiteActivities, siteProjects, progressUpdates, setProgressUpdates, userRole, employees = [] }) {
+  const [selProject, setSelProject] = useState(siteProjects[0]?.id || '');
+  const [editing, setEditing] = useState(null);
+  const [expandedBOM, setExpandedBOM] = useState({});
+  const [viewMode, setViewMode] = useState('gantt'); // 'gantt' | 'table'
+  const [updateModal, setUpdateModal] = useState(null); // activityId
+  const [ganttStart, setGanttStart] = useState(() => {
+    const d = new Date(); d.setDate(1); return d.toISOString().slice(0,10);
+  });
+  const [ganttDays, setGanttDays] = useState(60);
+  const canEdit = userRole === 'admin' || userRole === 'manager';
+  const project = siteProjects.find(p => p.id === selProject);
+  const acts = siteActivities.filter(a => a.projectId === selProject).sort((a,b) => {
+    const vA = (project?.villas||[]).findIndex(v=>v.id===a.villaId);
+    const vB = (project?.villas||[]).findIndex(v=>v.id===b.villaId);
+    if (vA !== vB) return vA - vB;
+    return (a.sequence||0) - (b.sequence||0);
+  });
+
+  function save(form) {
+    const rec = { ...form, id: form.id || crypto.randomUUID(), projectId: selProject };
+    setSiteActivities(prev => form.id ? prev.map(a=>a.id===form.id?rec:a) : [...prev, rec]);
+    setEditing(null);
+  }
+  function del(id) { if (confirm('Delete activity?')) setSiteActivities(prev=>prev.filter(a=>a.id!==id)); }
+  function lockBOM(id) { setSiteActivities(prev=>prev.map(a=>a.id===id?{...a,bomLocked:true}:a)); }
+  function toggleBOM(id) { setExpandedBOM(p=>({...p,[id]:!p[id]})); }
+
+  function getProgress(actId) {
+    const logs = progressUpdates.filter(u => u.activityId === actId);
+    if (!logs.length) return 0;
+    return Math.max(...logs.map(u => parseFloat(u.cumProgress)||0));
+  }
+
+  // Gantt helpers
+  const gStart = new Date(ganttStart);
+  const DAY_W = 28; // px per day
+
+  function dayOffset(dateStr) {
+    if (!dateStr) return null;
+    const d = new Date(dateStr);
+    return Math.round((d - gStart) / 86400000);
+  }
+
+  function formatGanttHeader() {
+    const headers = [];
+    let cur = new Date(gStart);
+    let wk = 0;
+    while (wk < ganttDays) {
+      const mo = cur.toLocaleString('default',{month:'short'});
+      const days = [];
+      while (wk < ganttDays && (days.length === 0 || cur.getDate() !== 1)) {
+        days.push({ d: cur.getDate(), dow: cur.toLocaleString('default',{weekday:'narrow'}), isWeekend: cur.getDay()===0||cur.getDay()===6 });
+        cur = new Date(cur); cur.setDate(cur.getDate()+1); wk++;
+      }
+      headers.push({ month: mo, days });
+    }
+    return headers;
+  }
+  const ganttHeaders = formatGanttHeader();
+
+  if (!siteProjects.length) return (
+    <div style={styles.page}>
+      <h2 className="serif" style={styles.h2}>Activity Planner</h2>
+      <p style={{ color:'#aaa', marginTop:16 }}>Create a project first, then add activities.</p>
+    </div>
+  );
+
+  const villas = project?.villas || [];
+
+  return (
+    <div style={styles.page}>
+      {/* Header */}
+      <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', marginBottom:14, flexWrap:'wrap', gap:8 }}>
+        <div>
+          <h2 className="serif" style={styles.h2}>Activity Planner</h2>
+          <p style={styles.muted}>{acts.length} activities · {project?.name}</p>
+        </div>
+        <div style={{ display:'flex', gap:8, alignItems:'center', flexWrap:'wrap' }}>
+          <select value={selProject} onChange={e=>setSelProject(e.target.value)} style={{ ...styles.input, width:200 }}>
+            {siteProjects.map(p=><option key={p.id} value={p.id}>{p.name}</option>)}
+          </select>
+          <div style={{ display:'flex', border:'1px solid #DDD8CE', borderRadius:8, overflow:'hidden' }}>
+            {[['gantt','📊 Gantt'],['table','📋 Table']].map(([k,l])=>(
+              <button key={k} onClick={()=>setViewMode(k)} style={{ padding:'6px 14px', border:'none', cursor:'pointer', fontSize:12, fontWeight:600, background: viewMode===k ? '#1E2A4A' : '#fff', color: viewMode===k ? '#fff' : '#555' }}>{l}</button>
+            ))}
+          </div>
+          {canEdit && <button style={styles.primaryBtn} onClick={()=>setEditing({ _isNew:true, villaId:'', discipline:(project?.disciplines||MEP_DISCIPLINES)[0], phase:MEP_PHASES[0], weight:5, bom:[], bomLocked:false })}>+ Add Activity</button>}
+        </div>
+      </div>
+
+      {/* GANTT VIEW */}
+      {viewMode === 'gantt' && (
+        <div>
+          {/* Gantt controls */}
+          <div style={{ display:'flex', gap:8, marginBottom:10, alignItems:'center', flexWrap:'wrap' }}>
+            <label style={{ fontSize:12, color:'#888' }}>Start:</label>
+            <input type="date" value={ganttStart} onChange={e=>setGanttStart(e.target.value)} style={{ ...styles.input, width:140, fontSize:12, padding:'4px 8px' }} />
+            <label style={{ fontSize:12, color:'#888' }}>Show:</label>
+            {[30,60,90,120].map(d=>(
+              <button key={d} onClick={()=>setGanttDays(d)} style={{ padding:'4px 10px', border:'1px solid #DDD8CE', borderRadius:6, fontSize:12, cursor:'pointer', background: ganttDays===d ? '#1E2A4A' : '#fff', color: ganttDays===d ? '#fff' : '#555' }}>{d}d</button>
+            ))}
+            <span style={{ fontSize:11, color:'#aaa', marginLeft:8 }}>Click activity bar to log daily update</span>
+          </div>
+
+          {/* Gantt table */}
+          <div style={{ overflowX:'auto', border:'1px solid #EAE6DB', borderRadius:10 }}>
+            <div style={{ display:'flex', minWidth: 380 + ganttDays * DAY_W }}>
+              {/* Left fixed panel */}
+              <div style={{ width:380, flexShrink:0, borderRight:'2px solid #DDD8CE' }}>
+                {/* Header row */}
+                <div style={{ display:'grid', gridTemplateColumns:'120px 90px 1fr', background:'#1E2A4A', color:'#fff', fontSize:11, fontWeight:700, padding:'0 0' }}>
+                  <div style={{ padding:'8px 10px', borderRight:'1px solid #3B4F7A' }}>Discipline</div>
+                  <div style={{ padding:'8px 10px', borderRight:'1px solid #3B4F7A' }}>Progress</div>
+                  <div style={{ padding:'8px 10px' }}>Activity</div>
+                </div>
+                {/* Activity rows */}
+                {acts.map(act => {
+                  const pct = getProgress(act.id);
+                  const villa = villas.find(v=>v.id===act.villaId);
+                  return (
+                    <div key={act.id} style={{ display:'grid', gridTemplateColumns:'120px 90px 1fr', borderBottom:'1px solid #F0EDE6', background:'#FAFAF8', minHeight:36 }}>
+                      <div style={{ padding:'6px 10px', borderRight:'1px solid #EAE6DB', fontSize:11 }}>
+                        <div style={{ fontWeight:600, color:'#1E2A4A', fontSize:11 }}>{act.discipline}</div>
+                        {villa && <div style={{ fontSize:10, color:'#aaa' }}>{villa.name}</div>}
+                      </div>
+                      <div style={{ padding:'6px 10px', borderRight:'1px solid #EAE6DB' }}>
+                        <div style={{ background:'#EAE6DB', borderRadius:3, height:6, marginTop:4 }}>
+                          <div style={{ width:`${pct}%`, background: pct===100?'#1A7A3E':'#C9A24B', borderRadius:3, height:6 }} />
+                        </div>
+                        <div style={{ fontSize:10, color:'#555', marginTop:2, fontWeight:600 }}>{pct}%</div>
+                      </div>
+                      <div style={{ padding:'6px 8px', fontSize:11 }}>
+                        <div style={{ fontWeight:600, color:'#1E2A4A', lineHeight:1.3 }}>{act.name}</div>
+                        <div style={{ fontSize:10, color:'#aaa' }}>{act.phase}</div>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+
+              {/* Right Gantt panel */}
+              <div style={{ flex:1, overflowX:'auto' }}>
+                {/* Month + day headers */}
+                <div style={{ background:'#1E2A4A' }}>
+                  {/* Month row */}
+                  <div style={{ display:'flex', borderBottom:'1px solid #3B4F7A' }}>
+                    {ganttHeaders.map((mo,i) => (
+                      <div key={i} style={{ width: mo.days.length * DAY_W, flexShrink:0, padding:'4px 6px', fontSize:11, fontWeight:700, color:'#C9A24B', borderRight:'1px solid #3B4F7A' }}>{mo.month}</div>
+                    ))}
+                  </div>
+                  {/* Day row */}
+                  <div style={{ display:'flex' }}>
+                    {ganttHeaders.flatMap(mo => mo.days).map((d,i) => (
+                      <div key={i} style={{ width:DAY_W, flexShrink:0, padding:'3px 0', textAlign:'center', fontSize:9, color: d.isWeekend ? '#C9A24B' : '#9BA3C7', borderRight:'1px solid #2D3F6A', fontWeight: d.isWeekend ? 700 : 400 }}>{d.d}</div>
+                    ))}
+                  </div>
+                </div>
+
+                {/* Activity bars */}
+                {acts.map(act => {
+                  const pct = getProgress(act.id);
+                  const startOff = dayOffset(act.plannedStart);
+                  const endOff = dayOffset(act.plannedEnd);
+                  const barLeft = startOff !== null ? Math.max(0, startOff) * DAY_W : null;
+                  const barWidth = (startOff !== null && endOff !== null) ? Math.max(DAY_W, (endOff - startOff + 1) * DAY_W) : null;
+                  return (
+                    <div key={act.id} style={{ height:36, borderBottom:'1px solid #F0EDE6', position:'relative', background: '#FAFAF8', display:'flex', alignItems:'center', width: ganttDays * DAY_W }}
+                      onClick={() => setUpdateModal(act.id)}>
+                      {/* Weekend shading */}
+                      {Array.from({length: ganttDays}).map((_,i) => {
+                        const d = new Date(gStart); d.setDate(d.getDate()+i);
+                        return d.getDay()===0||d.getDay()===6 ? <div key={i} style={{ position:'absolute', left:i*DAY_W, width:DAY_W, top:0, bottom:0, background:'rgba(201,162,75,0.06)' }} /> : null;
+                      })}
+                      {/* Gantt bar */}
+                      {barLeft !== null && barWidth !== null && (
+                        <div style={{ position:'absolute', left:barLeft, width:barWidth, height:18, borderRadius:4, background:'#DDD8CE', overflow:'hidden', cursor:'pointer' }} title={`${act.name} — click to update`}>
+                          <div style={{ width:`${pct}%`, height:'100%', background: pct===100?'#1A7A3E':'#1E7A9A', borderRadius:4 }} />
+                          <span style={{ position:'absolute', left:6, top:2, fontSize:10, fontWeight:700, color:'#fff', whiteSpace:'nowrap', overflow:'hidden', textOverflow:'ellipsis', maxWidth:barWidth-12 }}>{act.name} {pct>0?`${pct}%`:''}</span>
+                        </div>
+                      )}
+                      {barLeft === null && (
+                        <div style={{ position:'absolute', left:8, fontSize:10, color:'#ccc', fontStyle:'italic' }}>No dates set — click to update</div>
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* TABLE VIEW */}
+      {viewMode === 'table' && (
+        <div>
+          {[...villas.map(v=>({ v, items: acts.filter(a=>a.villaId===v.id) })), ...(acts.filter(a=>!a.villaId).length?[{v:{id:'__none',name:'Project-wide'},items:acts.filter(a=>!a.villaId)}]:[])].map(({v,items})=>(
+            <div key={v.id} style={{ marginBottom:20 }}>
+              <div style={{ ...styles.dashSection, fontSize:12, marginBottom:8 }}>🏠 {v.name} ({items.length})</div>
+              <div style={{ overflowX:'auto' }}>
+                <table style={{ ...styles.table, fontSize:12 }}>
+                  <thead>
+                    <tr style={{ background:'#F5F3EE' }}>
+                      {['Discipline','Phase','Activity','Start','End','Dur','Wt%','Progress','Contract Val','BOM',''].map(h=>(
+                        <th key={h} style={{ ...styles.th, whiteSpace:'nowrap' }}>{h}</th>
+                      ))}
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {items.map(act => {
+                      const pct = getProgress(act.id, progressUpdates);
+                      return (
+                        <React.Fragment key={act.id}>
+                          <tr style={{ borderTop:'1px solid #EAE6DB' }}>
+                            <td style={styles.td}><span style={{ fontWeight:600, color:'#1E2A4A' }}>{act.discipline}</span></td>
+                            <td style={styles.td}><span style={{ fontSize:11, color:'#888' }}>{act.phase}</span></td>
+                            <td style={styles.td}>{act.name}</td>
+                            <td style={{ ...styles.td, color:'#555' }}>{act.plannedStart||'—'}</td>
+                            <td style={{ ...styles.td, color:'#555' }}>{act.plannedEnd||'—'}</td>
+                            <td style={{ ...styles.td, textAlign:'center' }}>{act.duration||'—'}</td>
+                            <td style={{ ...styles.td, textAlign:'center' }}>{act.weight||0}%</td>
+                            <td style={{ ...styles.td, minWidth:100 }}>
+                              <div style={{ display:'flex', alignItems:'center', gap:6 }}>
+                                <div style={{ flex:1, background:'#EAE6DB', borderRadius:3, height:5 }}>
+                                  <div style={{ width:`${pct}%`, background:pct===100?'#1A7A3E':'#C9A24B', borderRadius:3, height:5 }} />
+                                </div>
+                                <span style={{ fontSize:11, fontWeight:600, color:pct===100?'#1A7A3E':'#555', width:28 }}>{pct}%</span>
+                              </div>
+                            </td>
+                            <td style={{ ...styles.td, textAlign:'right' }}>{act.contractValue ? act.contractValue.toLocaleString() : '—'}</td>
+                            <td style={styles.td}>
+                              <button onClick={()=>toggleBOM(act.id)} style={{ ...styles.ghostBtn, fontSize:11, padding:'2px 8px' }}>{(act.bom||[]).length} items {expandedBOM[act.id]?'▲':'▼'}</button>
+                              {act.bomLocked && <span style={{ fontSize:10, color:'#1A7A3E', marginLeft:4 }}>🔒</span>}
+                            </td>
+                            <td style={styles.td}>
+                              {canEdit && (
+                                <div style={{ display:'flex', gap:4 }}>
+                                  <button style={{ ...styles.ghostBtn, fontSize:11, padding:'2px 7px' }} onClick={()=>setUpdateModal(act.id)}>📝 Update</button>
+                                  <button style={{ ...styles.ghostBtn, fontSize:11, padding:'2px 7px' }} onClick={()=>setEditing(act)}>Edit</button>
+                                  <button style={{ ...styles.ghostBtn, fontSize:11, padding:'2px 7px', color:'#B5453A' }} onClick={()=>del(act.id)}>×</button>
+                                </div>
+                              )}
+                            </td>
+                          </tr>
+                          {expandedBOM[act.id] && (
+                            <tr><td colSpan={11} style={{ padding:'0 0 8px 16px', background:'#FDFCF9' }}>
+                              <BOMInlineEditor activity={act} onUpdate={updated=>setSiteActivities(prev=>prev.map(a=>a.id===act.id?updated:a))} canEdit={canEdit&&!act.bomLocked} />
+                              {canEdit && !act.bomLocked && <button style={{ ...styles.ghostBtn, fontSize:11, color:'#1A7A3E', marginTop:6 }} onClick={()=>lockBOM(act.id)}>🔒 Lock BOM</button>}
+                            </td></tr>
+                          )}
+                        </React.Fragment>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+
+      {editing && <ActivityForm activity={editing} project={project} onSave={save} onClose={()=>setEditing(null)} />}
+      {updateModal && (
+        <DailyUpdateModal
+          activityId={updateModal}
+          activity={acts.find(a=>a.id===updateModal)}
+          project={project}
+          progressUpdates={progressUpdates}
+          setProgressUpdates={setProgressUpdates}
+          employees={employees}
+          onClose={()=>setUpdateModal(null)}
+        />
+      )}
+    </div>
+  );
+}
+
+// ─── Daily Update Modal (from Gantt click) ───────────────────────────────────
+function DailyUpdateModal({ activityId, activity, project, progressUpdates, setProgressUpdates, employees, onClose }) {
+  const today = new Date().toISOString().slice(0,10);
+  const lastLog = progressUpdates.filter(u=>u.activityId===activityId).sort((a,b)=>b.date.localeCompare(a.date))[0];
+  const lastPct = lastLog ? parseFloat(lastLog.cumProgress)||0 : 0;
+
+  const [form, setForm] = useState({
+    date: today,
+    cumProgress: lastPct,
+    mpCount: '',
+    totalManhours: '',
+    empHours: [],
+    materialConsumed: [],
+    notes: '',
+  });
+  const [saved, setSaved] = useState(false);
+  const set = (k,v) => setForm(p=>({...p,[k]:v}));
+
+  function setEmpHour(empId, hours) {
+    setForm(p => {
+      const existing = p.empHours.filter(e=>e.empId!==empId);
+      return { ...p, empHours: hours ? [...existing, {empId, hours:parseFloat(hours)||0}] : existing };
+    });
+  }
+
+  function addMaterial() { setForm(p=>({...p, materialConsumed:[...p.materialConsumed,{id:Date.now().toString(36)+Math.random().toString(36).slice(2),name:'',qty:'',unit:'nos'}]})); }
+  function updateMat(id,k,v) { setForm(p=>({...p,materialConsumed:p.materialConsumed.map(m=>m.id===id?{...m,[k]:v}:m)})); }
+  function removeMat(id) { setForm(p=>({...p,materialConsumed:p.materialConsumed.filter(m=>m.id!==id)})); }
+
+  function handleSave() {
+    if (!form.date) { alert('Select a date'); return; }
+    const rec = {
+      id: Date.now().toString(36) + Math.random().toString(36).slice(2),
+      activityId, projectId: project?.id || '',
+      ...form,
+      cumProgress: Number(form.cumProgress) || 0,
+      mpCount: Number(form.mpCount) || 0,
+      totalManhours: Number(form.totalManhours) || 0,
+    };
+    setProgressUpdates(prev => [...prev, rec]);
+    setSaved(true);
+    setTimeout(() => { if (typeof onClose === 'function') onClose(); }, 900);
+  }
+
+  const bom = activity?.bom || [];
+  const villas = project?.villas||[];
+  const villa = villas.find(v=>v.id===activity?.villaId);
+
+  return (
+    <Modal onClose={onClose} title={`📝 Daily Update — ${activity?.name||''}`} width={560}>
+      <div style={{ fontSize:12, color:'#888', marginBottom:12 }}>
+        {villa ? `${villa.name} · ` : ''}{activity?.discipline} · {activity?.phase}
+        {lastLog && <span style={{ marginLeft:8, color:'#C9A24B' }}>Last update: {lastLog.date} ({lastPct}%)</span>}
+      </div>
+
+      <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:10, marginBottom:12 }}>
+        <div style={styles.formGroup}>
+          <label style={styles.label}>Date *</label>
+          <input type="date" value={form.date} onChange={e=>set('date',e.target.value)} style={styles.input} />
+        </div>
+        <div style={styles.formGroup}>
+          <label style={styles.label}>Cumulative Progress % <span style={{ color:'#C9A24B' }}>(was {lastPct}%)</span></label>
+          <input type="number" min={lastPct} max={100} value={form.cumProgress} onChange={e=>set('cumProgress',Math.min(100,Math.max(lastPct,+e.target.value)))} style={styles.input} />
+        </div>
+        <div style={styles.formGroup}>
+          <label style={styles.label}>Manpower on site (headcount)</label>
+          <input type="number" min={0} value={form.mpCount} onChange={e=>set('mpCount',e.target.value)} style={styles.input} placeholder="e.g. 5" />
+        </div>
+        <div style={styles.formGroup}>
+          <label style={styles.label}>Total Manhours today</label>
+          <input type="number" min={0} step="0.5" value={form.totalManhours} onChange={e=>set('totalManhours',e.target.value)} style={styles.input} placeholder="e.g. 40" />
+        </div>
+      </div>
+
+      {/* Per-employee hours */}
+      {employees.length > 0 && (
+        <div style={{ marginBottom:12 }}>
+          <div style={{ ...styles.label, marginBottom:6 }}>Employee-wise hours</div>
+          <div style={{ display:'flex', flexDirection:'column', gap:4, maxHeight:140, overflowY:'auto' }}>
+            {employees.map(emp => {
+              const eh = form.empHours.find(e=>e.empId===emp.id);
+              return (
+                <div key={emp.id} style={{ display:'flex', alignItems:'center', gap:10 }}>
+                  <span style={{ fontSize:12, flex:1, color:'#555' }}>{emp.name}</span>
+                  <input type="number" min={0} step="0.5" value={eh?.hours||''} onChange={e=>setEmpHour(emp.id,e.target.value)}
+                    style={{ ...styles.input, width:80, padding:'4px 8px', fontSize:12 }} placeholder="hrs" />
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      )}
+
+      {/* Material consumed */}
+      <div style={{ marginBottom:12 }}>
+        <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', marginBottom:6 }}>
+          <div style={styles.label}>Materials consumed today</div>
+          <button onClick={addMaterial} style={{ ...styles.ghostBtn, fontSize:11 }}>+ Add</button>
+        </div>
+        {bom.length > 0 && form.materialConsumed.length === 0 && (
+          <div style={{ fontSize:11, color:'#aaa', marginBottom:6 }}>
+            BOM items: {bom.map(b=>b.material).join(', ')} — click + Add to log consumption
+          </div>
+        )}
+        {form.materialConsumed.map(m => (
+          <div key={m.id} style={{ display:'grid', gridTemplateColumns:'1fr 80px 70px auto', gap:6, marginBottom:4, alignItems:'center' }}>
+            <input value={m.name} onChange={e=>updateMat(m.id,'name',e.target.value)} style={{ ...styles.input, fontSize:12, padding:'4px 8px' }} placeholder="Material name" list={`bom-${activityId}`} />
+            <input type="number" min={0} value={m.qty} onChange={e=>updateMat(m.id,'qty',e.target.value)} style={{ ...styles.input, fontSize:12, padding:'4px 8px' }} placeholder="Qty" />
+            <input value={m.unit} onChange={e=>updateMat(m.id,'unit',e.target.value)} style={{ ...styles.input, fontSize:12, padding:'4px 8px' }} placeholder="Unit" />
+            <button onClick={()=>removeMat(m.id)} style={{ ...styles.iconBtn, color:'#B5453A' }}>×</button>
+          </div>
+        ))}
+        <datalist id={`bom-${activityId}`}>{bom.map(b=><option key={b.id} value={b.material}/>)}</datalist>
+      </div>
+
+      <div style={styles.formGroup}>
+        <label style={styles.label}>Notes / work done today</label>
+        <textarea value={form.notes} onChange={e=>set('notes',e.target.value)} style={{ ...styles.input, minHeight:60, resize:'vertical' }} placeholder="Describe work completed today..." />
+      </div>
+
+      <div style={{ display:'flex', justifyContent:'flex-end', gap:10, marginTop:8 }}>
+        {!saved && <button onClick={onClose} style={styles.ghostBtn}>Cancel</button>}
+        <button onClick={handleSave} disabled={saved}
+          style={{ ...styles.primaryBtn, background: saved ? '#1A7A3E' : '#1E2A4A', color:'#fff', opacity: saved ? 0.85 : 1 }}>
+          {saved ? '✓ Saved! Updating...' : 'Save Daily Update'}
+        </button>
+      </div>
+    </Modal>
+  );
+}
+
+
+// ─── MEP Reports View ─────────────────────────────────────────────────────────
+function MEPReportsView({ siteProjects, siteActivities, progressUpdates, employees, businessInfo }) {
+  const [selProject, setSelProject] = useState(siteProjects[0]?.id || '');
+  const [reportType, setReportType] = useState('manhour_summary'); // manhour_summary | emp_report | material_report
+  const [fromDate, setFromDate] = useState(() => { const d=new Date(); d.setDate(1); return d.toISOString().slice(0,10); });
+  const [toDate, setToDate] = useState(new Date().toISOString().slice(0,10));
+  const [selEmp, setSelEmp] = useState(employees[0]?.id || '');
+  const [orientation, setOrientation] = useState('landscape'); // landscape | portrait
+  const [useLHMep, setUseLHMep] = useState(!!businessInfo?.letterhead);
+
+  const acts = siteActivities.filter(a => a.projectId === selProject);
+  const project = siteProjects.find(p => p.id === selProject);
+
+  const filteredUpdates = progressUpdates.filter(u =>
+    u.projectId === selProject && u.date >= fromDate && u.date <= toDate
+  );
+
+  // Manhour summary: per activity — date, mp count, manhours, progress
+  const manhourRows = acts.map(act => {
+    const logs = filteredUpdates.filter(u => u.activityId === act.id);
+    const totalMH = logs.reduce((s,u) => s + (parseFloat(u.totalManhours)||0), 0);
+    const totalMP = logs.reduce((s,u) => s + (parseFloat(u.mpCount)||0), 0);
+    const latestPct = logs.length ? Math.max(...logs.map(u=>parseFloat(u.cumProgress)||0)) : 0;
+    const villa = (project?.villas||[]).find(v=>v.id===act.villaId);
+    return { act, logs, totalMH, totalMP, latestPct, villa };
+  }).filter(r => r.logs.length > 0);
+
+  // Employee report: all logs for selected employee
+  const empLogs = filteredUpdates.filter(u =>
+    (u.empHours||[]).some(e => e.empId === selEmp)
+  ).map(u => {
+    const eh = (u.empHours||[]).find(e=>e.empId===selEmp);
+    const act = siteActivities.find(a=>a.id===u.activityId);
+    const villa = (project?.villas||[]).find(v=>v.id===act?.villaId);
+    return { date:u.date, actName:act?.name||'—', villa:villa?.name||'', discipline:act?.discipline||'', hours:eh?.hours||0, notes:u.notes||'' };
+  }).sort((a,b)=>a.date.localeCompare(b.date));
+
+  // Material report: per activity → per material consumed in period
+  const matRows = acts.map(act => {
+    const logs = filteredUpdates.filter(u => u.activityId === act.id);
+    const mats = {};
+    logs.forEach(u => (u.materialConsumed||[]).forEach(m => {
+      if (!m.name) return;
+      if (!mats[m.name]) mats[m.name] = { unit: m.unit, qty: 0 };
+      mats[m.name].qty += parseFloat(m.qty)||0;
+    }));
+    const villa = (project?.villas||[]).find(v=>v.id===act.villaId);
+    return { act, villa, mats: Object.entries(mats).map(([name,v])=>({name,...v})) };
+  }).filter(r => r.mats.length > 0);
+
+  const selectedEmp = employees.find(e=>e.id===selEmp);
+  const empTotalHours = empLogs.reduce((s,r)=>s+r.hours,0);
+
+
+  function handlePrint() {
+    const reportTitles = {
+      manhour_summary: 'Manhour Summary Report',
+      emp_report: `Employee Report — ${selectedEmp?.name || ''}`,
+      material_report: 'Material Consumption Report',
+    };
+    const title = reportTitles[reportType] || 'MEP Report';
+    const period = `${fromDate} to ${toDate}`;
+    const projName = project?.name || '';
+
+    let tableHTML = '';
+
+    if (reportType === 'manhour_summary') {
+      const rows = manhourRows.map(({act,logs,totalMH,totalMP,latestPct,villa}) => `
+        <tr>
+          <td>${villa?.name||'Project-wide'}</td>
+          <td><b>${act.discipline}</b></td>
+          <td>${act.name}</td>
+          <td>${act.phase||''}</td>
+          <td style="text-align:center">${logs.length}</td>
+          <td style="text-align:center">${totalMP}</td>
+          <td style="text-align:center;font-weight:700">${totalMH.toFixed(1)}</td>
+          <td style="text-align:center;font-weight:700;color:${latestPct===100?'#1A7A3E':'#C9A24B'}">${latestPct}%</td>
+        </tr>`).join('');
+      const totMH = manhourRows.reduce((s,r)=>s+r.totalMH,0).toFixed(1);
+      const totMP = manhourRows.reduce((s,r)=>s+r.totalMP,0);
+      tableHTML = `
+        <table>
+          <thead><tr>${['Villa/Unit','Discipline','Activity','Phase','Days Worked','Total MP-days','Total Manhours','Progress %'].map(h=>`<th>${h}</th>`).join('')}</tr></thead>
+          <tbody>${rows}</tbody>
+          <tfoot><tr><td colspan="5" style="text-align:right"><b>TOTAL</b></td><td style="text-align:center"><b>${totMP}</b></td><td style="text-align:center"><b>${totMH}</b></td><td></td></tr></tfoot>
+        </table>
+        <h3>Daily Log Detail</h3>
+        ${manhourRows.map(({act,logs,villa})=>`
+          <h4>${villa?.name?villa.name+' — ':''} ${act.discipline} · ${act.name}</h4>
+          <table>
+            <thead><tr>${['Date','MP Count','Manhours','Progress %','Notes'].map(h=>`<th>${h}</th>`).join('')}</tr></thead>
+            <tbody>${logs.sort((a,b)=>a.date.localeCompare(b.date)).map(u=>`
+              <tr><td>${u.date}</td><td style="text-align:center">${u.mpCount||'—'}</td><td style="text-align:center">${u.totalManhours||'—'}</td><td style="text-align:center">${u.cumProgress}%</td><td>${u.notes||'—'}</td></tr>`).join('')}
+            </tbody>
+          </table>`).join('')}`;
+    } else if (reportType === 'emp_report') {
+      const rows = empLogs.map(r=>`
+        <tr>
+          <td>${r.date}</td><td>${r.villa||'Project-wide'}</td><td>${r.discipline}</td>
+          <td>${r.actName}</td><td style="text-align:center;font-weight:700">${r.hours}</td><td>${r.notes||'—'}</td>
+        </tr>`).join('');
+      tableHTML = `
+        <p><b>Total Days Worked:</b> ${empLogs.length} &nbsp;&nbsp; <b>Total Manhours:</b> ${empTotalHours.toFixed(1)}</p>
+        <table>
+          <thead><tr>${['Date','Villa/Unit','Discipline','Activity','Hours','Notes'].map(h=>`<th>${h}</th>`).join('')}</tr></thead>
+          <tbody>${rows}</tbody>
+          <tfoot><tr><td colspan="4" style="text-align:right"><b>TOTAL HOURS</b></td><td style="text-align:center"><b>${empTotalHours.toFixed(1)}</b></td><td></td></tr></tfoot>
+        </table>`;
+    } else {
+      tableHTML = matRows.map(({act,villa,mats})=>`
+        <h4>${villa?.name?villa.name+' — ':''} ${act.discipline} · ${act.name}</h4>
+        <table>
+          <thead><tr><th>Material</th><th>Total Qty</th><th>Unit</th></tr></thead>
+          <tbody>${mats.map(m=>`<tr><td>${m.name}</td><td style="text-align:center;font-weight:700">${m.qty.toFixed(2)}</td><td>${m.unit}</td></tr>`).join('')}</tbody>
+        </table>`).join('');
+    }
+
+    const lhHtml = useLHMep && businessInfo?.letterhead
+      ? `<div style="position:fixed;top:0;left:0;right:0;background:#fff;z-index:9999;padding-bottom:10px;border-bottom:2px solid #1E2A4A;"><img src="${businessInfo.letterhead}" style="width:100%;max-height:200px;object-fit:contain;object-position:top;display:block;" /></div>`
+      : `<div style="font-size:15px;font-weight:700;color:#1E2A4A;margin-bottom:2px;">${businessInfo?.name||''}</div>`;
+    const lhFooterHtml = useLHMep && businessInfo?.letterheadFooter
+      ? `<div style="position:fixed;bottom:0;left:0;right:0;background:#fff;z-index:9999;padding-top:8px;border-top:2px solid #1E2A4A;"><img src="${businessInfo.letterheadFooter}" style="width:100%;max-height:120px;object-fit:contain;object-position:bottom;display:block;" /></div>`
+      : '';
+    const html = `<!DOCTYPE html><html><head>
+      <meta charset="utf-8"/>
+      <title>${title}</title>
+      <style>
+        @page { size: A4 ${orientation}; margin: ${useLHMep && businessInfo?.letterhead ? '220px' : '15mm'} 15mm ${useLHMep && businessInfo?.letterheadFooter ? '140px' : '15mm'}; }
+        body { font-family: Arial, sans-serif; font-size: 11px; color: #222; }
+        h1 { font-size: 16px; color: #1E2A4A; margin: 0 0 4px; }
+        h3 { font-size: 13px; color: #1E2A4A; margin: 16px 0 6px; border-bottom: 1px solid #ccc; padding-bottom: 4px; }
+        h4 { font-size: 12px; color: #1E2A4A; margin: 12px 0 4px; }
+        .meta { color: #666; font-size: 11px; margin-bottom: 14px; }
+        table { width: 100%; border-collapse: collapse; margin-bottom: 12px; }
+        th { background: #1E2A4A; color: #fff; padding: 6px 8px; text-align: left; font-size: 11px; }
+        td { padding: 5px 8px; border-bottom: 1px solid #e0ddd5; font-size: 11px; }
+        tfoot td { background: #f5f3ee; font-weight: 700; }
+        tr:nth-child(even) td { background: #faf9f6; }
+        p { margin: 4px 0 10px; }
+      </style>
+    </head><body>
+      ${lhHtml}
+      <h1>${title}</h1>
+      <div class="meta">Project: <b>${projName}</b> &nbsp;|&nbsp; Period: <b>${period}</b> &nbsp;|&nbsp; Printed: ${new Date().toLocaleDateString()}</div>
+      ${tableHTML || '<p>No data available for the selected period.</p>'}
+      ${lhFooterHtml}
+    </body></html>`;
+
+    const w = window.open('', '_blank', 'width=1000,height=700');
+    w.document.write(html);
+    w.document.close();
+    setTimeout(() => { w.focus(); w.print(); }, 500);
+  }
+
+  return (
+    <div style={styles.page}>
+      <div style={{ display:'flex', justifyContent:'space-between', alignItems:'flex-start', marginBottom:16, flexWrap:'wrap', gap:10 }}>
+        <div>
+          <h2 className="serif" style={styles.h2}>MEP Reports</h2>
+          <p style={styles.muted}>Manhour, manpower & material reports for selected period</p>
+        </div>
+        <div style={{ display:'flex', alignItems:'center', gap:8 }}>
+          {businessInfo?.letterhead && <button onClick={() => setUseLHMep(v => !v)} style={{ ...styles.ghostBtn, ...(useLHMep ? { background: '#EEF2FF', color: '#3D52A0', fontWeight: 600 } : {}) }}>📃 {useLHMep ? 'Letterhead ON' : 'Use Letterhead'}</button>}
+          <div style={{ display:'flex', border:'1px solid #DDD8CC', borderRadius:8, overflow:'hidden', fontSize:12 }}>
+            {[['landscape','⬜ Landscape'],['portrait','📄 Portrait']].map(([val,lbl])=>(
+              <button key={val} onClick={()=>setOrientation(val)}
+                style={{ padding:'7px 12px', background: orientation===val ? '#1E2A4A' : '#fff',
+                  color: orientation===val ? '#fff' : '#555', border:'none', cursor:'pointer', fontWeight: orientation===val ? 600 : 400 }}>
+                {lbl}
+              </button>
+            ))}
+          </div>
+          <button onClick={handlePrint} style={{ ...styles.primaryBtn, gap:6 }}>🖨 Print / PDF</button>
+        </div>
+      </div>
+
+      {/* Filters */}
+      <div style={{ display:'flex', gap:10, flexWrap:'wrap', marginBottom:16, padding:'12px 16px', background:'#F5F3EE', borderRadius:10 }}>
+        <div style={styles.formGroup}>
+          <label style={styles.label}>Project</label>
+          <select value={selProject} onChange={e=>setSelProject(e.target.value)} style={{ ...styles.input, width:180 }}>
+            {siteProjects.map(p=><option key={p.id} value={p.id}>{p.name}</option>)}
+          </select>
+        </div>
+        <div style={styles.formGroup}>
+          <label style={styles.label}>Report type</label>
+          <select value={reportType} onChange={e=>setReportType(e.target.value)} style={{ ...styles.input, width:200 }}>
+            <option value="manhour_summary">Manhour Summary (all activities)</option>
+            <option value="emp_report">Employee Report (one person)</option>
+            <option value="material_report">Material Consumption</option>
+          </select>
+        </div>
+        {reportType === 'emp_report' && (
+          <div style={styles.formGroup}>
+            <label style={styles.label}>Employee</label>
+            <select value={selEmp} onChange={e=>setSelEmp(e.target.value)} style={{ ...styles.input, width:160 }}>
+              {employees.map(e=><option key={e.id} value={e.id}>{e.name}</option>)}
+            </select>
+          </div>
+        )}
+        <div style={styles.formGroup}>
+          <label style={styles.label}>From</label>
+          <input type="date" value={fromDate} onChange={e=>setFromDate(e.target.value)} style={{ ...styles.input, width:140 }} />
+        </div>
+        <div style={styles.formGroup}>
+          <label style={styles.label}>To</label>
+          <input type="date" value={toDate} onChange={e=>setToDate(e.target.value)} style={{ ...styles.input, width:140 }} />
+        </div>
+      </div>
+
+      {/* ── MANHOUR SUMMARY ── */}
+      {reportType === 'manhour_summary' && (
+        <div>
+          <div style={{ ...styles.dashSection, marginBottom:12 }}>Manhour Summary · {fromDate} to {toDate}</div>
+          {manhourRows.length === 0
+            ? <div style={styles.emptyBox}>No updates logged in this period.</div>
+            : <>
+              <table style={{ ...styles.table, fontSize:12, width:'100%' }}>
+                <thead>
+                  <tr style={{ background:'#1E2A4A', color:'#fff' }}>
+                    {['Villa/Unit','Discipline','Activity','Phase','Days worked','Total MP-days','Total Manhours','Progress %'].map(h=>(
+                      <th key={h} style={{ ...styles.th, color:'#fff', whiteSpace:'nowrap', padding:'8px 10px' }}>{h}</th>
+                    ))}
+                  </tr>
+                </thead>
+                <tbody>
+                  {manhourRows.map(({act,logs,totalMH,totalMP,latestPct,villa})=>(
+                    <tr key={act.id} style={{ borderBottom:'1px solid #EAE6DB' }}>
+                      <td style={styles.td}>{villa?.name||'Project-wide'}</td>
+                      <td style={styles.td}><span style={{ fontWeight:600, color:'#1E2A4A' }}>{act.discipline}</span></td>
+                      <td style={styles.td}>{act.name}</td>
+                      <td style={styles.td}><span style={{ fontSize:11, color:'#888' }}>{act.phase}</span></td>
+                      <td style={{ ...styles.td, textAlign:'center' }}>{logs.length}</td>
+                      <td style={{ ...styles.td, textAlign:'center' }}>{totalMP}</td>
+                      <td style={{ ...styles.td, textAlign:'center', fontWeight:700, color:'#1E2A4A' }}>{totalMH.toFixed(1)}</td>
+                      <td style={{ ...styles.td, textAlign:'center' }}>
+                        <span style={{ fontWeight:700, color:latestPct===100?'#1A7A3E':'#C9A24B' }}>{latestPct}%</span>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+                <tfoot>
+                  <tr style={{ background:'#F5F3EE', fontWeight:700 }}>
+                    <td colSpan={5} style={{ ...styles.td, textAlign:'right', color:'#888' }}>TOTAL</td>
+                    <td style={{ ...styles.td, textAlign:'center' }}>{manhourRows.reduce((s,r)=>s+r.totalMP,0)}</td>
+                    <td style={{ ...styles.td, textAlign:'center', color:'#1E2A4A' }}>{manhourRows.reduce((s,r)=>s+r.totalMH,0).toFixed(1)}</td>
+                    <td style={styles.td}></td>
+                  </tr>
+                </tfoot>
+              </table>
+              {/* Daily breakdown */}
+              <div style={{ marginTop:20 }}>
+                <div style={{ ...styles.dashSection, marginBottom:8 }}>Daily Log Detail</div>
+                {manhourRows.map(({act,logs,villa})=>(
+                  <div key={act.id} style={{ marginBottom:16 }}>
+                    <div style={{ fontWeight:700, fontSize:12, color:'#1E2A4A', marginBottom:4 }}>
+                      {villa?.name ? villa.name+' — ' : ''}{act.discipline} · {act.name}
+                    </div>
+                    <table style={{ ...styles.table, fontSize:11, width:'100%' }}>
+                      <thead>
+                        <tr style={{ background:'#F5F3EE' }}>
+                          {['Date','MP count','Manhours','Progress %','Notes'].map(h=>(
+                            <th key={h} style={{ ...styles.th, padding:'5px 8px' }}>{h}</th>
+                          ))}
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {logs.sort((a,b)=>a.date.localeCompare(b.date)).map(u=>(
+                          <tr key={u.id} style={{ borderBottom:'1px solid #F0EDE6' }}>
+                            <td style={{ ...styles.td, padding:'5px 8px' }}>{u.date}</td>
+                            <td style={{ ...styles.td, padding:'5px 8px', textAlign:'center' }}>{u.mpCount||'—'}</td>
+                            <td style={{ ...styles.td, padding:'5px 8px', textAlign:'center', fontWeight:600 }}>{u.totalManhours||'—'}</td>
+                            <td style={{ ...styles.td, padding:'5px 8px', textAlign:'center', color:'#C9A24B', fontWeight:600 }}>{u.cumProgress}%</td>
+                            <td style={{ ...styles.td, padding:'5px 8px', color:'#666' }}>{u.notes||'—'}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                ))}
+              </div>
+            </>
+          }
+        </div>
+      )}
+
+      {/* ── EMPLOYEE REPORT ── */}
+      {reportType === 'emp_report' && (
+        <div>
+          <div style={{ ...styles.dashSection, marginBottom:12 }}>
+            {selectedEmp?.name || 'Employee'} — Work Report · {fromDate} to {toDate}
+          </div>
+          {empLogs.length === 0
+            ? <div style={styles.emptyBox}>No hours logged for this employee in the selected period.</div>
+            : <>
+              <div style={{ display:'flex', gap:16, marginBottom:12 }}>
+                <div style={{ ...styles.statCard, flex:1 }}>
+                  <div style={{ fontSize:11, color:'#888' }}>Total days worked</div>
+                  <div style={{ fontSize:22, fontWeight:700, color:'#1E2A4A' }}>{empLogs.length}</div>
+                </div>
+                <div style={{ ...styles.statCard, flex:1 }}>
+                  <div style={{ fontSize:11, color:'#888' }}>Total manhours</div>
+                  <div style={{ fontSize:22, fontWeight:700, color:'#1E7A9A' }}>{empTotalHours.toFixed(1)}</div>
+                </div>
+              </div>
+              <table style={{ ...styles.table, fontSize:12, width:'100%' }}>
+                <thead>
+                  <tr style={{ background:'#1E2A4A', color:'#fff' }}>
+                    {['Date','Villa/Unit','Discipline','Activity','Hours','Notes'].map(h=>(
+                      <th key={h} style={{ ...styles.th, color:'#fff', padding:'8px 10px' }}>{h}</th>
+                    ))}
+                  </tr>
+                </thead>
+                <tbody>
+                  {empLogs.map((r,i)=>(
+                    <tr key={i} style={{ borderBottom:'1px solid #EAE6DB' }}>
+                      <td style={styles.td}>{r.date}</td>
+                      <td style={styles.td}>{r.villa||'Project-wide'}</td>
+                      <td style={styles.td}>{r.discipline}</td>
+                      <td style={styles.td}>{r.actName}</td>
+                      <td style={{ ...styles.td, fontWeight:700, color:'#1E2A4A', textAlign:'center' }}>{r.hours}</td>
+                      <td style={{ ...styles.td, color:'#666' }}>{r.notes||'—'}</td>
+                    </tr>
+                  ))}
+                </tbody>
+                <tfoot>
+                  <tr style={{ background:'#F5F3EE', fontWeight:700 }}>
+                    <td colSpan={4} style={{ ...styles.td, textAlign:'right', color:'#888' }}>TOTAL HOURS</td>
+                    <td style={{ ...styles.td, textAlign:'center', color:'#1E2A4A', fontSize:14 }}>{empTotalHours.toFixed(1)}</td>
+                    <td style={styles.td}></td>
+                  </tr>
+                </tfoot>
+              </table>
+            </>
+          }
+        </div>
+      )}
+
+      {/* ── MATERIAL REPORT ── */}
+      {reportType === 'material_report' && (
+        <div>
+          <div style={{ ...styles.dashSection, marginBottom:12 }}>Material Consumption · {fromDate} to {toDate}</div>
+          {matRows.length === 0
+            ? <div style={styles.emptyBox}>No material consumption logged in this period.</div>
+            : matRows.map(({act,villa,mats})=>(
+              <div key={act.id} style={{ marginBottom:16 }}>
+                <div style={{ fontWeight:700, fontSize:12, color:'#1E2A4A', marginBottom:6 }}>
+                  {villa?.name ? villa.name+' — ' : ''}{act.discipline} · {act.name}
+                </div>
+                <table style={{ ...styles.table, fontSize:12, width:'100%' }}>
+                  <thead>
+                    <tr style={{ background:'#F5F3EE' }}>
+                      {['Material','Total Qty','Unit'].map(h=><th key={h} style={{ ...styles.th, padding:'6px 10px' }}>{h}</th>)}
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {mats.map((m,i)=>(
+                      <tr key={i} style={{ borderBottom:'1px solid #F0EDE6' }}>
+                        <td style={styles.td}>{m.name}</td>
+                        <td style={{ ...styles.td, fontWeight:700, color:'#1E2A4A', textAlign:'center' }}>{m.qty.toFixed(2)}</td>
+                        <td style={styles.td}>{m.unit}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            ))
+          }
+        </div>
+      )}
+    </div>
+  );
+}
+
+function BOMInlineEditor({ activity, onUpdate, canEdit }) {
+  const bom = activity.bom || [];
+  function addRow() { onUpdate({ ...activity, bom: [...bom, { id:crypto.randomUUID(), material:'', plannedQty:'', unit:'nos', consumed:0 }] }); }
+  function updateRow(i,k,v) { const b=[...bom]; b[i]={...b[i],[k]:v}; onUpdate({...activity,bom:b}); }
+  function removeRow(i) { onUpdate({...activity, bom:bom.filter((_,idx)=>idx!==i)}); }
+  return (
+    <div style={{ padding:'8px 0' }}>
+      <div style={{ fontWeight:600, fontSize:12, color:'#1E2A4A', marginBottom:6 }}>
+        Bill of Materials {activity.bomLocked && <span style={{ color:'#1A7A3E', fontSize:11 }}>— Locked (order approved)</span>}
+      </div>
+      {bom.length===0 && <div style={{ fontSize:12, color:'#aaa', marginBottom:6 }}>No materials added.</div>}
+      {bom.map((row,i)=>(
+        <div key={row.id||i} style={{ display:'grid', gridTemplateColumns:'3fr 1.5fr 1fr 1.5fr auto', gap:8, marginBottom:6, alignItems:'center' }}>
+          {canEdit
+            ? <input value={row.material} onChange={e=>updateRow(i,'material',e.target.value)} style={{ ...styles.input, fontSize:12 }} placeholder="Material description" />
+            : <span style={{ fontSize:12 }}>{row.material}</span>}
+          {canEdit
+            ? <input type="number" value={row.plannedQty} onChange={e=>updateRow(i,'plannedQty',e.target.value)} style={{ ...styles.input, fontSize:12 }} placeholder="Planned qty" />
+            : <span style={{ fontSize:12 }}>{row.plannedQty}</span>}
+          {canEdit
+            ? <select value={row.unit} onChange={e=>updateRow(i,'unit',e.target.value)} style={{ ...styles.input, fontSize:12 }}>
+                {MEP_UNITS.map(u=><option key={u} value={u}>{u}</option>)}
+              </select>
+            : <span style={{ fontSize:12 }}>{row.unit}</span>}
+          <span style={{ fontSize:12, color:'#555' }}>Used: <strong>{row.consumed||0}</strong></span>
+          {canEdit && <button onClick={()=>removeRow(i)} style={{ ...styles.ghostBtn, color:'#B5453A', fontSize:12, padding:'2px 7px' }}>×</button>}
+        </div>
+      ))}
+      {canEdit && <button style={{ ...styles.ghostBtn, fontSize:11 }} onClick={addRow}>+ Add material</button>}
+    </div>
+  );
+}
+
+function ActivityForm({ activity, project, onSave, onClose }) {
+  const [form, setForm] = useState({
+    name:'', villaId:'', discipline:'Electrical', phase: MEP_PHASES[0],
+    plannedStart:'', plannedEnd:'', duration:'', weight:5, sequence:0,
+    plannedQty:'', unit:'%', bom:[], bomLocked:false,
+    ...activity,
+  });
+  function set(k,v) { setForm(f=>({...f,[k]:v})); }
+  const villas = project?.villas || [];
+  const disciplines = project?.disciplines || MEP_DISCIPLINES;
+  return (
+    <Modal title={form._isNew?'New Activity':'Edit Activity'} onClose={onClose} width={560}>
+      <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:12 }}>
+        <div style={{ gridColumn:'1/-1', ...styles.formGroup }}>
+          <label style={styles.label}>Activity Name *</label>
+          <input value={form.name} onChange={e=>set('name',e.target.value)} style={styles.input} placeholder="e.g. Electrical Rough-in" />
+        </div>
+        <div style={styles.formGroup}>
+          <label style={styles.label}>Villa / Unit</label>
+          <select value={form.villaId} onChange={e=>set('villaId',e.target.value)} style={styles.input}>
+            <option value="">Project-wide</option>
+            {villas.map(v=><option key={v.id} value={v.id}>{v.name}</option>)}
+          </select>
+        </div>
+        <div style={styles.formGroup}>
+          <label style={styles.label}>Discipline</label>
+          <select value={form.discipline} onChange={e=>set('discipline',e.target.value)} style={styles.input}>
+            {disciplines.map(d=><option key={d} value={d}>{d}</option>)}
+          </select>
+        </div>
+        <div style={{ gridColumn:'1/-1', ...styles.formGroup }}>
+          <label style={styles.label}>Phase</label>
+          <select value={form.phase} onChange={e=>set('phase',e.target.value)} style={styles.input}>
+            {MEP_PHASES.map(p=><option key={p} value={p}>{p}</option>)}
+          </select>
+        </div>
+        <div style={styles.formGroup}>
+          <label style={styles.label}>Planned Start</label>
+          <input type="date" value={form.plannedStart||''} onChange={e=>set('plannedStart',e.target.value)} style={styles.input} />
+        </div>
+        <div style={styles.formGroup}>
+          <label style={styles.label}>Planned End</label>
+          <input type="date" value={form.plannedEnd||''} onChange={e=>set('plannedEnd',e.target.value)} style={styles.input} />
+        </div>
+        <div style={styles.formGroup}>
+          <label style={styles.label}>Duration (days)</label>
+          <input type="number" value={form.duration||''} onChange={e=>set('duration',e.target.value)} style={styles.input} />
+        </div>
+        <div style={styles.formGroup}>
+          <label style={styles.label}>Weight % (for overall progress)</label>
+          <input type="number" min={0} max={100} value={form.weight||0} onChange={e=>set('weight',+e.target.value)} style={styles.input} />
+        </div>
+        <div style={styles.formGroup}>
+          <label style={styles.label}>Contract Value (for invoicing)</label>
+          <input type="number" min={0} value={form.contractValue||''} onChange={e=>set('contractValue',+e.target.value)} style={styles.input} placeholder="0.00" />
+        </div>
+        <div style={styles.formGroup}>
+          <label style={styles.label}>Planned Qty</label>
+          <input value={form.plannedQty||''} onChange={e=>set('plannedQty',e.target.value)} style={styles.input} placeholder="e.g. 100" />
+        </div>
+        <div style={styles.formGroup}>
+          <label style={styles.label}>Unit</label>
+          <select value={form.unit||'%'} onChange={e=>set('unit',e.target.value)} style={styles.input}>
+            {MEP_UNITS.map(u=><option key={u} value={u}>{u}</option>)}
+          </select>
+        </div>
+        <div style={{ gridColumn:'1/-1', ...styles.formGroup }}>
+          <label style={styles.label}>Sequence (for ordering)</label>
+          <input type="number" value={form.sequence||0} onChange={e=>set('sequence',+e.target.value)} style={styles.input} />
+        </div>
+      </div>
+      <div style={{ display:'flex', justifyContent:'flex-end', gap:10, marginTop:16 }}>
+        <button style={styles.ghostBtn} onClick={onClose}>Cancel</button>
+        <button style={styles.primaryBtn} onClick={()=>{ if(!form.name) return alert('Activity name required'); onSave(form); }}>Save Activity</button>
+      </div>
+    </Modal>
+  );
+}
+
+// ── Daily Progress Updates ──────────────────────────────────────────────────────
+function DailyUpdateView({ progressUpdates, setProgressUpdates, siteActivities, siteProjects, employees, userRole }) {
+  const [selProject, setSelProject] = useState(siteProjects[0]?.id||'');
+  const [selDate, setSelDate] = useState(new Date().toISOString().slice(0,10));
+  const [editing, setEditing] = useState(null);
+  const canEdit = userRole==='admin'||userRole==='manager'||userRole==='sales';
+
+  const project = siteProjects.find(p=>p.id===selProject);
+  const todayUpdates = progressUpdates.filter(u=>u.projectId===selProject&&u.date===selDate);
+  const projectActs = siteActivities.filter(a=>a.projectId===selProject);
+
+  function save(form) {
+    const rec = { ...form, id: form.id||crypto.randomUUID(), projectId: selProject, date: selDate };
+    setProgressUpdates(prev => form.id ? prev.map(u=>u.id===form.id?rec:u) : [...prev, rec]);
+    // Update consumed materials in siteActivities
+    if (form.materialsConsumed?.length) {
+      // consumed is tracked per activity bom row
+    }
+    setEditing(null);
+  }
+  function del(id) { if(confirm('Delete update?')) setProgressUpdates(prev=>prev.filter(u=>u.id!==id)); }
+
+  if (!siteProjects.length) return (
+    <div style={styles.page}>
+      <h2 className="serif" style={styles.h2}>Daily Progress Updates</h2>
+      <p style={{ color:'#aaa', marginTop:16 }}>Create a project and activities first.</p>
+    </div>
+  );
+
+  return (
+    <div style={styles.page}>
+      <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', marginBottom:14 }}>
+        <div>
+          <h2 className="serif" style={styles.h2}>Daily Progress Updates</h2>
+          <p style={styles.muted}>{todayUpdates.length} update{todayUpdates.length!==1?'s':''} for selected date</p>
+        </div>
+        {canEdit && <button style={styles.primaryBtn} onClick={()=>setEditing({ _isNew:true, activityId:'', cumulativePct:0, dailyQtyDone:'', workers:[], materialsConsumed:[], issues:'', remarks:'' })}>+ Add Update</button>}
+      </div>
+
+      <div style={{ display:'flex', gap:10, marginBottom:18, flexWrap:'wrap', alignItems:'center' }}>
+        <select value={selProject} onChange={e=>setSelProject(e.target.value)} style={{ ...styles.input, width:220 }}>
+          {siteProjects.map(p=><option key={p.id} value={p.id}>{p.name}</option>)}
+        </select>
+        <input type="date" value={selDate} onChange={e=>setSelDate(e.target.value)} style={{ ...styles.input, width:160 }} />
+        <div style={{ display:'flex', gap:6 }}>
+          <button style={styles.ghostBtn} onClick={()=>{ const d=new Date(selDate); d.setDate(d.getDate()-1); setSelDate(d.toISOString().slice(0,10)); }}>◀ Prev</button>
+          <button style={styles.ghostBtn} onClick={()=>setSelDate(new Date().toISOString().slice(0,10))}>Today</button>
+          <button style={styles.ghostBtn} onClick={()=>{ const d=new Date(selDate); d.setDate(d.getDate()+1); setSelDate(d.toISOString().slice(0,10)); }}>Next ▶</button>
+        </div>
+      </div>
+
+      {/* Updates for selected date */}
+      {todayUpdates.length===0 && <div style={{ color:'#aaa', padding:24 }}>No updates logged for {selDate}.</div>}
+      <div style={{ display:'flex', flexDirection:'column', gap:10 }}>
+        {todayUpdates.map(u=>{
+          const act = projectActs.find(a=>a.id===u.activityId);
+          const villa = (project?.villas||[]).find(v=>v.id===act?.villaId);
+          const prevPct = progressUpdates
+            .filter(x=>x.activityId===u.activityId && x.date<u.date)
+            .sort((a,b)=>b.date.localeCompare(a.date))[0]?.cumulativePct || 0;
+          const delta = (u.cumulativePct||0) - prevPct;
+          return (
+            <div key={u.id} style={{ background:'#fff', border:'1px solid #EAE6DB', borderRadius:12, padding:'14px 18px' }}>
+              <div style={{ display:'flex', justifyContent:'space-between', alignItems:'flex-start', marginBottom:8 }}>
+                <div>
+                  <span style={{ fontWeight:600, fontSize:14, color:'#1E2A4A' }}>{villa?.name||'Project-wide'}</span>
+                  <span style={{ fontSize:12, color:'#888', marginLeft:8 }}>→ {act?.discipline} → {act?.name||'?'}</span>
+                </div>
+                <div style={{ display:'flex', gap:8, alignItems:'center' }}>
+                  <span style={{ fontWeight:700, fontSize:16, color:'#1A7A3E' }}>{u.cumulativePct}%</span>
+                  {delta>0 && <span style={{ fontSize:11, color:'#1A7A3E', background:'#E6F5EC', borderRadius:6, padding:'2px 7px' }}>+{delta}% today</span>}
+                  {canEdit && <>
+                    <button style={{ ...styles.ghostBtn, fontSize:12 }} onClick={()=>setEditing(u)}>Edit</button>
+                    <button style={{ ...styles.ghostBtn, fontSize:12, color:'#B5453A' }} onClick={()=>del(u.id)}>×</button>
+                  </>}
+                </div>
+              </div>
+              {/* Workers */}
+              {(u.workers||[]).length>0 && (
+                <div style={{ display:'flex', flexWrap:'wrap', gap:6, marginBottom:6 }}>
+                  {u.workers.map((w,i)=>{
+                    const emp=employees.find(e=>e.id===w.employeeId);
+                    return <span key={i} style={{ fontSize:11.5, background:'#F5F3EE', borderRadius:8, padding:'3px 8px' }}>{emp?.name||'?'} · {w.hours}h · {w.trade}</span>;
+                  })}
+                </div>
+              )}
+              {/* Materials consumed */}
+              {(u.materialsConsumed||[]).length>0 && (
+                <div style={{ fontSize:12, color:'#555', marginBottom:4 }}>
+                  Materials: {u.materialsConsumed.map(m=>`${m.material} (${m.qty} ${m.unit})`).join(' · ')}
+                </div>
+              )}
+              {u.issues && <div style={{ fontSize:12, color:'#B5453A', marginTop:4 }}>⚠ {u.issues}</div>}
+              {u.remarks && <div style={{ fontSize:12, color:'#666', fontStyle:'italic', marginTop:4 }}>{u.remarks}</div>}
+            </div>
+          );
+        })}
+      </div>
+
+      {editing && (
+        <UpdateForm update={editing} projectActs={projectActs} project={project} employees={employees}
+          progressUpdates={progressUpdates} onSave={save} onClose={()=>setEditing(null)} />
+      )}
+    </div>
+  );
+}
+
+function UpdateForm({ update, projectActs, project, employees, progressUpdates, onSave, onClose }) {
+  const TRADES = ['Electrical','Plumbing','HVAC','Civil','Firefighting','IT','General'];
+  const [form, setForm] = useState({
+    activityId:'', cumulativePct:0, dailyQtyDone:'', workers:[], materialsConsumed:[], issues:'', remarks:'',
+    ...update,
+  });
+  function set(k,v) { setForm(f=>({...f,[k]:v})); }
+
+  const selAct = projectActs.find(a=>a.id===form.activityId);
+  const lastPct = form.activityId ? (progressUpdates
+    .filter(u=>u.activityId===form.activityId&&u.id!==form.id)
+    .sort((a,b)=>b.date.localeCompare(a.date))[0]?.cumulativePct||0) : 0;
+
+  function addWorker() { set('workers',[...form.workers,{ employeeId:'', trade:'Electrical', hours:8 }]); }
+  function updateWorker(i,k,v) { const w=[...form.workers]; w[i]={...w[i],[k]:v}; set('workers',w); }
+  function removeWorker(i) { set('workers',form.workers.filter((_,idx)=>idx!==i)); }
+
+  // Materials come from the activity BOM
+  const actBOM = selAct?.bom || [];
+  function toggleMat(row) {
+    const existing = form.materialsConsumed.find(m=>m.bomId===row.id);
+    if (existing) {
+      set('materialsConsumed', form.materialsConsumed.filter(m=>m.bomId!==row.id));
+    } else {
+      set('materialsConsumed', [...form.materialsConsumed, { bomId:row.id, material:row.material, qty:'', unit:row.unit }]);
+    }
+  }
+  function setMatQty(bomId, qty) {
+    set('materialsConsumed', form.materialsConsumed.map(m=>m.bomId===bomId?{...m,qty}:m));
+  }
+
+  // Group acts by villa
+  const villas = project?.villas||[];
+  const byVilla = {};
+  projectActs.forEach(a=>{ const key=a.villaId||'__none'; (byVilla[key]=byVilla[key]||[]).push(a); });
+
+  return (
+    <Modal title={form._isNew?'Log Progress Update':'Edit Update'} onClose={onClose} width={600}>
+      <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:12, marginBottom:12 }}>
+        <div style={{ gridColumn:'1/-1', ...styles.formGroup }}>
+          <label style={styles.label}>Activity *</label>
+          <select value={form.activityId} onChange={e=>set('activityId',e.target.value)} style={styles.input}>
+            <option value="">— Select activity —</option>
+            {villas.map(v=>{
+              const items=byVilla[v.id]||[];
+              if (!items.length) return null;
+              return <optgroup key={v.id} label={v.name}>{items.map(a=><option key={a.id} value={a.id}>{a.discipline} → {a.name}</option>)}</optgroup>;
+            })}
+            {(byVilla['__none']||[]).length>0 && (
+              <optgroup label="Project-wide">{(byVilla['__none']||[]).map(a=><option key={a.id} value={a.id}>{a.discipline} → {a.name}</option>)}</optgroup>
+            )}
+          </select>
+        </div>
+        {form.activityId && (
+          <div style={{ gridColumn:'1/-1' }}>
+            <div style={{ fontSize:12, color:'#888', marginBottom:6 }}>Previous progress: <strong>{lastPct}%</strong> → Setting cumulative to:</div>
+            <div style={{ display:'flex', alignItems:'center', gap:10 }}>
+              <input type="range" min={lastPct} max={100} value={form.cumulativePct}
+                onChange={e=>set('cumulativePct',+e.target.value)} style={{ flex:1, accentColor:'#1A7A3E' }} />
+              <span style={{ fontWeight:700, fontSize:18, color:'#1A7A3E', width:48 }}>{form.cumulativePct}%</span>
+            </div>
+            {selAct?.plannedQty && (
+              <div style={{ ...styles.formGroup, marginTop:10 }}>
+                <label style={styles.label}>Quantity done today ({selAct.unit})</label>
+                <input value={form.dailyQtyDone||''} onChange={e=>set('dailyQtyDone',e.target.value)} style={styles.input} placeholder={`Planned: ${selAct.plannedQty} ${selAct.unit}`} />
+              </div>
+            )}
+          </div>
+        )}
+      </div>
+
+      {/* Workers */}
+      <div style={{ marginBottom:6, display:'flex', justifyContent:'space-between', alignItems:'center' }}>
+        <span style={{ fontWeight:600, fontSize:13, color:'#1E2A4A' }}>Manpower Today</span>
+        <button style={{ ...styles.ghostBtn, fontSize:11 }} onClick={addWorker}>+ Add</button>
+      </div>
+      {form.workers.map((w,i)=>(
+        <div key={i} style={{ display:'grid', gridTemplateColumns:'2fr 1.5fr 1fr auto', gap:8, marginBottom:8, alignItems:'center' }}>
+          <select value={w.employeeId} onChange={e=>updateWorker(i,'employeeId',e.target.value)} style={{ ...styles.input, fontSize:12 }}>
+            <option value="">— Employee —</option>
+            {employees.map(e=><option key={e.id} value={e.id}>{e.name}</option>)}
+          </select>
+          <select value={w.trade} onChange={e=>updateWorker(i,'trade',e.target.value)} style={{ ...styles.input, fontSize:12 }}>
+            {TRADES.map(t=><option key={t} value={t}>{t}</option>)}
+          </select>
+          <input type="number" min={1} max={12} value={w.hours} onChange={e=>updateWorker(i,'hours',+e.target.value)} style={{ ...styles.input, fontSize:12 }} placeholder="hrs" />
+          <button onClick={()=>removeWorker(i)} style={{ ...styles.ghostBtn, color:'#B5453A', fontSize:12, padding:'4px 8px' }}>×</button>
+        </div>
+      ))}
+      {form.workers.length===0 && <div style={{ fontSize:12, color:'#aaa', marginBottom:8 }}>No workers added.</div>}
+
+      {/* Materials consumed */}
+      {actBOM.length>0 && (
+        <>
+          <div style={{ fontWeight:600, fontSize:13, color:'#1E2A4A', marginTop:10, marginBottom:6 }}>Materials Consumed Today</div>
+          {actBOM.map(row=>{
+            const sel = form.materialsConsumed.find(m=>m.bomId===row.id);
+            return (
+              <div key={row.id} style={{ display:'flex', gap:8, marginBottom:6, alignItems:'center' }}>
+                <button onClick={()=>toggleMat(row)} style={{ fontSize:12, padding:'3px 10px', borderRadius:20, border:'1px solid #DDD8CC', cursor:'pointer', background:sel?'#1E2A4A':'#F5F3EE', color:sel?'#fff':'#444', whiteSpace:'nowrap' }}>
+                  {row.material}
+                </button>
+                {sel && (
+                  <div style={{ display:'flex', gap:6, alignItems:'center' }}>
+                    <input type="number" value={sel.qty||''} onChange={e=>setMatQty(row.id,e.target.value)} style={{ ...styles.input, width:80, fontSize:12 }} placeholder="qty" />
+                    <span style={{ fontSize:12, color:'#666' }}>{row.unit}</span>
+                  </div>
+                )}
+                {!sel && <span style={{ fontSize:11, color:'#aaa' }}>planned: {row.plannedQty} {row.unit}</span>}
+              </div>
+            );
+          })}
+        </>
+      )}
+
+      <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:12, marginTop:12 }}>
+        <div style={styles.formGroup}>
+          <label style={styles.label}>Issues / Blockers</label>
+          <textarea value={form.issues||''} onChange={e=>set('issues',e.target.value)} style={{ ...styles.input, height:50 }} placeholder="Any problems on site?" />
+        </div>
+        <div style={styles.formGroup}>
+          <label style={styles.label}>Remarks</label>
+          <textarea value={form.remarks||''} onChange={e=>set('remarks',e.target.value)} style={{ ...styles.input, height:50 }} />
+        </div>
+      </div>
+      <div style={{ display:'flex', justifyContent:'flex-end', gap:10, marginTop:14 }}>
+        <button style={styles.ghostBtn} onClick={onClose}>Cancel</button>
+        <button style={styles.primaryBtn} onClick={()=>{ if(!form.activityId) return alert('Select an activity'); onSave(form); }}>Save Update</button>
+      </div>
+    </Modal>
+  );
+}
+
+// ── Progress Board (Matrix view) ────────────────────────────────────────────────
+function ProgressBoardView({ siteProjects, siteActivities, progressUpdates }) {
+  const [selProject, setSelProject] = useState(siteProjects[0]?.id||'');
+  const project = siteProjects.find(p=>p.id===selProject);
+  const acts = siteActivities.filter(a=>a.projectId===selProject);
+  const villas = project?.villas||[];
+  const disciplines = project?.disciplines||MEP_DISCIPLINES;
+
+  function cellPct(villaId, discipline) {
+    const cellActs = acts.filter(a=>a.villaId===villaId&&a.discipline===discipline);
+    if (!cellActs.length) return null;
+    const avg = cellActs.reduce((s,a)=>s+getActivityProgress(a.id,progressUpdates),0)/cellActs.length;
+    return Math.round(avg);
+  }
+  function villaPct(villaId) {
+    const va = acts.filter(a=>a.villaId===villaId);
+    if (!va.length) return null;
+    return Math.round(va.reduce((s,a)=>s+getActivityProgress(a.id,progressUpdates),0)/va.length);
+  }
+  function discPct(discipline) {
+    const da = acts.filter(a=>a.discipline===discipline);
+    if (!da.length) return null;
+    return Math.round(da.reduce((s,a)=>s+getActivityProgress(a.id,progressUpdates),0)/da.length);
+  }
+  const overallPct = acts.length ? Math.round(acts.reduce((s,a)=>s+getActivityProgress(a.id,progressUpdates),0)/acts.length) : null;
+
+  function pctColor(pct) {
+    if (pct===null) return '#F0EDE6';
+    if (pct===100) return '#1A7A3E';
+    if (pct>=75) return '#3D7A5C';
+    if (pct>=50) return '#C9A24B';
+    if (pct>0) return '#E07A2B';
+    return '#EAE6DB';
+  }
+  function pctBg(pct) {
+    if (pct===null) return '#F5F3EE';
+    if (pct===100) return '#E6F5EC';
+    if (pct>=75) return '#EBF5F0';
+    if (pct>=50) return '#FDF7E6';
+    if (pct>0) return '#FEF0E0';
+    return '#FAF8F4';
+  }
+
+  if (!siteProjects.length) return (
+    <div style={styles.page}>
+      <h2 className="serif" style={styles.h2}>Progress Board</h2>
+      <p style={{ color:'#aaa', marginTop:16 }}>Create a project and activities first.</p>
+    </div>
+  );
+
+  const activeDisciplines = disciplines.filter(d=>acts.some(a=>a.discipline===d));
+
+  return (
+    <div style={styles.page}>
+      <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', marginBottom:14 }}>
+        <div>
+          <h2 className="serif" style={styles.h2}>Progress Board</h2>
+          <p style={styles.muted}>Villa × Discipline completion matrix</p>
+        </div>
+        <select value={selProject} onChange={e=>setSelProject(e.target.value)} style={{ ...styles.input, width:220 }}>
+          {siteProjects.map(p=><option key={p.id} value={p.id}>{p.name}</option>)}
+        </select>
+      </div>
+      {overallPct!==null && (
+        <div style={{ background:'#fff', border:'1px solid #EAE6DB', borderRadius:10, padding:'12px 16px', marginBottom:16, display:'flex', alignItems:'center', gap:16 }}>
+          <div>
+            <div style={{ fontSize:11, color:'#888', fontWeight:700, textTransform:'uppercase', letterSpacing:'0.06em' }}>Overall Project</div>
+            <div style={{ fontSize:24, fontWeight:700, color:pctColor(overallPct) }}>{overallPct}%</div>
+          </div>
+          <div style={{ flex:1, background:'#EAE6DB', borderRadius:6, height:12 }}>
+            <div style={{ width:`${overallPct}%`, background:pctColor(overallPct), borderRadius:6, height:12, transition:'width 0.4s' }} />
+          </div>
+        </div>
+      )}
+      <div style={{ overflowX:'auto' }}>
+        <table style={{ borderCollapse:'collapse', fontSize:13, minWidth: villas.length>0?`${180+activeDisciplines.length*90}px`:'auto' }}>
+          <thead>
+            <tr>
+              <th style={{ padding:'10px 14px', textAlign:'left', background:'#F5F3EE', border:'1px solid #EAE6DB', fontSize:12, color:'#555', minWidth:140 }}>Villa / Unit</th>
+              {activeDisciplines.map(d=>(
+                <th key={d} style={{ padding:'10px 12px', background:'#F5F3EE', border:'1px solid #EAE6DB', textAlign:'center', fontSize:12, color:'#555', whiteSpace:'nowrap' }}>{d}</th>
+              ))}
+              <th style={{ padding:'10px 12px', background:'#EAE6DB', border:'1px solid #D8D4CC', textAlign:'center', fontSize:12, color:'#444', fontWeight:700 }}>Overall</th>
+            </tr>
+          </thead>
+          <tbody>
+            {villas.map(v=>{
+              const vPct = villaPct(v.id);
+              return (
+                <tr key={v.id}>
+                  <td style={{ padding:'8px 14px', border:'1px solid #EAE6DB', fontWeight:600, fontSize:13, color:'#1E2A4A', background:'#FAFAF8' }}>{v.name}</td>
+                  {activeDisciplines.map(d=>{
+                    const pct = cellPct(v.id, d);
+                    return (
+                      <td key={d} style={{ padding:'6px 12px', border:'1px solid #EAE6DB', textAlign:'center', background:pctBg(pct) }}>
+                        {pct!==null
+                          ? <div>
+                              <div style={{ fontWeight:700, color:pctColor(pct), fontSize:14 }}>{pct}%</div>
+                              <div style={{ height:3, background:'#EAE6DB', borderRadius:2, marginTop:3 }}>
+                                <div style={{ width:`${pct}%`, background:pctColor(pct), height:3, borderRadius:2 }} />
+                              </div>
+                            </div>
+                          : <span style={{ color:'#ccc', fontSize:12 }}>—</span>
+                        }
+                      </td>
+                    );
+                  })}
+                  <td style={{ padding:'8px 12px', border:'1px solid #D8D4CC', textAlign:'center', background:pctBg(vPct), fontWeight:700, color:pctColor(vPct), fontSize:15 }}>
+                    {vPct!==null?`${vPct}%`:'—'}
+                  </td>
+                </tr>
+              );
+            })}
+            {/* Totals row */}
+            <tr>
+              <td style={{ padding:'8px 14px', border:'1px solid #EAE6DB', fontWeight:700, fontSize:12, color:'#888', background:'#EAE6DB' }}>DISCIPLINE AVG</td>
+              {activeDisciplines.map(d=>{
+                const pct=discPct(d);
+                return (
+                  <td key={d} style={{ padding:'8px 12px', border:'1px solid #D8D4CC', textAlign:'center', background:'#EAE6DB', fontWeight:700, color:pctColor(pct), fontSize:14 }}>
+                    {pct!==null?`${pct}%`:'—'}
+                  </td>
+                );
+              })}
+              <td style={{ padding:'8px 12px', border:'1px solid #C8C4BC', textAlign:'center', background:'#DDD8CC', fontWeight:700, color:pctColor(overallPct), fontSize:16 }}>
+                {overallPct!==null?`${overallPct}%`:'—'}
+              </td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+
+      {/* Legend */}
+      <div style={{ display:'flex', gap:14, marginTop:14, flexWrap:'wrap' }}>
+        {[['Not started','#EAE6DB'],['In progress','#E07A2B'],['50%+','#C9A24B'],['75%+','#3D7A5C'],['Complete','#1A7A3E']].map(([l,c])=>(
+          <div key={l} style={{ display:'flex', alignItems:'center', gap:6, fontSize:12, color:'#555' }}>
+            <div style={{ width:14, height:14, borderRadius:3, background:c }} />{l}
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+// ── Client Materials Received ───────────────────────────────────────────────────
+function ClientMaterialView({ clientMaterials, setClientMaterials, siteProjects, employees, userRole }) {
+  const [editing, setEditing] = useState(null);
+  const [filterProject, setFilterProject] = useState('');
+  const canEdit = userRole === 'admin' || userRole === 'manager';
+  const sorted = [...clientMaterials]
+    .filter(m => !filterProject || m.projectId === filterProject)
+    .sort((a, b) => (b.date || '').localeCompare(a.date || ''));
+  function save(form) {
+    const rec = { ...form, id: form.id || crypto.randomUUID() };
+    setClientMaterials(prev => form.id ? prev.map(m => m.id === form.id ? rec : m) : [...prev, rec]);
+    setEditing(null);
+  }
+  function del(id) { if (confirm('Delete record?')) setClientMaterials(prev => prev.filter(m => m.id !== id)); }
+  const COND_COLOR = { good: '#1A7A3E', damaged: '#B5453A', partial: '#C9A24B' };
+  return (
+    <div style={styles.page}>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 18 }}>
+        <div>
+          <h2 className="serif" style={styles.h2}>Client Materials Received</h2>
+          <p style={styles.muted}>{clientMaterials.length} record{clientMaterials.length !== 1 ? 's' : ''}</p>
+        </div>
+        {canEdit && <button style={styles.primaryBtn} onClick={() => setEditing({ _isNew: true, date: new Date().toISOString().slice(0, 10), items: [], status: 'received' })}>+ Log Receipt</button>}
+      </div>
+      <select value={filterProject} onChange={e => setFilterProject(e.target.value)} style={{ ...styles.input, width: 240, marginBottom: 14 }}>
+        <option value="">All Projects</option>
+        {siteProjects.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
+      </select>
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+        {sorted.map(m => {
+          const proj = siteProjects.find(p => p.id === m.projectId);
+          return (
+            <div key={m.id} style={{ background: '#fff', border: '1px solid #EAE6DB', borderRadius: 12, padding: '14px 18px' }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 6 }}>
+                <div>
+                  <div style={{ fontWeight: 600, fontSize: 14, color: '#1E2A4A' }}>{m.date} — {proj?.name || '—'}</div>
+                  <div style={{ fontSize: 12, color: '#888', marginTop: 2 }}>Ref: {m.refNo || '—'} · Received by: {m.receivedBy || '—'}</div>
+                </div>
+                <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
+                  <span style={{ fontSize: 11, fontWeight: 700, color: COND_COLOR[m.status] || '#888', background: '#F5F3EE', borderRadius: 6, padding: '2px 8px', textTransform: 'uppercase' }}>{m.status}</span>
+                  {canEdit && <>
+                    <button style={{ ...styles.ghostBtn, fontSize: 12 }} onClick={() => setEditing(m)}>Edit</button>
+                    <button style={{ ...styles.ghostBtn, fontSize: 12, color: '#B5453A' }} onClick={() => del(m.id)}>×</button>
+                  </>}
+                </div>
+              </div>
+              <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12.5 }}>
+                <thead>
+                  <tr style={{ background: '#F5F3EE' }}>
+                    {['Description', 'Qty', 'Unit', 'Condition'].map(h => (
+                      <th key={h} style={{ textAlign: 'left', padding: '4px 8px', color: '#666', fontWeight: 600 }}>{h}</th>
+                    ))}
+                  </tr>
+                </thead>
+                <tbody>
+                  {(m.items || []).map((it, i) => (
+                    <tr key={i} style={{ borderTop: '1px solid #F0EDE6' }}>
+                      <td style={{ padding: '4px 8px' }}>{it.description}</td>
+                      <td style={{ padding: '4px 8px' }}>{it.qty}</td>
+                      <td style={{ padding: '4px 8px' }}>{it.unit}</td>
+                      <td style={{ padding: '4px 8px', color: COND_COLOR[it.condition] || '#888' }}>{it.condition}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+              {m.remarks && <div style={{ fontSize: 12, color: '#666', marginTop: 8, fontStyle: 'italic' }}>{m.remarks}</div>}
+            </div>
+          );
+        })}
+        {sorted.length === 0 && <div style={{ color: '#aaa', padding: 24 }}>No material receipts logged.</div>}
+      </div>
+      {editing && <ClientMaterialForm record={editing} siteProjects={siteProjects} employees={employees} onSave={save} onClose={() => setEditing(null)} />}
+    </div>
+  );
+}
+
+function ClientMaterialForm({ record, siteProjects, employees, onSave, onClose }) {
+  const [form, setForm] = useState({
+    date: new Date().toISOString().slice(0, 10), projectId: '', refNo: '',
+    receivedBy: '', status: 'received', items: [], remarks: '',
+    ...record,
+  });
+  function set(k, v) { setForm(f => ({ ...f, [k]: v })); }
+  function addItem() { set('items', [...form.items, { description: '', qty: '', unit: 'nos', condition: 'good' }]); }
+  function updateItem(i, k, v) { const it = [...form.items]; it[i] = { ...it[i], [k]: v }; set('items', it); }
+  function removeItem(i) { set('items', form.items.filter((_, idx) => idx !== i)); }
+  return (
+    <Modal title={form._isNew ? 'Log Material Receipt' : 'Edit Receipt'} onClose={onClose} width={620}>
+      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
+        <div style={styles.formGroup}><label style={styles.label}>Date *</label><input type="date" value={form.date} onChange={e=>set('date',e.target.value)} style={styles.input} /></div>
+        <div style={styles.formGroup}>
+          <label style={styles.label}>Project *</label>
+          <select value={form.projectId} onChange={e=>set('projectId',e.target.value)} style={styles.input}>
+            <option value="">— Select —</option>
+            {siteProjects.map(p=><option key={p.id} value={p.id}>{p.name}</option>)}
+          </select>
+        </div>
+        <div style={styles.formGroup}><label style={styles.label}>Client Delivery Ref / DO No.</label><input value={form.refNo||''} onChange={e=>set('refNo',e.target.value)} style={styles.input} placeholder="e.g. DO-2024-001" /></div>
+        <div style={styles.formGroup}>
+          <label style={styles.label}>Received by</label>
+          <select value={form.receivedBy||''} onChange={e=>set('receivedBy',e.target.value)} style={styles.input}>
+            <option value="">— Select —</option>
+            {employees.map(e=><option key={e.id} value={e.name}>{e.name}</option>)}
+          </select>
+        </div>
+        <div style={{ gridColumn:'1/-1', ...styles.formGroup }}>
+          <label style={styles.label}>Status</label>
+          <select value={form.status} onChange={e=>set('status',e.target.value)} style={{ ...styles.input, width:200 }}>
+            {['received','partially received','returned','pending verification'].map(s=><option key={s} value={s}>{s}</option>)}
+          </select>
+        </div>
+      </div>
+      <div style={{ marginTop:14, marginBottom:6, fontWeight:600, fontSize:13, color:'#1E2A4A' }}>
+        Items Received <button style={{ ...styles.ghostBtn, fontSize:11, marginLeft:10 }} onClick={addItem}>+ Add item</button>
+      </div>
+      {form.items.map((it,i)=>(
+        <div key={i} style={{ display:'grid', gridTemplateColumns:'3fr 1fr 1fr 1.2fr auto', gap:8, marginBottom:8, alignItems:'center' }}>
+          <input value={it.description} onChange={e=>updateItem(i,'description',e.target.value)} style={{ ...styles.input, fontSize:12 }} placeholder="Description" />
+          <input value={it.qty} onChange={e=>updateItem(i,'qty',e.target.value)} style={{ ...styles.input, fontSize:12 }} placeholder="Qty" />
+          <select value={it.unit} onChange={e=>updateItem(i,'unit',e.target.value)} style={{ ...styles.input, fontSize:12 }}>
+            {['nos','m','m²','kg','ltr','roll','set','lot'].map(u=><option key={u} value={u}>{u}</option>)}
+          </select>
+          <select value={it.condition} onChange={e=>updateItem(i,'condition',e.target.value)} style={{ ...styles.input, fontSize:12 }}>
+            {['good','damaged','partial'].map(c=><option key={c} value={c}>{c}</option>)}
+          </select>
+          <button onClick={()=>removeItem(i)} style={{ ...styles.ghostBtn, color:'#B5453A', fontSize:12, padding:'4px 8px' }}>×</button>
+        </div>
+      ))}
+      {form.items.length===0 && <div style={{ fontSize:12, color:'#aaa', marginBottom:8 }}>No items added.</div>}
+      <div style={{ ...styles.formGroup, marginTop:10 }}><label style={styles.label}>Remarks</label><textarea value={form.remarks||''} onChange={e=>set('remarks',e.target.value)} style={{ ...styles.input, height:50 }} /></div>
+      <div style={{ display:'flex', justifyContent:'flex-end', gap:10, marginTop:12 }}>
+        <button style={styles.ghostBtn} onClick={onClose}>Cancel</button>
+        <button style={styles.primaryBtn} onClick={()=>{ if(!form.date||!form.projectId) return alert('Date and project required'); onSave(form); }}>Save Receipt</button>
+      </div>
+    </Modal>
+  );
+}
+
+// ── Site Attendance ─────────────────────────────────────────────────────────────
+function SiteAttendanceView({ siteAttendance, setSiteAttendance, siteProjects, employees, userRole }) {
+  const [editing, setEditing] = useState(null);
+  const [filterProject, setFilterProject] = useState('');
+  const [filterMonth, setFilterMonth] = useState(new Date().toISOString().slice(0, 7));
+  const canEdit = userRole === 'admin' || userRole === 'manager';
+  const sorted = [...siteAttendance]
+    .filter(r => (!filterProject || r.projectId === filterProject) && (!filterMonth || (r.date || '').startsWith(filterMonth)))
+    .sort((a, b) => (b.date || '').localeCompare(a.date || ''));
+  function save(form) {
+    const rec = { ...form, id: form.id || crypto.randomUUID() };
+    setSiteAttendance(prev => form.id ? prev.map(r => r.id === form.id ? rec : r) : [...prev, rec]);
+    setEditing(null);
+  }
+  function del(id) { if (confirm('Delete attendance record?')) setSiteAttendance(prev => prev.filter(r => r.id !== id)); }
+  const STATUS_ICON = { present: '✅', absent: '❌', half_day: '🔶', leave: '🔵' };
+  const empSummary = employees.reduce((acc, emp) => {
+    const records = sorted.flatMap(r => (r.records || []).filter(x => x.employeeId === emp.id));
+    acc[emp.id] = {
+      present: records.filter(x => x.status === 'present').length,
+      halfDay: records.filter(x => x.status === 'half_day').length,
+      absent: records.filter(x => x.status === 'absent').length,
+      leave: records.filter(x => x.status === 'leave').length,
+      total: records.length,
+    };
+    return acc;
+  }, {});
+  return (
+    <div style={styles.page}>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 18 }}>
+        <div><h2 className="serif" style={styles.h2}>Site Attendance</h2><p style={styles.muted}>{siteAttendance.length} daily records</p></div>
+        {canEdit && <button style={styles.primaryBtn} onClick={() => setEditing({ _isNew: true, date: new Date().toISOString().slice(0, 10), records: [] })}>+ Mark Attendance</button>}
+      </div>
+      <div style={{ display: 'flex', gap: 10, marginBottom: 16, flexWrap: 'wrap' }}>
+        <select value={filterProject} onChange={e => setFilterProject(e.target.value)} style={{ ...styles.input, width: 220 }}>
+          <option value="">All Projects</option>
+          {siteProjects.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
+        </select>
+        <input type="month" value={filterMonth} onChange={e => setFilterMonth(e.target.value)} style={{ ...styles.input, width: 160 }} />
+        <button style={styles.ghostBtn} onClick={() => setFilterMonth('')}>All months</button>
+      </div>
+      {employees.length > 0 && (
+        <>
+          <div style={styles.dashSection}>Monthly Summary — {filterMonth || 'All time'}</div>
+          <div style={{ overflowX: 'auto', marginBottom: 20 }}>
+            <table style={styles.table}>
+              <thead><tr style={{ background: '#F5F3EE' }}>{['Employee','Days Logged','Present','Half Day','Absent','Leave','Attendance %'].map(h=><th key={h} style={{ ...styles.th, textAlign: h==='Employee'?'left':'center' }}>{h}</th>)}</tr></thead>
+              <tbody>
+                {employees.map(emp => {
+                  const s = empSummary[emp.id] || {};
+                  const pct = s.total ? Math.round(((s.present + (s.halfDay||0) * 0.5) / s.total) * 100) : 0;
+                  return (
+                    <tr key={emp.id} style={{ borderTop: '1px solid #EAE6DB' }}>
+                      <td style={styles.td}>{emp.name}</td>
+                      <td style={{ ...styles.td, textAlign:'center' }}>{s.total||0}</td>
+                      <td style={{ ...styles.td, textAlign:'center', color:'#1A7A3E', fontWeight:600 }}>{s.present||0}</td>
+                      <td style={{ ...styles.td, textAlign:'center', color:'#C9A24B' }}>{s.halfDay||0}</td>
+                      <td style={{ ...styles.td, textAlign:'center', color:'#B5453A' }}>{s.absent||0}</td>
+                      <td style={{ ...styles.td, textAlign:'center', color:'#6B5BAE' }}>{s.leave||0}</td>
+                      <td style={{ ...styles.td, textAlign:'center' }}><span style={{ fontWeight:700, color: pct>=80?'#1A7A3E':pct>=60?'#C9A24B':'#B5453A' }}>{s.total?`${pct}%`:'—'}</span></td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+        </>
+      )}
+      <div style={styles.dashSection}>Daily Records</div>
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+        {sorted.map(r => {
+          const proj = siteProjects.find(p => p.id === r.projectId);
+          const presentCount = (r.records || []).filter(x => x.status === 'present').length;
+          return (
+            <div key={r.id} style={{ background: '#fff', border: '1px solid #EAE6DB', borderRadius: 12, padding: '12px 16px' }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
+                <div>
+                  <span style={{ fontWeight: 600, fontSize: 14, color: '#1E2A4A' }}>{r.date}</span>
+                  <span style={{ fontSize: 12, color: '#888', marginLeft: 10 }}>{proj?.name || '—'}</span>
+                  <span style={{ fontSize: 12, color: '#1A7A3E', marginLeft: 10 }}>{presentCount}/{(r.records||[]).length} present</span>
+                </div>
+                {canEdit && <div style={{ display:'flex', gap:6 }}>
+                  <button style={{ ...styles.ghostBtn, fontSize: 12 }} onClick={() => setEditing(r)}>Edit</button>
+                  <button style={{ ...styles.ghostBtn, fontSize: 12, color: '#B5453A' }} onClick={() => del(r.id)}>×</button>
+                </div>}
+              </div>
+              <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
+                {(r.records || []).map((rec, i) => {
+                  const emp = employees.find(e => e.id === rec.employeeId);
+                  return <span key={i} style={{ fontSize: 12, background: '#F5F3EE', borderRadius: 8, padding: '3px 10px' }}>{STATUS_ICON[rec.status]||'?'} {emp?.name||'?'}</span>;
+                })}
+              </div>
+            </div>
+          );
+        })}
+        {sorted.length === 0 && <div style={{ color: '#aaa', padding: 24 }}>No attendance records for this period.</div>}
+      </div>
+      {editing && <AttendanceSheet sheet={editing} siteProjects={siteProjects} employees={employees} onSave={save} onClose={() => setEditing(null)} />}
+    </div>
+  );
+}
+
+function AttendanceSheet({ sheet, siteProjects, employees, onSave, onClose }) {
+  const [form, setForm] = useState({
+    date: new Date().toISOString().slice(0, 10), projectId: '',
+    records: employees.map(e => ({ employeeId: e.id, status: 'present', note: '' })),
+    ...sheet,
+  });
+  useEffect(() => {
+    if (form.records.length === 0 && employees.length > 0) {
+      setForm(f => ({ ...f, records: employees.map(e => ({ employeeId: e.id, status: 'present', note: '' })) }));
+    }
+  }, []);
+  function set(k, v) { setForm(f => ({ ...f, [k]: v })); }
+  function setRecord(i, k, v) { const recs = [...form.records]; recs[i] = { ...recs[i], [k]: v }; set('records', recs); }
+  const STATUSES = [{ value:'present',label:'P',color:'#1A7A3E' },{ value:'absent',label:'A',color:'#B5453A' },{ value:'half_day',label:'½',color:'#C9A24B' },{ value:'leave',label:'L',color:'#6B5BAE' }];
+  const proj = siteProjects.find(p => p.id === form.projectId);
+  const relevantEmps = proj?.teamIds?.length ? employees.filter(e => proj.teamIds.includes(e.id)) : employees;
+  const displayRecords = form.records.filter(r => relevantEmps.some(e => e.id === r.employeeId));
+  return (
+    <Modal title="Mark Attendance" onClose={onClose} width={560}>
+      <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:12, marginBottom:16 }}>
+        <div style={styles.formGroup}><label style={styles.label}>Date *</label><input type="date" value={form.date} onChange={e=>set('date',e.target.value)} style={styles.input} /></div>
+        <div style={styles.formGroup}>
+          <label style={styles.label}>Project</label>
+          <select value={form.projectId} onChange={e=>set('projectId',e.target.value)} style={styles.input}>
+            <option value="">— All / General —</option>
+            {siteProjects.map(p=><option key={p.id} value={p.id}>{p.name}</option>)}
+          </select>
+        </div>
+      </div>
+      <div style={{ fontWeight:600, fontSize:13, color:'#1E2A4A', marginBottom:8 }}>Employees ({relevantEmps.length})</div>
+      <div style={{ display:'flex', flexDirection:'column', gap:8, maxHeight:340, overflowY:'auto' }}>
+        {displayRecords.map((rec) => {
+          const emp = employees.find(e => e.id === rec.employeeId);
+          const allIdx = form.records.findIndex(r => r.employeeId === rec.employeeId);
+          return (
+            <div key={rec.employeeId} style={{ display:'grid', gridTemplateColumns:'2fr 1fr 3fr', gap:10, alignItems:'center', padding:'8px 12px', background:'#FAF8F4', borderRadius:8 }}>
+              <span style={{ fontSize:13, fontWeight:500 }}>{emp?.name||'?'}</span>
+              <div style={{ display:'flex', gap:4 }}>
+                {STATUSES.map(s=>(
+                  <button key={s.value} onClick={()=>setRecord(allIdx,'status',s.value)}
+                    style={{ fontSize:12, padding:'3px 8px', borderRadius:6, border:'none', cursor:'pointer', background:rec.status===s.value?s.color:'#EAE6DB', color:rec.status===s.value?'#fff':'#666', fontWeight:700 }}>
+                    {s.label}
+                  </button>
+                ))}
+              </div>
+              <input value={rec.note||''} onChange={e=>setRecord(allIdx,'note',e.target.value)} style={{ ...styles.input, fontSize:12, padding:'4px 8px' }} placeholder="Note (optional)" />
+            </div>
+          );
+        })}
+        {displayRecords.length===0 && <div style={{ color:'#aaa', fontSize:13 }}>No employees. Add team in project settings.</div>}
+      </div>
+      <div style={{ display:'flex', justifyContent:'flex-end', gap:10, marginTop:16 }}>
+        <button style={styles.ghostBtn} onClick={onClose}>Cancel</button>
+        <button style={styles.primaryBtn} onClick={()=>{ if(!form.date) return alert('Date required'); onSave(form); }}>Save Attendance</button>
+      </div>
+    </Modal>
+  );
+}
+
+// ── Quarterly Evaluation ────────────────────────────────────────────────────────
+function QuarterlyEvalView({ evaluations, setEvaluations, employees, siteAttendance, progressUpdates, siteProjects, userRole }) {
+  const [editing, setEditing] = useState(null);
+  const [filterEmp, setFilterEmp] = useState('');
+  const canEdit = userRole === 'admin' || userRole === 'manager';
+  const sorted = [...evaluations]
+    .filter(e => !filterEmp || e.employeeId === filterEmp)
+    .sort((a, b) => `${b.year}${b.quarter}`.localeCompare(`${a.year}${a.quarter}`));
+
+  function computeStats(employeeId, quarter, year) {
+    const qMonths = { Q1:['01','02','03'], Q2:['04','05','06'], Q3:['07','08','09'], Q4:['10','11','12'] }[quarter];
+    const prefix = qMonths.map(m => `${year}-${m}`);
+    const attRecs = siteAttendance.filter(r=>prefix.some(p=>(r.date||'').startsWith(p))).flatMap(r=>(r.records||[]).filter(x=>x.employeeId===employeeId));
+    const total = attRecs.length;
+    const present = attRecs.filter(x=>x.status==='present').length;
+    const halfDay = attRecs.filter(x=>x.status==='half_day').length;
+    const attPct = total ? Math.round(((present+halfDay*0.5)/total)*100) : 0;
+    const dsrCount = progressUpdates.filter(u=>prefix.some(p=>(u.date||'').startsWith(p))).filter(u=>(u.workers||[]).some(w=>w.employeeId===employeeId)).length;
+    return { attPct, dsrCount, totalDays: total };
+  }
+  function save(form) {
+    const rec = { ...form, id: form.id || crypto.randomUUID() };
+    setEvaluations(prev => form.id ? prev.map(e => e.id === form.id ? rec : e) : [...prev, rec]);
+    setEditing(null);
+  }
+  function del(id) { if (confirm('Delete evaluation?')) setEvaluations(prev => prev.filter(e => e.id !== id)); }
+  const RATING_COLOR = { 5:'#1A7A3E', 4:'#3D7A5C', 3:'#C9A24B', 2:'#E07A2B', 1:'#B5453A' };
+  const currentYear = new Date().getFullYear();
+  const currentQ = `Q${Math.ceil((new Date().getMonth()+1)/3)}`;
+  return (
+    <div style={styles.page}>
+      <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', marginBottom:18 }}>
+        <div><h2 className="serif" style={styles.h2}>Quarterly Evaluation</h2><p style={styles.muted}>{evaluations.length} evaluation{evaluations.length!==1?'s':''}</p></div>
+        {canEdit && <button style={styles.primaryBtn} onClick={()=>setEditing({ _isNew:true, quarter:currentQ, year:String(currentYear), ratings:{ punctuality:3, quality:3, teamwork:3, safety:3, initiative:3 } })}>+ New Evaluation</button>}
+      </div>
+      <select value={filterEmp} onChange={e=>setFilterEmp(e.target.value)} style={{ ...styles.input, width:240, marginBottom:16 }}>
+        <option value="">All Employees</option>
+        {employees.map(e=><option key={e.id} value={e.id}>{e.name}</option>)}
+      </select>
+      <div style={{ display:'flex', flexDirection:'column', gap:12 }}>
+        {sorted.map(ev=>{
+          const emp = employees.find(e=>e.id===ev.employeeId);
+          const ratings = ev.ratings||{};
+          const vals = Object.values(ratings).filter(v=>typeof v==='number');
+          const avg = vals.length?(vals.reduce((a,b)=>a+b,0)/vals.length).toFixed(1):'—';
+          return (
+            <div key={ev.id} style={{ background:'#fff', border:'1px solid #EAE6DB', borderRadius:12, padding:'16px 18px' }}>
+              <div style={{ display:'flex', justifyContent:'space-between', alignItems:'flex-start', marginBottom:10 }}>
+                <div>
+                  <div style={{ fontWeight:600, fontSize:15, color:'#1E2A4A' }}>{emp?.name||'?'}</div>
+                  <div style={{ fontSize:12.5, color:'#888', marginTop:2 }}>{ev.quarter} {ev.year}</div>
+                </div>
+                <div style={{ display:'flex', gap:10, alignItems:'center' }}>
+                  <div style={{ textAlign:'center' }}>
+                    <div style={{ fontSize:22, fontWeight:700, color:RATING_COLOR[Math.round(parseFloat(avg))]||'#888' }}>{avg}</div>
+                    <div style={{ fontSize:10, color:'#aaa' }}>avg / 5</div>
+                  </div>
+                  {canEdit && <>
+                    <button style={{ ...styles.ghostBtn, fontSize:12 }} onClick={()=>setEditing(ev)}>Edit</button>
+                    <button style={{ ...styles.ghostBtn, fontSize:12, color:'#B5453A' }} onClick={()=>del(ev.id)}>×</button>
+                  </>}
+                </div>
+              </div>
+              <div style={{ display:'grid', gridTemplateColumns:'repeat(5,1fr)', gap:8, marginBottom:10 }}>
+                {[['punctuality','Punctuality'],['quality','Quality'],['teamwork','Teamwork'],['safety','Safety'],['initiative','Initiative']].map(([k,l])=>(
+                  <div key={k} style={{ textAlign:'center', background:'#FAF8F4', borderRadius:8, padding:'8px 4px' }}>
+                    <div style={{ fontSize:18, fontWeight:700, color:RATING_COLOR[ratings[k]]||'#aaa' }}>{ratings[k]||'—'}</div>
+                    <div style={{ fontSize:10, color:'#888', marginTop:2 }}>{l}</div>
+                  </div>
+                ))}
+              </div>
+              <div style={{ display:'grid', gridTemplateColumns:'repeat(3,1fr)', gap:8, fontSize:12, color:'#555' }}>
+                <div>📅 Attendance: <strong style={{ color:ev.attPct>=80?'#1A7A3E':'#C9A24B' }}>{ev.attPct??'—'}%</strong></div>
+                <div>📋 Active days: <strong>{ev.dsrCount??'—'}</strong></div>
+                <div>📝 Status: <strong>{ev.status||'draft'}</strong></div>
+              </div>
+              {ev.comments && <div style={{ fontSize:12, color:'#666', marginTop:8, fontStyle:'italic', borderTop:'1px solid #F0EDE6', paddingTop:8 }}>{ev.comments}</div>}
+            </div>
+          );
+        })}
+        {sorted.length===0 && <div style={{ color:'#aaa', padding:24 }}>No evaluations recorded.</div>}
+      </div>
+      {editing && <QuarterlyEvalForm evaluation={editing} employees={employees} computeStats={computeStats} onSave={save} onClose={()=>setEditing(null)} />}
+    </div>
+  );
+}
+
+function QuarterlyEvalForm({ evaluation, employees, computeStats, onSave, onClose }) {
+  const currentYear = new Date().getFullYear();
+  const [form, setForm] = useState({
+    employeeId:'', quarter:'Q1', year:String(currentYear), status:'draft',
+    ratings:{ punctuality:3, quality:3, teamwork:3, safety:3, initiative:3 },
+    attPct:null, dsrCount:null, comments:'',
+    ...evaluation,
+  });
+  function set(k,v) { setForm(f=>({...f,[k]:v})); }
+  function setRating(k,v) { setForm(f=>({...f,ratings:{...f.ratings,[k]:v}})); }
+  useEffect(()=>{
+    if (form.employeeId && form.quarter && form.year) {
+      const stats = computeStats(form.employeeId, form.quarter, form.year);
+      setForm(f=>({...f, attPct:stats.attPct, dsrCount:stats.dsrCount, totalDays:stats.totalDays}));
+    }
+  }, [form.employeeId, form.quarter, form.year]);
+  const RATING_LABELS = { 1:'Poor', 2:'Below avg', 3:'Average', 4:'Good', 5:'Excellent' };
+  const CRITERIA = [['punctuality','Punctuality & Attendance'],['quality','Quality of Work'],['teamwork','Teamwork & Cooperation'],['safety','Safety Compliance'],['initiative','Initiative & Attitude']];
+  const avgRating = (Object.values(form.ratings).reduce((a,b)=>a+b,0)/Object.values(form.ratings).length).toFixed(1);
+  return (
+    <Modal title={form._isNew?'New Quarterly Evaluation':'Edit Evaluation'} onClose={onClose} width={560}>
+      <div style={{ display:'grid', gridTemplateColumns:'2fr 1fr 1fr', gap:12, marginBottom:16 }}>
+        <div style={styles.formGroup}>
+          <label style={styles.label}>Employee *</label>
+          <select value={form.employeeId} onChange={e=>set('employeeId',e.target.value)} style={styles.input}>
+            <option value="">— Select —</option>
+            {employees.map(e=><option key={e.id} value={e.id}>{e.name}</option>)}
+          </select>
+        </div>
+        <div style={styles.formGroup}><label style={styles.label}>Quarter</label><select value={form.quarter} onChange={e=>set('quarter',e.target.value)} style={styles.input}>{['Q1','Q2','Q3','Q4'].map(q=><option key={q} value={q}>{q}</option>)}</select></div>
+        <div style={styles.formGroup}><label style={styles.label}>Year</label><select value={form.year} onChange={e=>set('year',e.target.value)} style={styles.input}>{[currentYear,currentYear-1,currentYear-2].map(y=><option key={y} value={y}>{y}</option>)}</select></div>
+      </div>
+      {form.employeeId && (
+        <div style={{ display:'grid', gridTemplateColumns:'repeat(3,1fr)', gap:10, marginBottom:16 }}>
+          {[['Attendance %',form.attPct!==null?`${form.attPct}%`:'—',form.attPct>=80?'#1A7A3E':'#C9A24B'],['Active Days',form.dsrCount??'—','#1E2A4A'],['Working Days',form.totalDays??'—','#555']].map(([l,v,c])=>(
+            <div key={l} style={{ background:'#FAF8F4', borderRadius:8, padding:'10px 14px', textAlign:'center' }}>
+              <div style={{ fontSize:20, fontWeight:700, color:c }}>{v}</div>
+              <div style={{ fontSize:11, color:'#888', marginTop:2 }}>{l}</div>
+            </div>
+          ))}
+        </div>
+      )}
+      <div style={{ marginBottom:16 }}>
+        <div style={{ fontWeight:600, fontSize:13, color:'#1E2A4A', marginBottom:10 }}>Performance Ratings <span style={{ fontSize:11, color:'#888', fontWeight:400 }}>(1=Poor → 5=Excellent)</span></div>
+        {CRITERIA.map(([k,label])=>(
+          <div key={k} style={{ display:'grid', gridTemplateColumns:'2fr 1fr auto', gap:12, alignItems:'center', marginBottom:10 }}>
+            <label style={{ fontSize:13, color:'#444' }}>{label}</label>
+            <input type="range" min={1} max={5} value={form.ratings[k]||3} onChange={e=>setRating(k,+e.target.value)} style={{ accentColor:'#1E2A4A' }} />
+            <span style={{ fontSize:13, fontWeight:700, color:'#1E2A4A', width:100, textAlign:'right' }}>{form.ratings[k]}/5 — {RATING_LABELS[form.ratings[k]]}</span>
+          </div>
+        ))}
+        <div style={{ textAlign:'right', fontSize:13, color:'#1E2A4A', fontWeight:600 }}>Overall: {avgRating} / 5</div>
+      </div>
+      <div style={styles.formGroup}><label style={styles.label}>Comments / Recommendations</label><textarea value={form.comments||''} onChange={e=>set('comments',e.target.value)} style={{ ...styles.input, height:64 }} /></div>
+      <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:12, marginBottom:16 }}>
+        <div style={styles.formGroup}><label style={styles.label}>Evaluator</label><input value={form.evaluator||''} onChange={e=>set('evaluator',e.target.value)} style={styles.input} /></div>
+        <div style={styles.formGroup}><label style={styles.label}>Status</label><select value={form.status} onChange={e=>set('status',e.target.value)} style={styles.input}>{['draft','submitted','acknowledged'].map(s=><option key={s} value={s}>{s}</option>)}</select></div>
+      </div>
+      <div style={{ display:'flex', justifyContent:'flex-end', gap:10 }}>
+        <button style={styles.ghostBtn} onClick={onClose}>Cancel</button>
+        <button style={styles.primaryBtn} onClick={()=>{ if(!form.employeeId) return alert('Select an employee'); onSave(form); }}>Save Evaluation</button>
+      </div>
+    </Modal>
+  );
+}
+
 
 
 // ─── Root App ─────────────────────────────────────────────────────────────────
@@ -8090,6 +12255,7 @@ export default function App() {
   const [authReady,        setAuthReady]       = useState(false);
   const [userRole,         setUserRole]        = useState('admin');
   const [syncStatus,       setSyncStatus]      = useState('synced');
+  const [biReady,          setBiReady]         = useState(false);
   const [editingCustomer,  setEditingCustomer] = useState(null);
   const [editingVendor,    setEditingVendor]   = useState(null);
   const [editingItem,      setEditingItem]     = useState(null);
@@ -8117,6 +12283,16 @@ export default function App() {
   const [contracts,        _setCon]    = useState([]);
   const [channelPartners,  _setCP]     = useState([]);
   const [termsLibrary,     _setTL]     = useState({ clauses: [], templates: [] });
+  const [scopeOfWork,      _setSOW]    = useState([]);
+  const [qualityDocs,      _setQD]     = useState({ isoPrinciples: [], deptProcedures: [], inprocessQA: [] });
+  const [pdvs,             _setPdvs]   = useState([]);
+  const [siteProjects,     _setSP]     = useState([]);
+  const [siteActivities,   _setSActs]  = useState([]);
+  const [progressUpdates,  _setDSR]    = useState([]);
+  const [clientMaterials,  _setCM]     = useState([]);
+  const [siteAttendance,   _setSA]     = useState([]);
+  const [evaluations,      _setEvls]   = useState([]);
+  const [notifications,    setNotifications] = useState([]);
 
   // ── Auth ────────────────────────────────────────────────────────────────────
   useEffect(() => {
@@ -8151,6 +12327,7 @@ export default function App() {
     if (!ownerUid) return;
     const unsub = subscribeCompanyData(ownerUid, (data) => {
       setSyncStatus('synced');
+      setBiReady(true);
       _setBi(data.businessInfo || {});
       _setDocs(data.documents || []);
       _setCusts(data.customers || []);
@@ -8172,6 +12349,15 @@ export default function App() {
       _setCon(data.contracts || []);
       _setCP(data.channelPartners || []);
       _setTL(data.termsLibrary || { clauses: [], templates: [] });
+      _setSOW(data.scopeOfWork || []);
+      _setQD(data.qualityDocs || { isoPrinciples: [], deptProcedures: [], inprocessQA: [] });
+      _setPdvs(data.pdvs || []);
+      _setSP(data.siteProjects || []);
+      _setSActs(data.siteActivities || []);
+      _setDSR(data.progressUpdates || []);
+      _setCM(data.clientMaterials || []);
+      _setSA(data.siteAttendance || []);
+      _setEvls(data.evaluations || []);
     });
     return unsub;
   }, [ownerUid]);
@@ -8222,6 +12408,15 @@ export default function App() {
   const setContracts        = mkSet(_setCon,   'contracts');
   const setChannelPartners  = mkSet(_setCP,    'channelPartners');
   const setTermsLibrary     = mkSet(_setTL,    'termsLibrary');
+  const setScopeOfWork      = mkSet(_setSOW,   'scopeOfWork');
+  const setQualityDocs      = mkSet(_setQD,    'qualityDocs');
+  const setPdvs             = mkSet(_setPdvs,  'pdvs');
+  const setSiteProjects     = mkSet(_setSP,    'siteProjects');
+  const setSiteActivities   = mkSet(_setSActs, 'siteActivities');
+  const setProgressUpdates  = mkSet(_setDSR,   'progressUpdates');
+  const setClientMaterials  = mkSet(_setCM,    'clientMaterials');
+  const setSiteAttendance   = mkSet(_setSA,    'siteAttendance');
+  const setEvaluations      = mkSet(_setEvls,  'evaluations');
 
   // ── Document number helpers ──────────────────────────────────────────────────
   function getFY(dateStr) {
@@ -8240,11 +12435,12 @@ export default function App() {
   }
 
   // ── Doc helpers ──────────────────────────────────────────────────────────────
-  function startNewDoc(type) {
+  function startNewDoc(type, bizType) {
     const today = new Date().toISOString().slice(0, 10);
     setActiveDoc({
       ...blankDoc(type, businessInfo),
       number: nextDocNumber(type, today),
+      bizType: bizType || activeTypes[0] || 'trading',
     });
     setView('doceditor');
   }
@@ -8255,9 +12451,11 @@ export default function App() {
   }
 
   function convertDoc(srcDoc, newType) {
+    // Converted doc must stay in same business activity as source
     const today = new Date().toISOString().slice(0, 10);
     setActiveDoc({
       ...blankDoc(newType, businessInfo),
+      bizType: srcDoc.bizType || activeTypes[0] || 'trading',
       number: nextDocNumber(newType, today),
       customerId: srcDoc.customerId,
       customerSnapshot: srcDoc.customerSnapshot,
@@ -8281,7 +12479,6 @@ export default function App() {
     };
     const isNew = !documents.find((d) => d.id === saved.id);
     setDocuments((prev) => isNew ? [...prev, saved] : prev.map((d) => d.id === saved.id ? saved : d));
-    // Auto-update stock ledger on first save of outgoing docs
     if (isNew && ['invoice', 'delivery'].includes(saved.type)) {
       const entries = (saved.items || []).filter(it => it.itemId && (it.qty || 0) !== 0).map(it => ({
         id: crypto.randomUUID(), date: saved.date, docType: saved.type, docId: saved.id,
@@ -8298,6 +12495,46 @@ export default function App() {
       }));
       if (entries.length) setStockLedger((prev) => [...prev, ...entries]);
     }
+    // ── Notifications ──────────────────────────────────────────────────────────
+    const docLabel = DOC_TYPES[saved.type]?.label || saved.type;
+    const docRef = `${docLabel} ${saved.number || ''}`.trim();
+    const party = saved.customerSnapshot?.name || '';
+    if (status === 'submitted') {
+      // Notify admin/manager that a doc needs approval
+      const notif = {
+        id: crypto.randomUUID(), createdAt: Date.now(), read: false,
+        type: 'approval_request', docId: saved.id, docType: saved.type, docNumber: saved.number,
+        forRole: 'admin',
+        title: `Approval needed: ${docRef}`,
+        message: `${party ? party + ' · ' : ''}Forwarded by ${user?.email || 'staff'} — awaiting your approval.`,
+        action: 'open_doc',
+      };
+      setNotifications(prev => [notif, ...prev]);
+      sendNotificationEmail(businessInfo, 'approval_request', { docRef, party, submitter: user?.email });
+    }
+    if (status === 'approved') {
+      const notif = {
+        id: crypto.randomUUID(), createdAt: Date.now(), read: false,
+        type: 'approved', docId: saved.id, docType: saved.type, docNumber: saved.number,
+        forRole: 'all',
+        title: `Approved: ${docRef}`,
+        message: `${party ? party + ' — ' : ''}${docLabel} has been approved.`,
+        action: 'open_doc',
+      };
+      setNotifications(prev => [notif, ...prev]);
+      sendNotificationEmail(businessInfo, 'approved', { docRef, party, customerEmail: saved.customerSnapshot?.email });
+    }
+    if (status === 'rejected') {
+      const notif = {
+        id: crypto.randomUUID(), createdAt: Date.now(), read: false,
+        type: 'rejected', docId: saved.id, docType: saved.type, docNumber: saved.number,
+        forRole: 'all',
+        title: `Rejected: ${docRef}`,
+        message: rejectionNote || 'Document was rejected.',
+        action: 'open_doc',
+      };
+      setNotifications(prev => [notif, ...prev]);
+    }
     setActiveDoc(null);
     setView('documents');
   }
@@ -8309,14 +12546,40 @@ export default function App() {
 
   async function handleLogout() { await logOut(); }
 
-  const companyType = (businessInfo && businessInfo.companyType) || 'trading';
-  const country     = (businessInfo && businessInfo.country)     || 'india';
-  const showTrade   = companyType === 'trading' || companyType === 'both' || companyType === 'manufacturing';
-  const showProduction = companyType === 'manufacturing' || companyType === 'both';
-  const showService    = companyType === 'service'       || companyType === 'both';
+  function exportAllData() {
+    const payload = {
+      exportedAt: new Date().toISOString(),
+      exportedBy: user?.email || '',
+      businessInfo, documents, customers, vendors, items, stockLedger, grns,
+      vouchers, pettyCash, employees, payrollRuns, serviceOrders, productionOrders,
+      rawMaterials, boms, parts, engDocs, enquiries, contracts, channelPartners,
+      termsLibrary, scopeOfWork, qualityDocs, pdvs,
+    };
+    const blob = new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `operix-data-${(businessInfo.name || 'export').replace(/\s+/g, '-')}-${new Date().toISOString().slice(0, 10)}.json`;
+    a.click();
+    URL.revokeObjectURL(url);
+  }
+
+  const activeTypes = (() => {
+    if (businessInfo?.activeTypes?.length) return businessInfo.activeTypes;
+    const ct = businessInfo?.companyType || 'trading';
+    if (ct === 'both') return ['trading','manufacturing'];
+    if (ct === 'all')  return ['trading','manufacturing','service'];
+    return [ct];
+  })();
+  const isMultiBiz = activeTypes.length > 1;
+  const companyType = activeTypes.length === 1 ? activeTypes[0]
+    : activeTypes.includes('service') && activeTypes.includes('manufacturing') ? 'both'
+    : activeTypes.includes('manufacturing') ? 'both'
+    : activeTypes.includes('service') ? 'service'
+    : 'trading';
+  const country = (businessInfo && businessInfo.country) || 'india';
 
   const stats = useMemo(() => {
-    const cc = COUNTRY_CONFIG[country] || COUNTRY_CONFIG.india;
     const totalRevenue   = documents.filter(d => d.type === 'invoice').reduce((s, d) => s + (computeTotals(d, businessInfo.state, country).grandTotal || 0), 0);
     const totalPurchases = documents.filter(d => d.type === 'purchasebill').reduce((s, d) => s + (computeTotals(d, businessInfo.state, country).grandTotal || 0), 0);
     const outstanding    = documents.filter(d => d.type === 'invoice' && !d.paid).reduce((s, d) => s + (computeTotals(d, businessInfo.state, country).grandTotal || 0), 0);
@@ -8324,17 +12587,41 @@ export default function App() {
     const voucherList    = Array.isArray(vouchers) ? vouchers : [];
     const totalReceived  = voucherList.filter(v => v.type === 'receipt').reduce((s, v) => s + (parseFloat(v.amount) || 0), 0);
     const totalPaid      = voucherList.filter(v => v.type === 'payment').reduce((s, v) => s + (parseFloat(v.amount) || 0), 0);
-    return { totalRevenue, totalPurchases, outstanding, payable, totalReceived, totalPaid };
-  }, [documents, vouchers, businessInfo, country]);
+    const counts = documents.reduce((acc, d) => { if (d.type) acc[d.type] = (acc[d.type] || 0) + 1; return acc; }, {});
+    const pcEntries = Array.isArray(pettyCash?.entries) ? pettyCash.entries : [];
+    const pcBalance = (pettyCash?.openingBalance || 0) + pcEntries.reduce((s, e) => s + (e.type === 'income' ? (e.amount || 0) : -(e.amount || 0)), 0);
+    const itemCount = items.length;
+    const lowStockCount = items.filter(it => {
+      if (!it.minStock) return false;
+      const qty = (it.openingStock || 0) + stockLedger.filter(l => l.itemId === it.id).reduce((s, l) => s + (l.qty || 0), 0);
+      return qty < it.minStock;
+    }).length;
+    const rmCount = rawMaterials.length;
+    const poCount = productionOrders.length;
+    const poOpen  = productionOrders.filter(p => p.status !== 'completed' && p.status !== 'done').length;
+    return { totalRevenue, totalPurchases, outstanding, payable, totalReceived, totalPaid, counts, pcBalance, itemCount, lowStockCount, rmCount, poCount, poOpen };
+  }, [documents, vouchers, businessInfo, country, pettyCash, items, stockLedger, rawMaterials, productionOrders]);
 
-  // ── Auth gates ───────────────────────────────────────────────────────────────
   if (!authReady) return (
     <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', height: '100vh', fontSize: 16, color: '#888' }}>Loading…</div>
   );
   if (!user) return <AuthScreen />;
   if (user && !user.emailVerified) return <VerifyEmailScreen user={user} onLogout={handleLogout} />;
+  if (biReady && ownerUid && user?.uid === ownerUid && userRole === 'admin' && !businessInfo.country) {
+    return <OnboardingSetup setBusinessInfo={setBusinessInfo} />;
+  }
 
-  // ── Content router ───────────────────────────────────────────────────────────
+  const TRIAL_DAYS = 7;
+  const _trialStart    = businessInfo.trialStartDate ? new Date(businessInfo.trialStartDate) : null;
+  const _trialDaysUsed = _trialStart ? Math.floor((Date.now() - _trialStart.getTime()) / 86400000) : null;
+  const trialDaysLeft  = _trialDaysUsed !== null ? Math.max(0, TRIAL_DAYS - _trialDaysUsed) : null;
+  const trialExpired   = _trialDaysUsed !== null && _trialDaysUsed >= TRIAL_DAYS;
+  const isSubscribed   = !!businessInfo.subscriptionActive;
+
+  if (biReady && trialExpired && !isSubscribed) {
+    return <PaywallScreen businessInfo={businessInfo} onLogout={handleLogout} isStaff={userRole !== 'admin'} />;
+  }
+
   function renderContent() {
     if (view === 'doceditor' && activeDoc) {
       return (
@@ -8350,8 +12637,11 @@ export default function App() {
           onCancel={() => { setActiveDoc(null); setView('documents'); }}
           onAddCustomer={(c) => setEditingCustomer(c || { name: '' })}
           onAddVendor={(v) => setEditingVendor(v || { name: '' })}
+          siteActivities={siteActivities}
+          siteProjects={siteProjects}
+          progressUpdates={progressUpdates}
           onConvert={convertDoc}
-          onOpenDoc={openDoc}
+          onOpenDoc={(docId) => { const found = documents.find(d => d.id === docId); if (found) openDoc(found); }}
           documents={documents}
         />
       );
@@ -8379,7 +12669,7 @@ export default function App() {
       case 'documents':
         return (
           <DocumentsList
-            docs={documents}
+            docs={documents.filter(d => !docSearch || (d.number || '').toLowerCase().includes(docSearch.toLowerCase()) || (d.customerSnapshot?.name || '').toLowerCase().includes(docSearch.toLowerCase()))}
             customers={customers}
             vendors={vendors}
             search={docSearch}
@@ -8387,7 +12677,7 @@ export default function App() {
             openDoc={openDoc}
             deleteDoc={deleteDoc}
             startNewDoc={startNewDoc}
-            businessInfo={businessInfo}
+            activeTypes={activeTypes}
           />
         );
       case 'customers':
@@ -8420,7 +12710,7 @@ export default function App() {
       case 'staff':
         return <StaffPage ownerUid={ownerUid} employees={employees} />;
       case 'settings':
-        return <SettingsView businessInfo={businessInfo} setBusinessInfo={setBusinessInfo} />;
+        return <SettingsView businessInfo={businessInfo} setBusinessInfo={setBusinessInfo} onExportData={exportAllData} onSaved={() => setView('dashboard')} userRole={userRole} />;
       case 'pettycash':
         return (
           <PettyCashList
@@ -8459,29 +12749,24 @@ export default function App() {
           <StockView
             items={items}
             stockLedger={stockLedger}
-            setStockLedger={setStockLedger}
-            userRole={userRole}
-            businessInfo={businessInfo}
-          />
-        );
-      case 'stockledger':
-        return (
-          <StockLedgerView
-            items={items}
-            stockLedger={stockLedger}
-            setStockLedger={setStockLedger}
             businessInfo={businessInfo}
           />
         );
       case 'bincard':
-        return <BinCard items={items} stockLedger={stockLedger} businessInfo={businessInfo} />;
-      case 'employees':
         return (
-          <EmployeesView
+          <BinCardView
+            items={items}
+            stockLedger={stockLedger}
+            businessInfo={businessInfo}
+          />
+        );
+      case 'hr':
+        return (
+          <HRView
             employees={employees}
             setEmployees={setEmployees}
             userRole={userRole}
-            businessInfo={businessInfo}
+            ownerUid={ownerUid}
           />
         );
       case 'payroll':
@@ -8525,7 +12810,7 @@ export default function App() {
             parts={parts}
           />
         );
-      case 'productionorders':
+      case 'production':
         return (
           <ProductionOrdersList
             productionOrders={productionOrders}
@@ -8549,7 +12834,21 @@ export default function App() {
             parts={parts}
           />
         );
-      case 'partsmaster':
+      case 'qatesting':
+        return (
+          <QATestingView
+            productionOrders={productionOrders}
+            setProductionOrders={setProductionOrders}
+            pdvs={pdvs}
+            setPdvs={setPdvs}
+            setStockLedger={setStockLedger}
+            boms={boms}
+            items={items}
+            userRole={userRole}
+            businessInfo={businessInfo}
+          />
+        );
+      case 'parts':
         return (
           <PartsMasterList
             parts={parts}
@@ -8577,17 +12876,8 @@ export default function App() {
             customers={customers}
             userRole={userRole}
             onConvertToQuotation={(enq) => {
-              const cust = customers.find((c) => c.id === enq.customerId);
-              const today = new Date().toISOString().slice(0, 10);
-              setActiveDoc({
-                ...blankDoc('quotation', businessInfo),
-                number: nextDocNumber('quotation', today),
-                customerId: enq.customerId || '',
-                customerSnapshot: cust || null,
-                notes: enq.interest || '',
-                linkedFrom: { id: enq.id, docType: 'enquiry', docNumber: enq.number },
-              });
-              setView('doceditor');
+              const cust = customers.find(c => c.id === enq.customerId);
+              startNewDoc('quotation', { customerId: enq.customerId, customerSnapshot: cust || null, notes: enq.notes || '' });
             }}
           />
         );
@@ -8597,6 +12887,8 @@ export default function App() {
             contracts={contracts}
             setContracts={setContracts}
             customers={customers}
+            vendors={vendors}
+            documents={documents}
             termsLibrary={termsLibrary}
             businessInfo={businessInfo}
             userRole={userRole}
@@ -8621,51 +12913,183 @@ export default function App() {
             userRole={userRole}
           />
         );
+      case 'scopeofwork':
+        return (
+          <ScopeOfWorkView
+            scopeOfWork={scopeOfWork}
+            setScopeOfWork={setScopeOfWork}
+            userRole={userRole}
+          />
+        );
+      case 'isoprinciples':
+        return (
+          <ISOPrinciplesView
+            qualityDocs={qualityDocs}
+            setQualityDocs={setQualityDocs}
+            userRole={userRole}
+          />
+        );
+      case 'deptprocedures':
+        return (
+          <DeptProceduresView
+            qualityDocs={qualityDocs}
+            setQualityDocs={setQualityDocs}
+            userRole={userRole}
+          />
+        );
+      case 'inprocessqa':
+        return (
+          <InprocessQAView
+            qualityDocs={qualityDocs}
+            setQualityDocs={setQualityDocs}
+            productionOrders={productionOrders}
+            userRole={userRole}
+          />
+        );
       case 'gstr1':
-        return <GSTR1Report documents={documents} customers={customers} businessInfo={businessInfo} />;
+        return (
+          <GSTR1Report
+            documents={documents}
+            customers={customers}
+            businessInfo={businessInfo}
+          />
+        );
       case 'vatreport':
-        return <VATReport documents={documents} customers={customers} businessInfo={businessInfo} />;
+        return (
+          <VATReport
+            documents={documents}
+            customers={customers}
+            businessInfo={businessInfo}
+          />
+        );
       case 'taxreport':
-        return <TaxReport documents={documents} customers={customers} businessInfo={businessInfo} />;
+        return (
+          <TaxReport
+            documents={documents}
+            customers={customers}
+            businessInfo={businessInfo}
+          />
+        );
+      case 'mepprojects':
+        return (
+          <MEPProjectsView
+            siteProjects={siteProjects}
+            setSiteProjects={setSiteProjects}
+            employees={employees}
+            siteActivities={siteActivities}
+            progressUpdates={progressUpdates}
+            userRole={userRole}
+          />
+        );
+      case 'activityplanner':
+        return (
+          <ActivityPlannerView
+            siteActivities={siteActivities}
+            setSiteActivities={setSiteActivities}
+            siteProjects={siteProjects}
+            progressUpdates={progressUpdates}
+            setProgressUpdates={setProgressUpdates}
+            userRole={userRole}
+            employees={employees}
+          />
+        );
+      case 'dailyupdates':
+        return (
+          <DailyUpdateView
+            progressUpdates={progressUpdates}
+            setProgressUpdates={setProgressUpdates}
+            siteActivities={siteActivities}
+            siteProjects={siteProjects}
+            employees={employees}
+            userRole={userRole}
+          />
+        );
+      case 'progressboard':
+        return (
+          <ProgressBoardView
+            siteProjects={siteProjects}
+            siteActivities={siteActivities}
+            progressUpdates={progressUpdates}
+          />
+        );
+      case 'mepreports':
+        return (
+          <MEPReportsView
+            siteProjects={siteProjects}
+            siteActivities={siteActivities}
+            progressUpdates={progressUpdates}
+            employees={employees}
+            businessInfo={businessInfo}
+          />
+        );
+      case 'clientmaterials':
+        return (
+          <ClientMaterialView
+            clientMaterials={clientMaterials}
+            setClientMaterials={setClientMaterials}
+            siteProjects={siteProjects}
+            employees={employees}
+            userRole={userRole}
+          />
+        );
+      case 'siteattendance':
+        return (
+          <SiteAttendanceView
+            siteAttendance={siteAttendance}
+            setSiteAttendance={setSiteAttendance}
+            siteProjects={siteProjects}
+            employees={employees}
+            userRole={userRole}
+          />
+        );
+      case 'evaluations':
+        return (
+          <QuarterlyEvalView
+            evaluations={evaluations}
+            setEvaluations={setEvaluations}
+            employees={employees}
+            siteAttendance={siteAttendance}
+            progressUpdates={progressUpdates}
+            siteProjects={siteProjects}
+            userRole={userRole}
+          />
+        );
+      case 'notifications':
+        return (
+          <NotificationsView
+            notifications={notifications}
+            setNotifications={setNotifications}
+            documents={documents}
+            openDoc={openDoc}
+            userRole={userRole}
+          />
+        );
       default:
-        return <div style={{ padding: 40, color: '#888780', fontSize: 14 }}>Section coming soon.</div>;
+        return (
+          <Dashboard
+            stats={stats}
+            documents={documents}
+            customers={customers}
+            vendors={vendors}
+            businessInfo={businessInfo}
+            startNewDoc={startNewDoc}
+            openDoc={openDoc}
+            setView={setView}
+            vouchers={vouchers}
+            pettyCash={pettyCash}
+            productionOrders={productionOrders}
+            rawMaterials={rawMaterials}
+            items={items}
+            companyType={companyType}
+          />
+        );
     }
   }
 
+  const unreadCount = notifications.filter(n => !n.read && (n.forRole === 'all' || n.forRole === userRole)).length;
+
   return (
-    <div style={{ display: 'flex', minHeight: '100vh', background: '#FAF8F4' }}>
-      <style>{`
-        * { box-sizing: border-box; }
-        body { margin: 0; font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif; }
-        .serif { font-family: 'Lora', Georgia, serif; }
-        button { cursor: pointer; font-family: inherit; }
-        input, textarea, select { font-family: inherit; }
-        @media print {
-          .no-print { display: none !important; }
-          body > * { visibility: hidden !important; }
-          .print-area, .print-area * { visibility: visible !important; }
-          .print-area {
-            position: absolute !important;
-            top: 0 !important; left: 0 !important;
-            right: auto !important; bottom: auto !important;
-            width: 100% !important; height: auto !important;
-            overflow: visible !important;
-            border: none !important;
-            box-shadow: none !important;
-            border-radius: 0 !important;
-            z-index: 9999 !important;
-            padding: 0 !important;
-            margin: 0 !important;
-          }
-          .draft-watermark {
-            -webkit-print-color-adjust: exact !important;
-            print-color-adjust: exact !important;
-            color: rgba(185, 28, 28, 0.13) !important;
-          }
-        }
-        @page { size: A4; margin: 10mm 12mm; }
-      `}</style>
-
+    <div style={styles.app} className="no-print-bg">
       <Sidebar
         view={view}
         setView={setView}
@@ -8676,140 +13100,59 @@ export default function App() {
         onLogout={handleLogout}
         userRole={userRole}
         companyType={companyType}
+        activeTypes={activeTypes}
         country={country}
+        unreadCount={unreadCount}
+        onShowNotifications={() => setView('notifications')}
       />
-
-      <main style={styles.main}>
+      <div style={styles.main}>
+        {trialDaysLeft !== null && trialDaysLeft <= 3 && !isSubscribed && (
+          <TrialBanner daysLeft={trialDaysLeft} onUpgrade={() => setView('settings')} />
+        )}
         {renderContent()}
-      </main>
+      </div>
 
       {editingCustomer && (
         <CustomerModal
           customer={editingCustomer}
-          businessInfo={businessInfo}
           onSave={(c) => {
-            const saved = { ...c, id: c.id || crypto.randomUUID() };
-            const isNew = !c.id;
-            setCustomers((prev) => isNew ? [...prev, saved] : prev.map((x) => x.id === saved.id ? saved : x));
-            if (isNew && view === 'doceditor' && activeDoc) {
-              setActiveDoc((d) => ({ ...d, customerId: saved.id, customerSnapshot: saved }));
-            }
+            const isNew = !customers.find(x => x.id === c.id);
+            const saved = isNew ? { ...c, id: crypto.randomUUID() } : c;
+            setCustomers(prev => isNew ? [...prev, saved] : prev.map(x => x.id === saved.id ? saved : x));
             setEditingCustomer(null);
           }}
           onClose={() => setEditingCustomer(null)}
+          businessInfo={businessInfo}
         />
       )}
-
       {editingVendor && (
         <VendorModal
           vendor={editingVendor}
-          businessInfo={businessInfo}
           onSave={(v) => {
-            const saved = { ...v, id: v.id || crypto.randomUUID() };
-            const isNew = !v.id;
-            setVendors((prev) => isNew ? [...prev, saved] : prev.map((x) => x.id === saved.id ? saved : x));
-            if (isNew && view === 'doceditor' && activeDoc) {
-              setActiveDoc((d) => ({ ...d, customerId: saved.id, customerSnapshot: saved }));
-            }
+            const isNew = !vendors.find(x => x.id === v.id);
+            const saved = isNew ? { ...v, id: crypto.randomUUID() } : v;
+            setVendors(prev => isNew ? [...prev, saved] : prev.map(x => x.id === saved.id ? saved : x));
             setEditingVendor(null);
           }}
           onClose={() => setEditingVendor(null)}
+          businessInfo={businessInfo}
         />
       )}
-
       {editingItem && (
         <ItemModal
           item={editingItem}
-          businessInfo={businessInfo}
           onSave={(it) => {
-            const saved = { ...it, id: it.id || crypto.randomUUID() };
-            const isNew = !it.id;
-            setItems((prev) => isNew ? [...prev, saved] : prev.map((x) => x.id === saved.id ? saved : x));
+            const isNew = !items.find(x => x.id === it.id);
+            const saved = isNew ? { ...it, id: crypto.randomUUID() } : it;
+            setItems(prev => isNew ? [...prev, saved] : prev.map(x => x.id === saved.id ? saved : x));
             setEditingItem(null);
           }}
           onClose={() => setEditingItem(null)}
+          businessInfo={businessInfo}
         />
       )}
     </div>
   );
 }
- }
-          .draft-watermark {
-            -webkit-print-color-adjust: exact !important;
-            print-color-adjust: exact !important;
-            color: rgba(185, 28, 28, 0.13) !important;
-          }
-        }
-        @page { margin: 12mm; }
-      `}</style>
 
-      <Sidebar
-        view={view}
-        setView={setView}
-        setActiveDoc={setActiveDoc}
-        startNewDoc={startNewDoc}
-        syncStatus={syncStatus}
-        user={user}
-        onLogout={handleLogout}
-        userRole={userRole}
-        companyType={companyType}
-        country={country}
-      />
 
-      <main style={styles.main}>
-        {renderContent()}
-      </main>
-
-      {/* Customer modal */}
-      {editingCustomer && (
-        <CustomerModal
-          customer={editingCustomer}
-          businessInfo={businessInfo}
-          onSave={(c) => {
-            const saved = { ...c, id: c.id || crypto.randomUUID() };
-            const isNew = !c.id;
-            setCustomers((prev) => isNew ? [...prev, saved] : prev.map((x) => x.id === saved.id ? saved : x));
-            if (isNew && view === 'doceditor' && activeDoc) {
-              setActiveDoc((d) => ({ ...d, customerId: saved.id, customerSnapshot: saved }));
-            }
-            setEditingCustomer(null);
-          }}
-          onClose={() => setEditingCustomer(null)}
-        />
-      )}
-
-      {/* Vendor modal */}
-      {editingVendor && (
-        <VendorModal
-          vendor={editingVendor}
-          businessInfo={businessInfo}
-          onSave={(v) => {
-            const saved = { ...v, id: v.id || crypto.randomUUID() };
-            const isNew = !v.id;
-            setVendors((prev) => isNew ? [...prev, saved] : prev.map((x) => x.id === saved.id ? saved : x));
-            if (isNew && view === 'doceditor' && activeDoc) {
-              setActiveDoc((d) => ({ ...d, customerId: saved.id, customerSnapshot: saved }));
-            }
-            setEditingVendor(null);
-          }}
-          onClose={() => setEditingVendor(null)}
-        />
-      )}
-
-      {/* Item modal */}
-      {editingItem && (
-        <ItemModal
-          item={editingItem}
-          businessInfo={businessInfo}
-          onSave={(it) => {
-            const saved = { ...it, id: it.id || crypto.randomUUID() };
-            const isNew = !it.id;
-            setItems((prev) => isNew ? [...prev, saved] : prev.map((x) => x.id === saved.id ? saved : x));
-            setEditingItem(null);
-          }}
-          onClose={() => setEditingItem(null)}
-        />
-      )}
-    </div>
-  );
-}
