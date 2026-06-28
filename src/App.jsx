@@ -2518,16 +2518,6 @@ function Sidebar({ view, setView, setActiveDoc, startNewDoc, syncStatus, user, o
           <div className="serif" style={styles.brandName}>Operix</div>
           <div style={styles.brandSub}>Business Suite</div>
         </div>
-        {/* Notifications bell */}
-        <button
-          title="Notifications"
-          onClick={onShowNotifications}
-          style={{ background: view === 'notifications' ? 'rgba(201,162,75,0.18)' : 'none', border: 'none', cursor: 'pointer', borderRadius: 6, padding: '5px 6px', color: view === 'notifications' ? '#C9A24B' : '#6B7494', display: 'flex', alignItems: 'center', position: 'relative' }}>
-          <Bell size={16} strokeWidth={1.8} />
-          {unreadCount > 0 && (
-            <span style={{ position: 'absolute', top: 1, right: 1, background: '#C9A24B', color: '#fff', borderRadius: 10, fontSize: 9, fontWeight: 700, padding: '0 4px', minWidth: 14, textAlign: 'center', lineHeight: '14px' }}>{unreadCount}</span>
-          )}
-        </button>
         {/* Settings icon — admin only */}
         {userRole === 'admin' && (
           <button
@@ -13115,6 +13105,40 @@ export default function App() {
 
   return (
     <div style={styles.app} className="no-print-bg">
+      <style>{`
+        * { box-sizing: border-box; }
+        body { margin: 0; font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif; }
+        .serif { font-family: 'Lora', Georgia, serif; }
+        button { cursor: pointer; font-family: inherit; }
+        input, textarea, select { font-family: inherit; }
+        @media print {
+          .no-print, .no-print * { display: none !important; }
+          .no-print-bg { background: transparent !important; }
+          body > * { visibility: hidden !important; }
+          .print-area { visibility: visible !important; }
+          .print-area * { visibility: visible !important; }
+          .print-area {
+            position: fixed !important;
+            top: 0 !important; left: 0 !important;
+            right: 0 !important; bottom: auto !important;
+            width: 100% !important; height: auto !important;
+            overflow: visible !important;
+            border: none !important;
+            box-shadow: none !important;
+            border-radius: 0 !important;
+            z-index: 99999 !important;
+            padding: 12mm !important;
+            margin: 0 !important;
+            background: #fff !important;
+          }
+          .draft-watermark {
+            -webkit-print-color-adjust: exact !important;
+            print-color-adjust: exact !important;
+            color: rgba(185, 28, 28, 0.13) !important;
+          }
+        }
+        @page { size: A4; margin: 0; }
+      `}</style>
       <Sidebar
         view={view}
         setView={setView}
@@ -13130,6 +13154,30 @@ export default function App() {
         unreadCount={unreadCount}
         onShowNotifications={() => setView('notifications')}
       />
+      {/* Bell — fixed top-right, hidden during print */}
+      <button
+        className="no-print"
+        onClick={() => setView('notifications')}
+        title="Notifications"
+        style={{
+          position: 'fixed', top: 12, right: 16, zIndex: 900,
+          background: view === 'notifications' ? '#C9A24B' : '#1E2A4A',
+          border: 'none', borderRadius: '50%', width: 38, height: 38,
+          display: 'flex', alignItems: 'center', justifyContent: 'center',
+          cursor: 'pointer', boxShadow: '0 2px 8px rgba(0,0,0,0.25)',
+        }}>
+        <Bell size={17} color="#fff" strokeWidth={1.8} />
+        {unreadCount > 0 && (
+          <span style={{
+            position: 'absolute', top: -2, right: -2,
+            background: '#E07A3A', color: '#fff', borderRadius: 10,
+            fontSize: 9, fontWeight: 700, padding: '1px 4px',
+            minWidth: 14, textAlign: 'center', lineHeight: '13px',
+            border: '1.5px solid #fff',
+          }}>{unreadCount}</span>
+        )}
+      </button>
+
       <div style={styles.main}>
         {trialDaysLeft !== null && trialDaysLeft <= 3 && !isSubscribed && (
           <TrialBanner daysLeft={trialDaysLeft} onUpgrade={() => setView('settings')} />
