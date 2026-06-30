@@ -13162,6 +13162,7 @@ function AMCContractView({ amcContracts, setAmcContracts, customers, assets, use
   const active = list.filter(c=>c.status==='active');
   const expiringSoon = active.filter(c=>{ const d=daysLeft(c.endDate); return d!==null && d<=30 && d>=0; });
   return (
+    <>
     <div style={{ padding:'24px 32px' }}>
       <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', marginBottom:16 }}>
         <h2 className="serif" style={styles.pageTitle}>AMC Contracts & SLA</h2>
@@ -13279,6 +13280,7 @@ function AMCContractView({ amcContracts, setAmcContracts, customers, assets, use
         </DocPrintOverlay>
       );
     })()}
+    </>
   );
 }
 
@@ -13581,6 +13583,7 @@ function TenderView({ tenders, setTenders, customers, siteProjects, userRole, bu
   const list = [...tenders].sort((a,b)=>b.submissionDate>a.submissionDate?1:-1);
   const wonValue = tenders.filter(t=>t.status==='won').reduce((s,t)=>s+grandTotal(t),0);
   return (
+    <>
     <div style={{ padding:'24px 32px' }}>
       <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', marginBottom:16 }}>
         <h2 className="serif" style={styles.pageTitle}>Tender & Estimation</h2>
@@ -13694,6 +13697,7 @@ function TenderView({ tenders, setTenders, customers, siteProjects, userRole, bu
         </DocPrintOverlay>
       );
     })()}
+    </>
   );
 }
 
@@ -13811,6 +13815,7 @@ function SubcontractorView({ subcontractors, setSubcontractors, siteProjects, us
   }
 
   return (
+    <>
     <div style={{ padding:'24px 32px' }}>
       <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', marginBottom:16 }}>
         <h2 className="serif" style={styles.pageTitle}>Subcontractor Management</h2>
@@ -13952,6 +13957,7 @@ function SubcontractorView({ subcontractors, setSubcontractors, siteProjects, us
         </DocPrintOverlay>
       );
     })()}
+    </>
   );
 }
 
@@ -14091,6 +14097,7 @@ function HSEView({ hseRecords, setHseRecords, siteProjects, userRole, businessIn
   }
 
   return (
+    <>
     <div style={{ padding:'24px 32px' }}>
       <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', marginBottom:16 }}>
         <h2 className="serif" style={styles.pageTitle}>HSE — Health, Safety & Environment</h2>
@@ -14261,6 +14268,7 @@ function HSEView({ hseRecords, setHseRecords, siteProjects, userRole, businessIn
         </DocPrintOverlay>
       );
     })()}
+    </>
   );
 }
 
@@ -14378,6 +14386,7 @@ function RABillingView({ raBillings, setRaBillings, siteProjects, customers, ten
   }
   const totalBilled = list.reduce((s,b)=>s+billGrandTotal(b),0);
   return (
+    <>
     <div style={{ padding:'24px 32px' }}>
       <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', marginBottom:16 }}>
         <h2 className="serif" style={styles.pageTitle}>RA Billing — Running Account</h2>
@@ -14490,6 +14499,7 @@ function RABillingView({ raBillings, setRaBillings, siteProjects, customers, ten
         </DocPrintOverlay>
       );
     })()}
+    </>
   );
 }
 
@@ -14752,6 +14762,7 @@ function HandoverView({ handoverDocs, setHandoverDocs, siteProjects, customers, 
   const ST_BG    = { in_progress:'#cfe2ff', handed_over:'#fff3cd', dlp:'#FFF8E7', completed:'#d4edda' };
   const list = [...handoverDocs].sort((a,b)=>b.handoverDate>a.handoverDate?1:-1);
   return (
+    <>
     <div style={{ padding:'24px 32px' }}>
       <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', marginBottom:20 }}>
         <h2 className="serif" style={styles.pageTitle}>Project Handover & DLP</h2>
@@ -14866,6 +14877,7 @@ function HandoverView({ handoverDocs, setHandoverDocs, siteProjects, customers, 
         </DocPrintOverlay>
       );
     })()}
+    </>
   );
 }
 
