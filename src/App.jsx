@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useMemo } from 'react';
 import { AlertTriangle, BarChart2, Bell, BookOpen, Briefcase, CheckCircle, CheckSquare, ChevronDown, ChevronRight, ClipboardList, Cloud, CloudOff, Download, Factory, FileMinus, FileSignature, FileText, LayoutDashboard, LogOut, MapPin, Package, Paperclip, Pencil, Plus, Printer, Search, Settings, Shield, ShoppingCart, Square, Trash2, Truck, Users, Wrench, X } from 'lucide-react';
-import { auth, watchAuth, signUp, signIn, logOut, loadCompanyData, saveCompanyData, subscribeCompanyData, resendVerificationEmail, refreshUser, getMembership, createStaffAccount, getStaffList, removeStaff, updateStaffRole, uploadDrawing, deleteDrawing, resetPassword } from './firebase';
+import { auth, watchAuth, signUp, signIn, logOut, loadCompanyData, saveCompanyData, subscribeCompanyData, resendVerificationEmail, refreshUser, getMembership, createStaffAccount, getStaffList, removeStaff, updateStaffRole, uploadDrawing, deleteDrawing, resetPassword, reauthenticateUser, deleteAllCompanyFirestore, deleteCompanyStorage, deleteFirebaseUser } from './firebase';
 
 
 // ─── constants.js ──────────────────────────────────────────────
@@ -37,6 +37,40 @@ const ROLE_MODULES = {
     docTypes: ['invoice', 'delivery', 'quotation', 'purchase', 'purchasebill', 'creditnote'],
     canEdit: false,
   },
+};
+
+// ─── Subscription / plan config ──────────────────────────────────────────────
+// Emails that bypass all plan gates (dev / owner accounts)
+const TEST_EMAILS = ['srm10988@gmail.com'];
+
+// Sections each plan unlocks (in addition to 'common' which every plan gets)
+const PLAN_MODULES = {
+  common: [
+    'dashboard','documents','customers','vendors','items','staff','settings','notifications',
+    'pettycash','vouchers','gstr1','gstr3b','vatreport','taxreport',
+    'enquiries','channelpartners','contracts','termslibrary',
+    'stock','bincard','grn',
+  ],
+  trading:       [],
+  manufacturing: [
+    'hr','payroll',
+    'rawmaterials','bom','production','qualitycheck','parts','engdocs',
+    'scopeofwork','isoprocs','deptprocedures','inprocessqa','qatesting',
+    'pdv','internalaudit','capa','vendoreval','mis',
+  ],
+  service: [
+    'hr','payroll','serviceorders',
+    'siteprojects','activities','dailyupdate','progressboard',
+    'clientmaterials','siteattendance','quarterlyeval',
+    'tenders','rabilling','subcontractors','hse','handover','tc',
+  ],
+  fmamc: [
+    'hr','payroll','serviceorders',
+    'siteprojects','activities','dailyupdate','progressboard',
+    'clientmaterials','siteattendance','quarterlyeval',
+    'tenders','rabilling','subcontractors','hse','handover','tc',
+    'assets','pmschedules','fmworkorders','fmspareParts','amccontracts','fmkpi',
+  ],
 };
 
 // ─── Document types config ────────────────────────────────────────────────────
@@ -779,23 +813,22 @@ function OnboardingSetup({ setBusinessInfo }) {
 
         {step === 2 && (
           <>
-            <div style={{ fontFamily: 'Georgia, serif', fontSize: 20, fontWeight: 700, color: '#1E2A4A', marginBottom: 6 }}>What does your business do?</div>
-            <div style={{ fontSize: 13, color: '#888', marginBottom: 20 }}>Select one or more. You can adjust this later in Settings.</div>
+            <div style={{ fontFamily: 'Georgia, serif', fontSize: 20, fontWeight: 700, color: '#1E2A4A', marginBottom: 6 }}>What type of business are you?</div>
+            <div style={{ fontSize: 13, color: '#888', marginBottom: 4 }}>Choose one — this sets up your modules and <strong>cannot be changed</strong> after setup.</div>
+            <div style={{ fontSize: 11, color: '#C9A24B', fontWeight: 600, marginBottom: 18 }}>⚠ Choose carefully. Contact support to switch plans later.</div>
 
             <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
               {BIZ_TYPES.map(t => {
-                const on = activeTypes.includes(t.id);
+                const on = activeTypes[0] === t.id;
                 return (
-                  <div key={t.id} onClick={() => {
-                    const next = on ? activeTypes.filter(x => x !== t.id) : [...activeTypes, t.id];
-                    if (next.length) setActiveTypes(next);
-                  }} style={{
+                  <div key={t.id} onClick={() => setActiveTypes([t.id])} style={{
                     display: 'flex', alignItems: 'flex-start', gap: 14, padding: '14px 16px',
                     border: on ? '2px solid #1E2A4A' : '2px solid #EAE6DB',
                     borderRadius: 12, cursor: 'pointer', background: on ? '#F0EFE9' : '#fff',
+                    transition: 'all 0.15s',
                   }}>
-                    <div style={{ width: 22, height: 22, borderRadius: 5, border: on ? '2px solid #1E2A4A' : '2px solid #BDB9B0', background: on ? '#1E2A4A' : '#fff', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0, marginTop: 2 }}>
-                      {on && <span style={{ color: '#fff', fontSize: 13, fontWeight: 700 }}>✓</span>}
+                    <div style={{ width: 22, height: 22, borderRadius: '50%', border: on ? '2px solid #1E2A4A' : '2px solid #BDB9B0', background: on ? '#1E2A4A' : '#fff', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0, marginTop: 2 }}>
+                      {on && <div style={{ width: 8, height: 8, borderRadius: '50%', background: '#fff' }} />}
                     </div>
                     <div>
                       <div style={{ fontWeight: 600, fontSize: 14, color: '#1E2A4A', marginBottom: 3 }}>{t.icon} {t.label}</div>
@@ -1493,7 +1526,182 @@ function TemplateMiniPreview({ template, name }) {
 }
 
 
-function SettingsView({ businessInfo, setBusinessInfo, onExportData, onSaved, userRole = 'admin' }) {
+// ─── Delete Account Modal ─────────────────────────────────────────────────────
+function DeleteAccountModal({ user, ownerUid, isSubscribed, onExportData, onClose, onDeleted }) {
+  const [step, setStep] = useState(1); // 1=warning 2=confirm-email 3=password 4=done
+  const [emailInput, setEmailInput]     = useState('');
+  const [passwordInput, setPasswordInput] = useState('');
+  const [error, setError]   = useState('');
+  const [busy, setBusy]     = useState('');
+  const [exported, setExported] = useState(false);
+
+  // Paid customers get 30-day grace period; trial gets immediate hard delete
+  const gracePeriod  = !!isSubscribed;
+  const deletionDate = new Date(Date.now() + 30 * 24 * 60 * 60 * 1000);
+  const deletionDateStr = deletionDate.toLocaleDateString('en-GB', { day: 'numeric', month: 'long', year: 'numeric' });
+
+  async function execute() {
+    setBusy(true);
+    setError('');
+    try {
+      await reauthenticateUser(user, passwordInput);
+      setStep(4);
+      if (gracePeriod) {
+        // Option B — schedule
+        await saveCompanyData(ownerUid, {
+          deletionScheduled: true,
+          deletionDate: deletionDate.toISOString(),
+          deletionRequestedAt: new Date().toISOString(),
+        });
+        onDeleted('scheduled');
+      } else {
+        // Option A — immediate
+        await deleteAllCompanyFirestore(ownerUid);
+        await deleteCompanyStorage(ownerUid);
+        await deleteFirebaseUser(user);
+        onDeleted('deleted');
+      }
+    } catch (e) {
+      const msg = e.message || '';
+      if (msg.includes('wrong-password') || msg.includes('invalid-credential') || msg.includes('INVALID_LOGIN')) {
+        setError('Incorrect password. Please try again.');
+      } else {
+        setError('Error: ' + msg);
+      }
+      setStep(3);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  const dangerBtn = (label, onClick, disabled) => (
+    <button onClick={onClick} disabled={disabled}
+      style={{ flex:2, padding:'10px 16px', background: disabled ? '#ccc' : '#B91C1C', color:'#fff', border:'none', borderRadius:8, fontWeight:600, fontSize:14, cursor: disabled ? 'not-allowed' : 'pointer' }}>
+      {label}
+    </button>
+  );
+  const backBtn = (toStep) => (
+    <button onClick={() => { setStep(toStep); setError(''); }}
+      style={{ ...styles.ghostBtn, flex:1 }}>← Back</button>
+  );
+
+  return (
+    <Modal onClose={step < 4 ? onClose : undefined} title={step < 4 ? 'Delete Account' : ''}>
+      {step === 1 && (
+        <>
+          <div style={{ background:'#FEF2F2', border:'1px solid #FECACA', borderRadius:10, padding:16, marginBottom:16 }}>
+            <div style={{ fontWeight:700, color:'#B91C1C', marginBottom:6 }}>⚠ {gracePeriod ? 'This will schedule your account for deletion' : 'This will permanently delete your account'}</div>
+            <div style={{ fontSize:13, color:'#7F1D1D', lineHeight:1.6 }}>
+              {gracePeriod
+                ? `Your account and all data will be permanently deleted on ${deletionDateStr} (30-day grace period). You can cancel anytime before that date from Settings.`
+                : 'Your trial account and all data will be permanently and immediately deleted. This cannot be undone.'}
+            </div>
+          </div>
+          <div style={{ fontSize:13, color:'#555', marginBottom:16 }}>
+            <strong>What will be deleted:</strong>
+            <div style={{ marginTop:6, lineHeight:2, paddingLeft:4 }}>
+              {'All documents · Customers & vendors · Employees & payroll · Stock & production · Quality records · Uploaded files (logos, drawings) · All staff accounts'.split(' · ').map(item => (
+                <div key={item} style={{ display:'flex', alignItems:'center', gap:6 }}>
+                  <span style={{ color:'#B91C1C', fontWeight:700 }}>×</span> {item}
+                </div>
+              ))}
+            </div>
+          </div>
+          <button onClick={() => { onExportData(); setExported(true); }}
+            style={{ ...styles.ghostBtn, width:'100%', marginBottom:10, borderColor:'#1E2A4A', color:'#1E2A4A' }}>
+            ↓ Export all my data first {exported ? '✓' : '(recommended)'}
+          </button>
+          <div style={{ display:'flex', gap:10, marginTop:4 }}>
+            <button onClick={onClose} style={{ ...styles.ghostBtn, flex:1 }}>Cancel</button>
+            {dangerBtn('Continue →', () => setStep(2))}
+          </div>
+        </>
+      )}
+
+      {step === 2 && (
+        <>
+          <div style={{ fontSize:14, color:'#333', marginBottom:8 }}>Type your account email address to confirm:</div>
+          <div style={{ fontSize:12, color:'#888', background:'#F8F7F4', borderRadius:6, padding:'6px 10px', marginBottom:12 }}>
+            {user.email}
+          </div>
+          <input value={emailInput} onChange={e => setEmailInput(e.target.value)}
+            placeholder="Enter your email"
+            style={{ ...styles.input, marginBottom:4 }}
+            autoFocus
+          />
+          {error && <div style={{ color:'#B91C1C', fontSize:12, marginBottom:8 }}>{error}</div>}
+          <div style={{ display:'flex', gap:10, marginTop:12 }}>
+            {backBtn(1)}
+            {dangerBtn('Confirm →', () => {
+              if (emailInput.trim() !== user.email) { setError('Email does not match.'); return; }
+              setError(''); setStep(3);
+            })}
+          </div>
+        </>
+      )}
+
+      {step === 3 && (
+        <>
+          <div style={{ fontSize:14, color:'#333', marginBottom:12 }}>Enter your password to verify it's you:</div>
+          <input type="password" value={passwordInput} onChange={e => setPasswordInput(e.target.value)}
+            placeholder="Your password"
+            style={{ ...styles.input, marginBottom:4 }}
+            onKeyDown={e => e.key === 'Enter' && !busy && passwordInput && execute()}
+            autoFocus
+          />
+          {error && <div style={{ color:'#B91C1C', fontSize:12, marginBottom:8 }}>{error}</div>}
+          <div style={{ display:'flex', gap:10, marginTop:12 }}>
+            {backBtn(2)}
+            {dangerBtn(
+              busy ? 'Verifying…' : gracePeriod ? 'Schedule Deletion' : 'Delete Permanently',
+              execute,
+              busy || !passwordInput,
+            )}
+          </div>
+        </>
+      )}
+
+      {step === 4 && (
+        <div style={{ textAlign:'center', padding:'32px 16px' }}>
+          <div style={{ fontSize:48, marginBottom:16 }}>{gracePeriod ? '🗓' : '🗑'}</div>
+          {gracePeriod ? (
+            <>
+              <div style={{ fontSize:18, fontWeight:700, color:'#1E2A4A', marginBottom:8 }}>Deletion Scheduled</div>
+              <div style={{ fontSize:13, color:'#666', lineHeight:1.7 }}>
+                Your account is scheduled for permanent deletion on<br/>
+                <strong>{deletionDateStr}</strong>.<br/><br/>
+                You can cancel this from <strong>Settings → Danger Zone</strong> before that date.
+              </div>
+            </>
+          ) : (
+            <>
+              <div style={{ fontSize:18, fontWeight:700, color:'#B91C1C', marginBottom:8 }}>Account Deleted</div>
+              <div style={{ fontSize:13, color:'#666' }}>All your data has been permanently removed.<br/>You have been signed out.</div>
+            </>
+          )}
+        </div>
+      )}
+    </Modal>
+  );
+}
+
+function LockedModuleScreen() {
+  return (
+    <div style={{ display:'flex', flexDirection:'column', alignItems:'center', justifyContent:'center', height:'60vh', gap:16, textAlign:'center', padding:32 }}>
+      <div style={{ fontSize:48, lineHeight:1 }}>🔒</div>
+      <h2 className="serif" style={{ fontSize:22, color:'#1E2A4A', margin:0 }}>Module Not in Your Plan</h2>
+      <p style={{ color:'#888', maxWidth:360, lineHeight:1.6, margin:0 }}>
+        This module isn't included in your current subscription plan.<br/>
+        Contact us to upgrade and unlock it.
+      </p>
+      <a href="mailto:support@operix.app" style={{ display:'inline-block', padding:'10px 24px', background:'#1E2A4A', color:'#fff', borderRadius:8, textDecoration:'none', fontSize:14, fontWeight:600 }}>
+        Contact Support
+      </a>
+    </div>
+  );
+}
+
+function SettingsView({ businessInfo, setBusinessInfo, onExportData, onSaved, userRole = 'admin', userEmail = '', onRequestDelete }) {
   const [form, setForm] = useState(businessInfo);
   const [saved, setSaved] = useState(false);
   useEffect(() => setForm(businessInfo), [businessInfo]);
@@ -1696,41 +1904,61 @@ function SettingsView({ businessInfo, setBusinessInfo, onExportData, onSaved, us
           );
         })()}
 
-        <div style={styles.formGroup}>
-          <label style={styles.label}>Company type</label>
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 8, marginTop: 4 }}>
-            {[
-              { id: 'trading',       label: '🛒 Trading',             desc: 'Buy & sell goods — invoices, POs, delivery, stock' },
-              { id: 'manufacturing', label: '🏭 Manufacturing',        desc: 'Produce goods — BOM, production orders, QA' },
-              { id: 'service',       label: '🔧 Services / MEP Suite', desc: 'Manpower & site work — projects, activity planner, attendance' },
-              { id: 'fmamc',         label: '🏢 FM / AMC',             desc: 'Facility management — assets, PM schedules, work orders, SLA contracts' },
-            ].map((t) => {
-              const cur = form.activeTypes || [form.companyType || 'trading'];
-              const active = cur.includes(t.id);
-              return (
-                <div key={t.id} onClick={() => {
-                  const next = active ? cur.filter(x => x !== t.id) : [...cur, t.id];
-                  setForm(p => ({ ...p, activeTypes: next.length ? next : [t.id] }));
-                }} style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '10px 14px', borderRadius: 10, border: active ? '2px solid #1E2A4A' : '2px solid #EAE6DB', background: active ? '#F0EFE9' : '#FAFAF8', cursor: 'pointer', userSelect: 'none' }}>
-                  <div style={{ width: 20, height: 20, borderRadius: 5, border: active ? '2px solid #1E2A4A' : '2px solid #BDB9B0', background: active ? '#1E2A4A' : '#fff', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
-                    {active && <span style={{ color: '#fff', fontSize: 13, fontWeight: 700 }}>✓</span>}
-                  </div>
-                  <div>
-                    <div style={{ fontWeight: 600, fontSize: 13, color: '#1E2A4A' }}>{t.label}</div>
-                    <div style={{ fontSize: 11.5, color: '#888780' }}>{t.desc}</div>
-                  </div>
+        {(()=>{
+          const ALL_TYPES = [
+            { id:'trading',       label:'🛒 Trading',             desc:'Buy & sell goods — invoices, POs, delivery, stock' },
+            { id:'manufacturing', label:'🏭 Manufacturing',        desc:'Produce goods — BOM, production orders, QA' },
+            { id:'service',       label:'🔧 Services / MEP Suite', desc:'Manpower & site work — projects, activity planner, attendance' },
+            { id:'fmamc',         label:'🏢 FM / AMC',             desc:'Facility management — assets, PM schedules, work orders, SLA contracts' },
+          ];
+          const cur = form.activeTypes || [form.companyType || 'trading'];
+          const typeLocked = !TEST_EMAILS.includes(userEmail) && cur.length > 0;
+          if (typeLocked) {
+            return (
+              <div style={styles.formGroup}>
+                <label style={styles.label}>Company type <span style={{ fontSize:10, background:'#FFF3CD', color:'#856404', borderRadius:4, padding:'1px 6px', marginLeft:6, fontWeight:700 }}>LOCKED</span></label>
+                <div style={{ display:'flex', flexWrap:'wrap', gap:8, marginTop:6 }}>
+                  {cur.map(id => {
+                    const t = ALL_TYPES.find(x=>x.id===id);
+                    return <span key={id} style={{ background:'#F0EFE9', border:'2px solid #1E2A4A', borderRadius:8, padding:'8px 16px', fontSize:13, fontWeight:600, color:'#1E2A4A' }}>{t?.label || id}</span>;
+                  })}
                 </div>
-              );
-            })}
-            <button onClick={() => setForm(p => {
-              const cur = p.activeTypes || [p.companyType || 'trading'];
-              const all = ['trading','manufacturing','service','fmamc'];
-              return { ...p, activeTypes: cur.length === all.length ? ['trading'] : all };
-            })} style={{ ...styles.ghostBtn, alignSelf: 'flex-start', marginTop: 2 }}>
-              {((form.activeTypes || [form.companyType || 'trading']).length === 4) ? 'Deselect all' : 'Select all activities'}
-            </button>
-          </div>
-        </div>
+                <p style={{ fontSize:11.5, color:'#888', marginTop:6, marginBottom:0 }}>Company type is locked after initial setup. Contact support to change your plan.</p>
+              </div>
+            );
+          }
+          return (
+            <div style={styles.formGroup}>
+              <label style={styles.label}>Company type</label>
+              <div style={{ display:'flex', flexDirection:'column', gap:8, marginTop:4 }}>
+                {ALL_TYPES.map((t) => {
+                  const active = cur.includes(t.id);
+                  return (
+                    <div key={t.id} onClick={() => {
+                      const next = active ? cur.filter(x=>x!==t.id) : [...cur, t.id];
+                      setForm(p => ({ ...p, activeTypes: next.length ? next : [t.id] }));
+                    }} style={{ display:'flex', alignItems:'center', gap:12, padding:'10px 14px', borderRadius:10, border: active ? '2px solid #1E2A4A' : '2px solid #EAE6DB', background: active ? '#F0EFE9' : '#FAFAF8', cursor:'pointer', userSelect:'none' }}>
+                      <div style={{ width:20, height:20, borderRadius:5, border: active ? '2px solid #1E2A4A' : '2px solid #BDB9B0', background: active ? '#1E2A4A' : '#fff', display:'flex', alignItems:'center', justifyContent:'center', flexShrink:0 }}>
+                        {active && <span style={{ color:'#fff', fontSize:13, fontWeight:700 }}>✓</span>}
+                      </div>
+                      <div>
+                        <div style={{ fontWeight:600, fontSize:13, color:'#1E2A4A' }}>{t.label}</div>
+                        <div style={{ fontSize:11.5, color:'#888780' }}>{t.desc}</div>
+                      </div>
+                    </div>
+                  );
+                })}
+                <button onClick={() => setForm(p => {
+                  const c = p.activeTypes || [p.companyType || 'trading'];
+                  const all = ['trading','manufacturing','service','fmamc'];
+                  return { ...p, activeTypes: c.length === all.length ? ['trading'] : all };
+                })} style={{ ...styles.ghostBtn, alignSelf:'flex-start', marginTop:2 }}>
+                  {cur.length === 4 ? 'Deselect all' : 'Select all activities'}
+                </button>
+              </div>
+            </div>
+          );
+        })()}
         </>)}
 
         <div style={styles.formGroup}>
@@ -1848,6 +2076,24 @@ function SettingsView({ businessInfo, setBusinessInfo, onExportData, onSaved, us
                 <div style={{ fontSize: 11, color: '#3D7A5C', fontWeight: 600, marginTop: 6 }}>✓ Email notifications active</div>
               )}
             </div>
+
+            {/* ── Danger Zone ── */}
+            {userRole === 'admin' && (
+              <div style={{ marginTop: 32, paddingTop: 24, borderTop: '2px solid #FECACA' }}>
+                <div style={{ fontSize: 11, fontWeight: 700, color: '#B91C1C', textTransform: 'uppercase', letterSpacing: 1, marginBottom: 8 }}>⚠ Danger Zone</div>
+                <div style={{ background: '#FEF2F2', border: '1px solid #FECACA', borderRadius: 10, padding: '16px 20px' }}>
+                  <div style={{ fontWeight: 600, fontSize: 14, color: '#B91C1C', marginBottom: 4 }}>Delete Account</div>
+                  <div style={{ fontSize: 13, color: '#555', marginBottom: 12 }}>
+                    Permanently delete your Operix account and all associated data. This cannot be undone.
+                  </div>
+                  <button
+                    onClick={() => onRequestDelete && onRequestDelete()}
+                    style={{ padding: '8px 20px', background: '#FEF2F2', color: '#B91C1C', border: '1px solid #FECACA', borderRadius: 8, fontSize: 13, fontWeight: 600, cursor: 'pointer' }}>
+                    Delete my account
+                  </button>
+                </div>
+              </div>
+            )}
           </div>
         </div>
       </div>
@@ -2172,7 +2418,7 @@ function ActivityColumn({ bizType, label, color, icon, docs, stats, customers, v
   );
 }
 
-function Dashboard({ stats, documents, customers, vendors, businessInfo, startNewDoc, openDoc, setView, vouchers = [], pettyCash = {}, productionOrders = [], rawMaterials = [], items = [], companyType = 'trading', activeTypes = ['trading'], isMultiBiz = false, siteProjects = [], siteAttendance = [] }) {
+function Dashboard({ stats, documents, customers, vendors, businessInfo, startNewDoc, openDoc, setView, vouchers = [], pettyCash = {}, productionOrders = [], rawMaterials = [], items = [], companyType = 'trading', activeTypes = ['trading'], isMultiBiz = false, siteProjects = [], siteAttendance = [], serviceOrders = [] }) {
   const allowedTypes = DASHBOARD_DOC_TYPES[companyType] || Object.keys(DOC_TYPES);
   const recent = [...documents].sort((a, b) => b.createdAt - a.createdAt).slice(0, 5);
   const showProduction = activeTypes.includes('manufacturing');
@@ -2259,6 +2505,15 @@ function Dashboard({ stats, documents, customers, vendors, businessInfo, startNe
             <StatCard label="Customers" value={customers.length} accent="#1E2A4A" sub="registered" />
           </div>
 
+          {/* ── Department Overview Chart ── */}
+          <DeptChart
+            documents={documents}
+            productionOrders={productionOrders}
+            serviceOrders={serviceOrders}
+            activeTypes={activeTypes}
+            cur={cur}
+          />
+
           {showTrade && <>
             <div style={styles.dashSection}>Inventory</div>
             <div style={styles.statGrid}>
@@ -2295,6 +2550,179 @@ function Dashboard({ stats, documents, customers, vendors, businessInfo, startNe
           )}
         </>
       )}
+    </div>
+  );
+}
+
+// ─── Department Overview Chart ───────────────────────────────────────────────
+function DeptChart({ documents = [], productionOrders = [], serviceOrders = [], activeTypes = ['trading'], cur = v => v }) {
+  const [tab, setTab] = React.useState('sales');
+  const [chartType, setChartType] = React.useState('bar');
+
+  const months = React.useMemo(() => {
+    const arr = [];
+    for (let i = 5; i >= 0; i--) {
+      const d = new Date();
+      d.setDate(1);
+      d.setMonth(d.getMonth() - i);
+      arr.push({
+        key: `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`,
+        label: d.toLocaleString('default', { month: 'short' }),
+      });
+    }
+    return arr;
+  }, []);
+
+  const tabs = [
+    { id: 'sales',      label: 'Sales',      emoji: '💰', color: '#1E2A4A', show: true },
+    { id: 'purchase',   label: 'Purchase',   emoji: '🛒', color: '#6B5BAE', show: activeTypes.some(t => ['trading', 'manufacturing'].includes(t)) },
+    { id: 'production', label: 'Production', emoji: '🏭', color: '#C9A24B', show: activeTypes.includes('manufacturing') },
+    { id: 'service',    label: 'Service',    emoji: '🔧', color: '#1E7A9A', show: activeTypes.some(t => ['service', 'fmamc'].includes(t)) },
+  ].filter(t => t.show);
+
+  const activeTab = tabs.find(t => t.id === tab) || tabs[0];
+  const safeTab = activeTab.id;
+
+  function mKey(s) { return (s || '').slice(0, 7); }
+  function docAmt(d) { return (d.items || []).reduce((s, it) => s + (parseFloat(it.qty) || 0) * (parseFloat(it.rate) || 0), 0); }
+
+  const data = React.useMemo(() => {
+    switch (safeTab) {
+      case 'sales':
+        return months.map(m => ({ label: m.label, value: documents.filter(d => d.type === 'invoice' && mKey(d.date) === m.key).reduce((s, d) => s + docAmt(d), 0) }));
+      case 'purchase':
+        return months.map(m => ({ label: m.label, value: documents.filter(d => d.type === 'purchase' && mKey(d.date) === m.key).reduce((s, d) => s + docAmt(d), 0) }));
+      case 'production':
+        return months.map(m => ({ label: m.label, value: productionOrders.filter(p => mKey(p.plannedDate || p.date || '') === m.key).length }));
+      case 'service':
+        return months.map(m => ({ label: m.label, value: serviceOrders.filter(s => mKey(s.date || s.createdAt || '') === m.key).length }));
+      default:
+        return months.map(m => ({ label: m.label, value: 0 }));
+    }
+  }, [safeTab, documents, productionOrders, serviceOrders, months]);
+
+  const isAmount = safeTab === 'sales' || safeTab === 'purchase';
+  const maxVal = Math.max(...data.map(d => d.value), 1);
+  const total6m = data.reduce((s, d) => s + d.value, 0);
+  const peak = data.reduce((a, b) => b.value > a.value ? b : a, data[0]);
+
+  // SVG layout
+  const W = 560, H = 160, PL = 4, PR = 4, PT = 12, PB = 24;
+  const chartW = W - PL - PR;
+  const chartH = H - PT - PB;
+  const n = data.length;
+  const slotW = chartW / n;
+  const barW = slotW * 0.45;
+
+  const pts = data.map((d, i) => ({
+    x: PL + i * slotW + slotW / 2,
+    y: PT + chartH - (maxVal > 0 ? (d.value / maxVal) * chartH : 0),
+    value: d.value,
+    label: d.label,
+  }));
+
+  const color = activeTab.color;
+
+  return (
+    <div style={{ background: '#fff', border: '1px solid #EDEAE0', borderRadius: 14, padding: '20px 24px', marginBottom: 24 }}>
+      {/* Header row */}
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 14, flexWrap: 'wrap', gap: 8 }}>
+        <div className="serif" style={{ fontSize: 15, fontWeight: 700, color: '#1E2A4A' }}>Department Overview</div>
+        <div style={{ display: 'flex', gap: 5 }}>
+          {[['bar', '▮▮ Bar'], ['line', '〜 Line']].map(([ct, lbl]) => (
+            <button key={ct} onClick={() => setChartType(ct)}
+              style={{ padding: '4px 11px', borderRadius: 6, border: '1px solid #DDD', fontSize: 11, fontWeight: 600, cursor: 'pointer',
+                background: chartType === ct ? '#1E2A4A' : '#F8F6F2', color: chartType === ct ? '#fff' : '#666' }}>
+              {lbl}
+            </button>
+          ))}
+        </div>
+      </div>
+
+      {/* Tab pills */}
+      <div style={{ display: 'flex', gap: 6, marginBottom: 14, flexWrap: 'wrap' }}>
+        {tabs.map(t => (
+          <button key={t.id} onClick={() => setTab(t.id)}
+            style={{ padding: '5px 13px', borderRadius: 20, border: `1.5px solid ${tab === t.id ? t.color : '#DDD'}`,
+              fontSize: 12, fontWeight: 600, cursor: 'pointer',
+              background: tab === t.id ? t.color : '#fff', color: tab === t.id ? '#fff' : '#666' }}>
+            {t.emoji} {t.label}
+          </button>
+        ))}
+      </div>
+
+      {/* SVG Chart */}
+      <svg viewBox={`0 0 ${W} ${H}`} width="100%" style={{ display: 'block', overflow: 'visible' }}>
+        {/* Horizontal grid lines */}
+        {[0, 0.25, 0.5, 0.75, 1].map((f, i) => {
+          const y = PT + chartH * (1 - f);
+          return <line key={i} x1={PL} y1={y} x2={W - PR} y2={y}
+            stroke={f === 0 ? '#D8D4CC' : '#EDEAE0'} strokeWidth={f === 0 ? 1.5 : 0.8}
+            strokeDasharray={f === 0 ? 'none' : '5 4'} />;
+        })}
+
+        {chartType === 'bar' ? (
+          pts.map((pt, i) => (
+            <g key={i}>
+              <rect x={pt.x - barW / 2} y={pt.y} width={barW} height={PT + chartH - pt.y}
+                rx={3} fill={color} opacity={0.82} />
+              {pt.value > 0 && (
+                <text x={pt.x} y={pt.y - 4} textAnchor="middle" fontSize={8.5} fill={color} fontFamily="sans-serif" fontWeight="600">
+                  {isAmount ? (pt.value >= 100000 ? `${(pt.value/100000).toFixed(1)}L` : pt.value >= 1000 ? `${(pt.value/1000).toFixed(0)}K` : Math.round(pt.value)) : pt.value}
+                </text>
+              )}
+            </g>
+          ))
+        ) : (
+          <g>
+            {/* Area */}
+            <path d={`M ${pts[0].x},${PT + chartH} ${pts.map(p => `L ${p.x},${p.y}`).join(' ')} L ${pts[pts.length - 1].x},${PT + chartH} Z`}
+              fill={color} opacity={0.07} />
+            {/* Line */}
+            <polyline points={pts.map(p => `${p.x},${p.y}`).join(' ')}
+              fill="none" stroke={color} strokeWidth={2.5} strokeLinejoin="round" strokeLinecap="round" />
+            {/* Dots + value labels */}
+            {pts.map((pt, i) => (
+              <g key={i}>
+                <circle cx={pt.x} cy={pt.y} r={4} fill={color} stroke="#fff" strokeWidth={2} />
+                {pt.value > 0 && (
+                  <text x={pt.x} y={pt.y - 8} textAnchor="middle" fontSize={8.5} fill={color} fontFamily="sans-serif" fontWeight="600">
+                    {isAmount ? (pt.value >= 100000 ? `${(pt.value/100000).toFixed(1)}L` : pt.value >= 1000 ? `${(pt.value/1000).toFixed(0)}K` : Math.round(pt.value)) : pt.value}
+                  </text>
+                )}
+              </g>
+            ))}
+          </g>
+        )}
+
+        {/* X-axis month labels */}
+        {pts.map((pt, i) => (
+          <text key={i} x={pt.x} y={H - 5} textAnchor="middle" fontSize={10} fill="#999" fontFamily="sans-serif">
+            {pt.label}
+          </text>
+        ))}
+      </svg>
+
+      {/* Summary strip */}
+      <div style={{ display: 'flex', gap: 24, marginTop: 8, paddingTop: 10, borderTop: '1px solid #F0EDE4', flexWrap: 'wrap' }}>
+        <div style={{ fontSize: 12, color: '#888' }}>
+          6-month total:{' '}
+          <strong style={{ color: '#1E2A4A' }}>
+            {isAmount ? cur(total6m) : `${total6m} orders`}
+          </strong>
+        </div>
+        {peak && peak.value > 0 && (
+          <div style={{ fontSize: 12, color: '#888' }}>
+            Peak month:{' '}
+            <strong style={{ color: '#1E2A4A' }}>
+              {peak.label} ({isAmount ? cur(peak.value) : peak.value})
+            </strong>
+          </div>
+        )}
+        {total6m === 0 && (
+          <div style={{ fontSize: 12, color: '#BBB', fontStyle: 'italic' }}>No data yet for this period.</div>
+        )}
+      </div>
     </div>
   );
 }
@@ -15521,6 +15949,7 @@ export default function App() {
   const [tcChecklists,     _setTC]     = useState([]);
   const [handoverDocs,     _setHDocs]  = useState([]);
   const [notifications,    setNotifications] = useState([]);
+  const [showDeleteModal,  setShowDeleteModal] = useState(false);
 
   // ── Auth ────────────────────────────────────────────────────────────────────
   useEffect(() => {
@@ -15549,6 +15978,16 @@ export default function App() {
       }
     });
   }, []);
+
+  // ── Grace period expiry check — auto-open delete modal if 30-day window passed ──
+  useEffect(() => {
+    if (!biReady) return;
+    if (businessInfo?.deletionScheduled && businessInfo?.deletionDate) {
+      if (new Date(businessInfo.deletionDate) <= new Date()) {
+        setShowDeleteModal(true);
+      }
+    }
+  }, [biReady, businessInfo?.deletionScheduled, businessInfo?.deletionDate]);
 
   // ── Firestore subscription ───────────────────────────────────────────────────
   useEffect(() => {
@@ -15802,6 +16241,11 @@ export default function App() {
 
   async function handleLogout() { await logOut(); }
 
+  async function cancelDeletion() {
+    if (!ownerUid) return;
+    await saveCompanyData(ownerUid, { deletionScheduled: false, deletionDate: null });
+  }
+
   function exportAllData() {
     const payload = {
       exportedAt: new Date().toISOString(),
@@ -15873,8 +16317,9 @@ export default function App() {
   const trialDaysLeft  = _trialDaysUsed !== null ? Math.max(0, TRIAL_DAYS - _trialDaysUsed) : null;
   const trialExpired   = _trialDaysUsed !== null && _trialDaysUsed >= TRIAL_DAYS;
   const isSubscribed   = !!businessInfo.subscriptionActive;
+  const isTestAccount  = TEST_EMAILS.includes(user?.email);
 
-  if (biReady && trialExpired && !isSubscribed) {
+  if (biReady && trialExpired && !isSubscribed && !isTestAccount) {
     return <PaywallScreen businessInfo={businessInfo} onLogout={handleLogout} isStaff={userRole !== 'admin'} />;
   }
 
@@ -15902,6 +16347,24 @@ export default function App() {
         />
       );
     }
+
+    // ── Subscription gate ──────────────────────────────────────────────────────
+    // Build the set of sections this account can access
+    if (!isTestAccount) {
+      const _allowed = new Set(PLAN_MODULES.common);
+      for (const t of activeTypes) (PLAN_MODULES[t] || []).forEach(m => _allowed.add(m));
+      // Sections that belong exclusively to paid plans (not in common)
+      const _gated = new Set([
+        ...PLAN_MODULES.manufacturing,
+        ...PLAN_MODULES.service,
+        ...PLAN_MODULES.fmamc,
+      ]);
+      if (_gated.has(view) && !_allowed.has(view)) {
+        return <LockedModuleScreen />;
+      }
+    }
+    // ──────────────────────────────────────────────────────────────────────────
+
     switch (view) {
       case 'dashboard':
         return (
@@ -15920,6 +16383,8 @@ export default function App() {
             rawMaterials={rawMaterials}
             items={items}
             companyType={companyType}
+            activeTypes={activeTypes}
+            serviceOrders={serviceOrders}
           />
         );
       case 'documents':
@@ -15966,7 +16431,7 @@ export default function App() {
       case 'staff':
         return <StaffPage ownerUid={ownerUid} employees={employees} />;
       case 'settings':
-        return <SettingsView businessInfo={businessInfo} setBusinessInfo={setBusinessInfo} onExportData={exportAllData} onSaved={() => setView('dashboard')} userRole={userRole} />;
+        return <SettingsView businessInfo={businessInfo} setBusinessInfo={setBusinessInfo} onExportData={exportAllData} onSaved={() => setView('dashboard')} userRole={userRole} userEmail={user?.email || ''} onRequestDelete={() => setShowDeleteModal(true)} />;
       case 'pettycash':
         return (
           <PettyCashList
@@ -16600,11 +17065,55 @@ export default function App() {
       </button>
 
       <div style={styles.main}>
-        {trialDaysLeft !== null && trialDaysLeft <= 3 && !isSubscribed && (
+        {trialDaysLeft !== null && trialDaysLeft > 0 && !isSubscribed && (
           <TrialBanner daysLeft={trialDaysLeft} onUpgrade={() => setView('settings')} />
+        )}
+        {/* Deletion-scheduled banner */}
+        {businessInfo?.deletionScheduled && businessInfo?.deletionDate && (
+          <div style={{
+            background: '#FEF2F2', border: '1px solid #FECACA', borderRadius: 10,
+            padding: '12px 20px', margin: '12px 24px 0', display: 'flex',
+            alignItems: 'center', justifyContent: 'space-between', gap: 12,
+          }}>
+            <div>
+              <span style={{ fontWeight: 700, color: '#B91C1C', fontSize: 13 }}>⚠ Account deletion scheduled — </span>
+              <span style={{ fontSize: 13, color: '#555' }}>
+                Your account and all data will be permanently deleted on{' '}
+                <strong>{new Date(businessInfo.deletionDate).toLocaleDateString('en-IN', { day: 'numeric', month: 'long', year: 'numeric' })}</strong>.
+              </span>
+            </div>
+            <button
+              onClick={cancelDeletion}
+              style={{ padding: '6px 16px', background: '#fff', border: '1.5px solid #B91C1C', borderRadius: 7, color: '#B91C1C', fontSize: 12, fontWeight: 700, cursor: 'pointer', whiteSpace: 'nowrap' }}>
+              Cancel deletion
+            </button>
+          </div>
         )}
         {renderContent()}
       </div>
+
+      {/* Powered-by watermark — shown during trial, hidden once subscribed */}
+      {!isSubscribed && trialDaysLeft !== null && (
+        <div style={{
+          position: 'fixed', bottom: 0, left: 0, right: 0, zIndex: 9999,
+          display: 'flex', alignItems: 'center', justifyContent: 'center',
+          padding: '5px 16px',
+          background: 'rgba(30,42,74,0.92)',
+          backdropFilter: 'blur(4px)',
+          borderTop: '1px solid rgba(201,162,75,0.3)',
+          pointerEvents: 'none',
+        }}>
+          <span style={{ fontSize: 11, color: 'rgba(255,255,255,0.7)', letterSpacing: 0.5 }}>
+            Powered by{' '}
+            <span style={{ color: '#C9A24B', fontWeight: 700, fontFamily: 'Georgia, serif', letterSpacing: 1 }}>Operix</span>
+            {trialDaysLeft > 0 && (
+              <span style={{ marginLeft: 10, color: 'rgba(255,255,255,0.45)', fontSize: 10 }}>
+                · {trialDaysLeft} day{trialDaysLeft === 1 ? '' : 's'} free trial remaining
+              </span>
+            )}
+          </span>
+        </div>
+      )}
 
       {editingCustomer && (
         <CustomerModal
@@ -16643,6 +17152,25 @@ export default function App() {
           }}
           onClose={() => setEditingItem(null)}
           businessInfo={businessInfo}
+        />
+      )}
+
+      {/* Delete Account Modal */}
+      {showDeleteModal && (
+        <DeleteAccountModal
+          user={user}
+          ownerUid={ownerUid}
+          isSubscribed={isSubscribed}
+          onExportData={exportAllData}
+          onClose={() => setShowDeleteModal(false)}
+          onDeleted={(result) => {
+            if (result === 'deleted') {
+              handleLogout();
+            } else {
+              // 'scheduled' — grace period set; close modal
+              setShowDeleteModal(false);
+            }
+          }}
         />
       )}
     </div>
