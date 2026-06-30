@@ -2579,6 +2579,7 @@ function Sidebar({ view, setView, setActiveDoc, startNewDoc, syncStatus, user, o
         <CreateBtn docKey="purchase" />
         <CreateBtn docKey="purchasebill" />
         <NavBtn id="grn" label="Goods Receipt (GRN)" icon={Truck} />
+        {showProduction && <NavBtn id="vendoreval" label="Vendor Evaluation" icon={CheckSquare} />}
       </Section>
 
       {/* Stores — hidden for service companies */}
@@ -2647,6 +2648,8 @@ function Sidebar({ view, setView, setActiveDoc, startNewDoc, syncStatus, user, o
           <NavBtn id="deptprocedures" label="Dept Procedures" icon={BookOpen} />
           <NavBtn id="inprocessqa"    label="Inprocess QA"    icon={CheckSquare} />
           <NavBtn id="qatesting"      label="QA Testing"      icon={CheckCircle} />
+          <NavBtn id="capa"           label="CAPA"            icon={AlertTriangle} />
+          <NavBtn id="internalaudit"  label="Internal Audit"  icon={ClipboardList} />
         </Section>
       )}
 
@@ -12261,6 +12264,410 @@ function QuarterlyEvalForm({ evaluation, employees, computeStats, onSave, onClos
 
 
 
+// ─── Vendor Evaluation ────────────────────────────────────────────────────────
+function VendorEvalView({ vendorEvals, setVendorEvals, vendors, userRole }) {
+  const [editing, setEditing] = useState(null);
+  const canEdit = ['admin','manager','accounts'].includes(userRole);
+  const list = [...vendorEvals].sort((a,b) => (b.date||'') > (a.date||'') ? 1 : -1);
+
+  const CRITERIA = [['quality','Quality of Supply'],['delivery','On-time Delivery'],['pricing','Pricing Competitiveness'],['response','Responsiveness'],['compliance','Documentation/Compliance']];
+  const STATUS_COLOR = { approved:'#1a6b30', conditional:'#856404', rejected:'#842029' };
+  const STATUS_BG    = { approved:'#d4edda', conditional:'#fff3cd', rejected:'#f8d7da' };
+
+  function blankEval() {
+    return { id:'', vendorId:'', date: new Date().toISOString().slice(0,10), ratings:{}, comments:'', evaluator:'', nextReviewDate:'', status:'approved', ncRef:'' };
+  }
+  function avgRating(ratings) {
+    const vals = Object.values(ratings||{}).filter(Number);
+    return vals.length ? (vals.reduce((a,b)=>a+b,0)/vals.length).toFixed(1) : '-';
+  }
+  function getStatus(avg) {
+    if (!avg || avg==='-') return 'conditional';
+    if (avg >= 4) return 'approved';
+    if (avg >= 2.5) return 'conditional';
+    return 'rejected';
+  }
+  function save(ev) {
+    const status = getStatus(parseFloat(avgRating(ev.ratings)));
+    const rec = { ...ev, status, updatedAt: Date.now(), id: ev.id || crypto.randomUUID() };
+    setVendorEvals(prev => prev.find(x=>x.id===rec.id) ? prev.map(x=>x.id===rec.id?rec:x) : [...prev, rec]);
+    setEditing(null);
+  }
+
+  if (editing) {
+    const ev = editing;
+    const avg = avgRating(ev.ratings);
+    const autoStatus = getStatus(parseFloat(avg));
+    return (
+      <div style={{ maxWidth:620, margin:'0 auto', padding:'24px 0' }}>
+        <div style={{ display:'flex', alignItems:'center', gap:12, marginBottom:20 }}>
+          <button onClick={()=>setEditing(null)} style={styles.ghostBtn}><X size={14}/> Back</button>
+          <h2 className="serif" style={styles.pageTitle}>{ev.id ? 'Edit' : 'New'} Vendor Evaluation</h2>
+        </div>
+        <div style={{ background:'#fff', borderRadius:10, padding:24, border:'1px solid #EAE6DB' }}>
+          <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:12, marginBottom:16 }}>
+            <div style={styles.formGroup}>
+              <label style={styles.label}>Vendor</label>
+              <select value={ev.vendorId} onChange={e=>setEditing(p=>({...p,vendorId:e.target.value}))} style={styles.input}>
+                <option value=''>Select vendor</option>
+                {vendors.map(v=><option key={v.id} value={v.id}>{v.name}</option>)}
+              </select>
+            </div>
+            <div style={styles.formGroup}><label style={styles.label}>Evaluation Date</label><input type='date' value={ev.date} onChange={e=>setEditing(p=>({...p,date:e.target.value}))} style={styles.input}/></div>
+            <div style={styles.formGroup}><label style={styles.label}>Evaluator Name</label><input value={ev.evaluator} onChange={e=>setEditing(p=>({...p,evaluator:e.target.value}))} style={styles.input}/></div>
+            <div style={styles.formGroup}><label style={styles.label}>Next Review Date</label><input type='date' value={ev.nextReviewDate||''} onChange={e=>setEditing(p=>({...p,nextReviewDate:e.target.value}))} style={styles.input}/></div>
+            <div style={styles.formGroup}><label style={styles.label}>Linked NCR / Complaint Ref.</label><input value={ev.ncRef||''} onChange={e=>setEditing(p=>({...p,ncRef:e.target.value}))} placeholder='e.g. NCR-001' style={styles.input}/></div>
+          </div>
+          <div style={{ background:'#F8F7F4', borderRadius:8, padding:16, marginBottom:16 }}>
+            <div style={{ fontSize:12, fontWeight:700, color:'#1E2A4A', marginBottom:12, textTransform:'uppercase', letterSpacing:'.05em' }}>Rating Criteria (1 = Poor · 5 = Excellent)</div>
+            {CRITERIA.map(([k,label])=>(
+              <div key={k} style={{ display:'grid', gridTemplateColumns:'2fr 1fr 60px', gap:12, alignItems:'center', marginBottom:10 }}>
+                <label style={{ fontSize:13, color:'#444' }}>{label}</label>
+                <input type='range' min={1} max={5} value={ev.ratings[k]||3} onChange={e=>setEditing(p=>({...p,ratings:{...p.ratings,[k]:+e.target.value}}))} style={{ accentColor:'#1E2A4A' }}/>
+                <span style={{ fontSize:13, fontWeight:700, color:'#1E2A4A', textAlign:'right' }}>{ev.ratings[k]||3}/5</span>
+              </div>
+            ))}
+            <div style={{ textAlign:'right', fontSize:13, fontWeight:700, color:'#1E2A4A', borderTop:'1px solid #EAE6DB', paddingTop:8, marginTop:4 }}>
+              Overall Average: <span style={{ fontSize:16 }}>{avg}</span>/5 →{' '}
+              <span style={{ background: STATUS_BG[autoStatus], color: STATUS_COLOR[autoStatus], borderRadius:6, padding:'2px 10px', fontSize:12, fontWeight:700 }}>{autoStatus.toUpperCase()}</span>
+            </div>
+          </div>
+          <div style={styles.formGroup}><label style={styles.label}>Comments / Recommendations</label><textarea value={ev.comments||''} onChange={e=>setEditing(p=>({...p,comments:e.target.value}))} style={{ ...styles.input, height:72 }}/></div>
+          <div style={{ display:'flex', justifyContent:'flex-end', gap:10, marginTop:8 }}>
+            <button onClick={()=>setEditing(null)} style={styles.ghostBtn}>Cancel</button>
+            <button onClick={()=>save(ev)} style={styles.primaryBtn}>Save Evaluation</button>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div style={{ padding:'24px 32px' }}>
+      <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', marginBottom:20 }}>
+        <h2 className="serif" style={styles.pageTitle}>Vendor Evaluation</h2>
+        {canEdit && <button onClick={()=>setEditing(blankEval())} style={styles.primaryBtn}><Plus size={15}/> New Evaluation</button>}
+      </div>
+      {list.length === 0 ? (
+        <div style={{ textAlign:'center', padding:60, color:'#888780' }}>No evaluations yet. Rate your vendors to track performance.</div>
+      ) : (
+        <div style={{ background:'#fff', borderRadius:10, border:'1px solid #EAE6DB', overflow:'hidden' }}>
+          <table style={{ width:'100%', borderCollapse:'collapse', fontSize:13 }}>
+            <thead><tr style={{ background:'#F8F7F4', borderBottom:'1px solid #EAE6DB' }}>
+              {['Vendor','Date','Avg Score','Status','Next Review','Evaluator',''].map(h=><th key={h} style={{ padding:'10px 14px', textAlign:'left', fontSize:11, fontWeight:700, color:'#888780', textTransform:'uppercase' }}>{h}</th>)}
+            </tr></thead>
+            <tbody>
+              {list.map(ev=>{
+                const vendor = vendors.find(v=>v.id===ev.vendorId);
+                const avg = avgRating(ev.ratings);
+                return (
+                  <tr key={ev.id} style={{ borderBottom:'1px solid #F0ECE5' }}>
+                    <td style={{ padding:'10px 14px', fontWeight:600, color:'#1E2A4A' }}>{vendor?.name || '—'}</td>
+                    <td style={{ padding:'10px 14px', color:'#555' }}>{ev.date}</td>
+                    <td style={{ padding:'10px 14px', fontWeight:700, color:'#1E2A4A', fontSize:15 }}>{avg}/5</td>
+                    <td style={{ padding:'10px 14px' }}><span style={{ background:STATUS_BG[ev.status], color:STATUS_COLOR[ev.status], borderRadius:6, padding:'2px 10px', fontSize:11, fontWeight:700 }}>{(ev.status||'').toUpperCase()}</span></td>
+                    <td style={{ padding:'10px 14px', color:'#555' }}>{ev.nextReviewDate||'—'}</td>
+                    <td style={{ padding:'10px 14px', color:'#555' }}>{ev.evaluator||'—'}</td>
+                    <td style={{ padding:'10px 14px' }}>
+                      {canEdit && <div style={{ display:'flex', gap:6 }}>
+                        <button onClick={()=>setEditing(ev)} style={styles.iconBtn}><Pencil size={14}/></button>
+                        <button onClick={()=>{if(window.confirm('Delete?'))setVendorEvals(prev=>prev.filter(x=>x.id!==ev.id))}} style={{ ...styles.iconBtn, color:'#B5453A' }}><Trash2 size={14}/></button>
+                      </div>}
+                    </td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ─── CAPA (Corrective & Preventive Action) ────────────────────────────────────
+function CAPAView({ capaRecords, setCapaRecords, vendors, customers, userRole }) {
+  const [editing, setEditing] = useState(null);
+  const [filterStatus, setFilterStatus] = useState('all');
+  const canEdit = ['admin','manager'].includes(userRole);
+
+  const SOURCES = ['NCR','Customer Complaint','Internal Audit','Supplier Issue','Process Deviation','Other'];
+  const STATUSES = ['open','in_progress','pending_verification','closed'];
+  const STATUS_LABEL = { open:'Open', in_progress:'In Progress', pending_verification:'Pending Verification', closed:'Closed' };
+  const STATUS_COLOR = { open:'#842029', in_progress:'#856404', pending_verification:'#0a58ca', closed:'#1a6b30' };
+  const STATUS_BG    = { open:'#f8d7da', in_progress:'#fff3cd', pending_verification:'#cfe2ff', closed:'#d4edda' };
+
+  function blankCAPA() {
+    const num = `CAR-${String(capaRecords.length+1).padStart(3,'0')}`;
+    return { id:'', number:num, date: new Date().toISOString().slice(0,10), source:'NCR', sourceRef:'', description:'', rootCause:'', actionPlan:'', responsibility:'', targetDate:'', effectivenessCheck:'', closedDate:'', status:'open' };
+  }
+  function save(rec) {
+    const data = { ...rec, id: rec.id||crypto.randomUUID(), updatedAt: Date.now() };
+    setCapaRecords(prev => prev.find(x=>x.id===data.id) ? prev.map(x=>x.id===data.id?data:x) : [...prev, data]);
+    setEditing(null);
+  }
+
+  const list = capaRecords.filter(r => filterStatus==='all' || r.status===filterStatus).sort((a,b)=>b.date>a.date?1:-1);
+
+  if (editing) {
+    const r = editing;
+    const set = (k,v) => setEditing(p=>({...p,[k]:v}));
+    return (
+      <div style={{ maxWidth:680, margin:'0 auto', padding:'24px 0' }}>
+        <div style={{ display:'flex', alignItems:'center', gap:12, marginBottom:20 }}>
+          <button onClick={()=>setEditing(null)} style={styles.ghostBtn}><X size={14}/> Back</button>
+          <h2 className="serif" style={styles.pageTitle}>{r.id ? 'Edit CAPA' : 'New CAPA'} — {r.number}</h2>
+        </div>
+        <div style={{ background:'#fff', borderRadius:10, padding:24, border:'1px solid #EAE6DB', display:'flex', flexDirection:'column', gap:14 }}>
+          {/* Header row */}
+          <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr 1fr', gap:12 }}>
+            <div style={styles.formGroup}><label style={styles.label}>CAR No.</label><input value={r.number} onChange={e=>set('number',e.target.value)} style={styles.input}/></div>
+            <div style={styles.formGroup}><label style={styles.label}>Date Raised</label><input type='date' value={r.date} onChange={e=>set('date',e.target.value)} style={styles.input}/></div>
+            <div style={styles.formGroup}><label style={styles.label}>Status</label>
+              <select value={r.status} onChange={e=>set('status',e.target.value)} style={styles.input}>
+                {STATUSES.map(s=><option key={s} value={s}>{STATUS_LABEL[s]}</option>)}
+              </select>
+            </div>
+          </div>
+          <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:12 }}>
+            <div style={styles.formGroup}><label style={styles.label}>Source</label>
+              <select value={r.source} onChange={e=>set('source',e.target.value)} style={styles.input}>
+                {SOURCES.map(s=><option key={s} value={s}>{s}</option>)}
+              </select>
+            </div>
+            <div style={styles.formGroup}><label style={styles.label}>Source Reference (NCR No. / Complaint No.)</label><input value={r.sourceRef||''} onChange={e=>set('sourceRef',e.target.value)} placeholder='e.g. NCR-007' style={styles.input}/></div>
+          </div>
+          {/* ISO 10.2 fields */}
+          <div style={styles.formGroup}><label style={styles.label}>Problem Description / Non-Conformance</label><textarea value={r.description||''} onChange={e=>set('description',e.target.value)} style={{ ...styles.input, height:72 }} placeholder='Describe the issue clearly...'/></div>
+          <div style={styles.formGroup}><label style={styles.label}>Root Cause Analysis (5-Why / Fishbone)</label><textarea value={r.rootCause||''} onChange={e=>set('rootCause',e.target.value)} style={{ ...styles.input, height:80 }} placeholder='Why did this happen?'/></div>
+          <div style={styles.formGroup}><label style={styles.label}>Corrective / Preventive Action Plan</label><textarea value={r.actionPlan||''} onChange={e=>set('actionPlan',e.target.value)} style={{ ...styles.input, height:80 }} placeholder='What actions will be taken?'/></div>
+          <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:12 }}>
+            <div style={styles.formGroup}><label style={styles.label}>Responsibility</label><input value={r.responsibility||''} onChange={e=>set('responsibility',e.target.value)} placeholder='Name / Dept' style={styles.input}/></div>
+            <div style={styles.formGroup}><label style={styles.label}>Target Completion Date</label><input type='date' value={r.targetDate||''} onChange={e=>set('targetDate',e.target.value)} style={styles.input}/></div>
+          </div>
+          <div style={{ background:'#F0F8F0', borderRadius:8, padding:14, border:'1px solid #c3e6cb' }}>
+            <div style={{ fontSize:12, fontWeight:700, color:'#1a6b30', marginBottom:8 }}>✅ Effectiveness Verification (ISO 10.2.3)</div>
+            <div style={styles.formGroup}><label style={styles.label}>Effectiveness Check Notes</label><textarea value={r.effectivenessCheck||''} onChange={e=>set('effectivenessCheck',e.target.value)} style={{ ...styles.input, height:60 }} placeholder='Did the action actually fix the problem?'/></div>
+            <div style={styles.formGroup}><label style={styles.label}>Date Closed</label><input type='date' value={r.closedDate||''} onChange={e=>set('closedDate',e.target.value)} style={styles.input}/></div>
+          </div>
+          <div style={{ display:'flex', justifyContent:'flex-end', gap:10 }}>
+            <button onClick={()=>setEditing(null)} style={styles.ghostBtn}>Cancel</button>
+            <button onClick={()=>save(r)} style={styles.primaryBtn}>Save CAPA</button>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div style={{ padding:'24px 32px' }}>
+      <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', marginBottom:16 }}>
+        <h2 className="serif" style={styles.pageTitle}>CAPA — Corrective & Preventive Actions <span style={{ fontSize:11, color:'#888', fontWeight:400 }}>ISO 10.2</span></h2>
+        {canEdit && <button onClick={()=>setEditing(blankCAPA())} style={styles.primaryBtn}><Plus size={15}/> New CAPA</button>}
+      </div>
+      {/* Status filter */}
+      <div style={{ display:'flex', gap:8, marginBottom:16 }}>
+        {['all',...STATUSES].map(s=>(
+          <button key={s} onClick={()=>setFilterStatus(s)} style={{ ...styles.ghostBtn, background: filterStatus===s ? '#1E2A4A' : 'transparent', color: filterStatus===s ? '#fff' : '#555', fontSize:12 }}>
+            {s==='all' ? 'All' : STATUS_LABEL[s]}
+          </button>
+        ))}
+      </div>
+      {list.length===0 ? (
+        <div style={{ textAlign:'center', padding:60, color:'#888780' }}>No CAPA records. Raise one from QA Testing NCRs or create manually.</div>
+      ) : (
+        <div style={{ background:'#fff', borderRadius:10, border:'1px solid #EAE6DB', overflow:'hidden' }}>
+          <table style={{ width:'100%', borderCollapse:'collapse', fontSize:13 }}>
+            <thead><tr style={{ background:'#F8F7F4', borderBottom:'1px solid #EAE6DB' }}>
+              {['CAR No.','Date','Source','Ref.','Description','Responsibility','Target','Status',''].map(h=><th key={h} style={{ padding:'10px 12px', textAlign:'left', fontSize:11, fontWeight:700, color:'#888780', textTransform:'uppercase' }}>{h}</th>)}
+            </tr></thead>
+            <tbody>
+              {list.map(r=>(
+                <tr key={r.id} style={{ borderBottom:'1px solid #F0ECE5' }}>
+                  <td style={{ padding:'10px 12px', fontWeight:600, color:'#1E2A4A' }}>{r.number}</td>
+                  <td style={{ padding:'10px 12px', color:'#555' }}>{r.date}</td>
+                  <td style={{ padding:'10px 12px', color:'#555' }}>{r.source}</td>
+                  <td style={{ padding:'10px 12px', color:'#888', fontSize:11 }}>{r.sourceRef||'—'}</td>
+                  <td style={{ padding:'10px 12px', color:'#333', maxWidth:200, overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap' }}>{r.description||'—'}</td>
+                  <td style={{ padding:'10px 12px', color:'#555' }}>{r.responsibility||'—'}</td>
+                  <td style={{ padding:'10px 12px', color:'#555' }}>{r.targetDate||'—'}</td>
+                  <td style={{ padding:'10px 12px' }}><span style={{ background:STATUS_BG[r.status], color:STATUS_COLOR[r.status], borderRadius:6, padding:'2px 8px', fontSize:11, fontWeight:700 }}>{STATUS_LABEL[r.status]}</span></td>
+                  <td style={{ padding:'10px 12px' }}>
+                    {canEdit && <div style={{ display:'flex', gap:6 }}>
+                      <button onClick={()=>setEditing(r)} style={styles.iconBtn}><Pencil size={14}/></button>
+                      <button onClick={()=>{if(window.confirm('Delete?'))setCapaRecords(prev=>prev.filter(x=>x.id!==r.id))}} style={{ ...styles.iconBtn, color:'#B5453A' }}><Trash2 size={14}/></button>
+                    </div>}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ─── Internal Audit ───────────────────────────────────────────────────────────
+function InternalAuditView({ internalAudits, setInternalAudits, capaRecords, setCapaRecords, userRole }) {
+  const [editing, setEditing] = useState(null);
+  const [viewFindings, setViewFindings] = useState(null);
+  const canEdit = ['admin','manager'].includes(userRole);
+
+  const CLAUSES = ['4.1 Context','4.2 Interested Parties','5.1 Leadership','6.1 Risk & Opportunity','7.1 Resources','7.2 Competence','7.5 Documentation','8.1 Planning','8.4 External Providers','8.5 Production Control','8.6 Release','8.7 NC Output','9.1 Monitoring','9.2 Internal Audit','9.3 MRM','10.2 CAPA'];
+
+  function blankAudit() {
+    const num = `IA-${new Date().getFullYear()}-${String(internalAudits.length+1).padStart(2,'0')}`;
+    return { id:'', number:num, scheduledDate:'', conductedDate:'', auditor:'', auditee:'', scope:'', clauses:[], findings:[], status:'scheduled', summary:'' };
+  }
+  function blankFinding() {
+    return { id: crypto.randomUUID(), clause:'', type:'observation', description:'', requirement:'', evidence:'', capaRaised:false };
+  }
+  function save(audit) {
+    const data = { ...audit, id: audit.id||crypto.randomUUID(), updatedAt: Date.now() };
+    setInternalAudits(prev => prev.find(x=>x.id===data.id) ? prev.map(x=>x.id===data.id?data:x) : [...prev, data]);
+    setEditing(null);
+  }
+  function raiseCAPAFromFinding(audit, finding) {
+    const num = `CAR-${String(capaRecords.length+1).padStart(3,'0')}`;
+    const capa = { id: crypto.randomUUID(), number: num, date: new Date().toISOString().slice(0,10), source:'Internal Audit', sourceRef: audit.number, description: finding.description, rootCause:'', actionPlan:'', responsibility:'', targetDate:'', effectivenessCheck:'', closedDate:'', status:'open' };
+    setCapaRecords(prev=>[...prev, capa]);
+    setInternalAudits(prev=>prev.map(a=>a.id===audit.id ? { ...a, findings: a.findings.map(f=>f.id===finding.id ? { ...f, capaRaised:true, capaRef:num } : f) } : a));
+  }
+
+  if (viewFindings) {
+    const audit = internalAudits.find(a=>a.id===viewFindings);
+    if (!audit) { setViewFindings(null); return null; }
+    return (
+      <div style={{ maxWidth:720, margin:'0 auto', padding:'24px 0' }}>
+        <div style={{ display:'flex', alignItems:'center', gap:12, marginBottom:20 }}>
+          <button onClick={()=>setViewFindings(null)} style={styles.ghostBtn}><X size={14}/> Back</button>
+          <h2 className="serif" style={styles.pageTitle}>Audit Findings — {audit.number}</h2>
+        </div>
+        <div style={{ background:'#fff', borderRadius:10, padding:24, border:'1px solid #EAE6DB' }}>
+          <div style={{ display:'grid', gridTemplateColumns:'repeat(3,1fr)', gap:12, marginBottom:16, padding:12, background:'#F8F7F4', borderRadius:8 }}>
+            <div><div style={{ fontSize:11, color:'#888' }}>Auditor</div><div style={{ fontWeight:600 }}>{audit.auditor||'—'}</div></div>
+            <div><div style={{ fontSize:11, color:'#888' }}>Auditee / Dept</div><div style={{ fontWeight:600 }}>{audit.auditee||'—'}</div></div>
+            <div><div style={{ fontSize:11, color:'#888' }}>Conducted</div><div style={{ fontWeight:600 }}>{audit.conductedDate||'—'}</div></div>
+          </div>
+          {(audit.findings||[]).length===0 ? <div style={{ color:'#888', textAlign:'center', padding:24 }}>No findings recorded.</div> : (
+            audit.findings.map((f,i)=>(
+              <div key={f.id} style={{ background: f.type==='major_nc'?'#fff5f5':f.type==='minor_nc'?'#fffbf0':'#f5fff8', border:`1px solid ${f.type==='major_nc'?'#fcc':f.type==='minor_nc'?'#fde68a':'#bbf7d0'}`, borderRadius:8, padding:14, marginBottom:10 }}>
+                <div style={{ display:'flex', justifyContent:'space-between', alignItems:'flex-start' }}>
+                  <div style={{ fontSize:11, fontWeight:700, color: f.type==='major_nc'?'#842029':f.type==='minor_nc'?'#856404':'#1a6b30', textTransform:'uppercase' }}>{f.type==='major_nc'?'Major NC':f.type==='minor_nc'?'Minor NC':'Observation'} — {f.clause}</div>
+                  {canEdit && !f.capaRaised && (f.type==='major_nc'||f.type==='minor_nc') && (
+                    <button onClick={()=>raiseCAPAFromFinding(audit,f)} style={{ ...styles.ghostBtn, fontSize:11, color:'#E07A3A', borderColor:'#E07A3A' }}>⚡ Raise CAPA</button>
+                  )}
+                  {f.capaRaised && <span style={{ fontSize:11, color:'#1a6b30', fontWeight:600 }}>✓ CAPA: {f.capaRef}</span>}
+                </div>
+                <div style={{ fontSize:13, marginTop:6, color:'#333' }}>{f.description}</div>
+                {f.requirement && <div style={{ fontSize:11, color:'#888', marginTop:4 }}>Requirement: {f.requirement}</div>}
+              </div>
+            ))
+          )}
+          {canEdit && (
+            <button onClick={()=>{
+              const f = blankFinding();
+              setInternalAudits(prev=>prev.map(a=>a.id===audit.id?{...a,findings:[...(a.findings||[]),f]}:a));
+            }} style={{ ...styles.ghostBtn, marginTop:8 }}><Plus size={13}/> Add Finding</button>
+          )}
+        </div>
+      </div>
+    );
+  }
+
+  if (editing) {
+    const a = editing;
+    const set = (k,v) => setEditing(p=>({...p,[k]:v}));
+    return (
+      <div style={{ maxWidth:660, margin:'0 auto', padding:'24px 0' }}>
+        <div style={{ display:'flex', alignItems:'center', gap:12, marginBottom:20 }}>
+          <button onClick={()=>setEditing(null)} style={styles.ghostBtn}><X size={14}/> Back</button>
+          <h2 className="serif" style={styles.pageTitle}>{a.id?'Edit':'New'} Internal Audit — {a.number}</h2>
+        </div>
+        <div style={{ background:'#fff', borderRadius:10, padding:24, border:'1px solid #EAE6DB', display:'flex', flexDirection:'column', gap:14 }}>
+          <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr 1fr', gap:12 }}>
+            <div style={styles.formGroup}><label style={styles.label}>Audit No.</label><input value={a.number} onChange={e=>set('number',e.target.value)} style={styles.input}/></div>
+            <div style={styles.formGroup}><label style={styles.label}>Scheduled Date</label><input type='date' value={a.scheduledDate||''} onChange={e=>set('scheduledDate',e.target.value)} style={styles.input}/></div>
+            <div style={styles.formGroup}><label style={styles.label}>Conducted Date</label><input type='date' value={a.conductedDate||''} onChange={e=>set('conductedDate',e.target.value)} style={styles.input}/></div>
+            <div style={styles.formGroup}><label style={styles.label}>Lead Auditor</label><input value={a.auditor||''} onChange={e=>set('auditor',e.target.value)} style={styles.input}/></div>
+            <div style={styles.formGroup}><label style={styles.label}>Auditee / Department</label><input value={a.auditee||''} onChange={e=>set('auditee',e.target.value)} style={styles.input}/></div>
+            <div style={styles.formGroup}><label style={styles.label}>Status</label>
+              <select value={a.status} onChange={e=>set('status',e.target.value)} style={styles.input}>
+                {['scheduled','in_progress','completed','closed'].map(s=><option key={s} value={s}>{s.replace('_',' ').replace(/\b\w/g,c=>c.toUpperCase())}</option>)}
+              </select>
+            </div>
+          </div>
+          <div style={styles.formGroup}><label style={styles.label}>Audit Scope</label><textarea value={a.scope||''} onChange={e=>set('scope',e.target.value)} style={{ ...styles.input, height:60 }} placeholder='Describe what areas / processes are being audited'/></div>
+          <div style={styles.formGroup}>
+            <label style={styles.label}>ISO Clauses Covered</label>
+            <div style={{ display:'flex', flexWrap:'wrap', gap:6, marginTop:4 }}>
+              {CLAUSES.map(c=>(
+                <button key={c} onClick={()=>set('clauses', a.clauses.includes(c)?a.clauses.filter(x=>x!==c):[...a.clauses,c])}
+                  style={{ fontSize:11, padding:'3px 8px', borderRadius:6, border:'1px solid', cursor:'pointer', background: a.clauses.includes(c)?'#1E2A4A':'transparent', color: a.clauses.includes(c)?'#fff':'#555', borderColor: a.clauses.includes(c)?'#1E2A4A':'#ccc' }}>{c}</button>
+              ))}
+            </div>
+          </div>
+          <div style={styles.formGroup}><label style={styles.label}>Summary / Conclusion</label><textarea value={a.summary||''} onChange={e=>set('summary',e.target.value)} style={{ ...styles.input, height:60 }}/></div>
+          <div style={{ display:'flex', justifyContent:'flex-end', gap:10 }}>
+            <button onClick={()=>setEditing(null)} style={styles.ghostBtn}>Cancel</button>
+            <button onClick={()=>save(a)} style={styles.primaryBtn}>Save Audit</button>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  const list = [...internalAudits].sort((a,b)=>b.scheduledDate>a.scheduledDate?1:-1);
+  const STATUS_COLOR = { scheduled:'#0a58ca', in_progress:'#856404', completed:'#1a6b30', closed:'#555' };
+  const STATUS_BG    = { scheduled:'#cfe2ff', in_progress:'#fff3cd', completed:'#d4edda', closed:'#f0ece5' };
+  return (
+    <div style={{ padding:'24px 32px' }}>
+      <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', marginBottom:20 }}>
+        <h2 className="serif" style={styles.pageTitle}>Internal Audit <span style={{ fontSize:11, color:'#888', fontWeight:400 }}>ISO 9.2</span></h2>
+        {canEdit && <button onClick={()=>setEditing(blankAudit())} style={styles.primaryBtn}><Plus size={15}/> Schedule Audit</button>}
+      </div>
+      {list.length===0 ? (
+        <div style={{ textAlign:'center', padding:60, color:'#888780' }}>No audits scheduled yet.</div>
+      ) : (
+        <div style={{ background:'#fff', borderRadius:10, border:'1px solid #EAE6DB', overflow:'hidden' }}>
+          <table style={{ width:'100%', borderCollapse:'collapse', fontSize:13 }}>
+            <thead><tr style={{ background:'#F8F7F4', borderBottom:'1px solid #EAE6DB' }}>
+              {['Audit No.','Scheduled','Auditor','Auditee','Clauses','Findings','Status',''].map(h=><th key={h} style={{ padding:'10px 12px', textAlign:'left', fontSize:11, fontWeight:700, color:'#888780', textTransform:'uppercase' }}>{h}</th>)}
+            </tr></thead>
+            <tbody>
+              {list.map(a=>{
+                const ncCount = (a.findings||[]).filter(f=>f.type!=='observation').length;
+                return (
+                  <tr key={a.id} style={{ borderBottom:'1px solid #F0ECE5' }}>
+                    <td style={{ padding:'10px 12px', fontWeight:600, color:'#1E2A4A' }}>{a.number}</td>
+                    <td style={{ padding:'10px 12px', color:'#555' }}>{a.scheduledDate||'—'}</td>
+                    <td style={{ padding:'10px 12px', color:'#555' }}>{a.auditor||'—'}</td>
+                    <td style={{ padding:'10px 12px', color:'#555' }}>{a.auditee||'—'}</td>
+                    <td style={{ padding:'10px 12px', color:'#888', fontSize:11 }}>{(a.clauses||[]).length} clauses</td>
+                    <td style={{ padding:'10px 12px' }}>
+                      <span style={{ fontSize:12 }}>{(a.findings||[]).length} findings</span>
+                      {ncCount>0 && <span style={{ marginLeft:6, background:'#f8d7da', color:'#842029', borderRadius:5, padding:'1px 6px', fontSize:11, fontWeight:700 }}>{ncCount} NC</span>}
+                    </td>
+                    <td style={{ padding:'10px 12px' }}><span style={{ background:STATUS_BG[a.status], color:STATUS_COLOR[a.status], borderRadius:6, padding:'2px 8px', fontSize:11, fontWeight:700 }}>{(a.status||'').replace('_',' ').replace(/\b\w/g,c=>c.toUpperCase())}</span></td>
+                    <td style={{ padding:'10px 12px' }}>
+                      <div style={{ display:'flex', gap:6 }}>
+                        <button onClick={()=>setViewFindings(a.id)} style={{ ...styles.ghostBtn, fontSize:11 }}>Findings</button>
+                        {canEdit && <button onClick={()=>setEditing(a)} style={styles.iconBtn}><Pencil size={14}/></button>}
+                        {canEdit && <button onClick={()=>{if(window.confirm('Delete?'))setInternalAudits(prev=>prev.filter(x=>x.id!==a.id))}} style={{ ...styles.iconBtn, color:'#B5453A' }}><Trash2 size={14}/></button>}
+                      </div>
+                    </td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
+      )}
+    </div>
+  );
+}
+
 // ─── Root App ─────────────────────────────────────────────────────────────────
 export default function App() {
   const [view,             setView]           = useState('dashboard');
@@ -12307,6 +12714,9 @@ export default function App() {
   const [clientMaterials,  _setCM]     = useState([]);
   const [siteAttendance,   _setSA]     = useState([]);
   const [evaluations,      _setEvls]   = useState([]);
+  const [capaRecords,      _setCapa]   = useState([]);
+  const [internalAudits,   _setAudits] = useState([]);
+  const [vendorEvals,      _setVE]     = useState([]);
   const [notifications,    setNotifications] = useState([]);
 
   // ── Auth ────────────────────────────────────────────────────────────────────
@@ -12373,6 +12783,9 @@ export default function App() {
       _setCM(data.clientMaterials || []);
       _setSA(data.siteAttendance || []);
       _setEvls(data.evaluations || []);
+      _setCapa(data.capaRecords || []);
+      _setAudits(data.internalAudits || []);
+      _setVE(data.vendorEvals || []);
     });
     return unsub;
   }, [ownerUid]);
@@ -12432,6 +12845,9 @@ export default function App() {
   const setClientMaterials  = mkSet(_setCM,    'clientMaterials');
   const setSiteAttendance   = mkSet(_setSA,    'siteAttendance');
   const setEvaluations      = mkSet(_setEvls,  'evaluations');
+  const setCapaRecords      = mkSet(_setCapa,  'capaRecords');
+  const setInternalAudits   = mkSet(_setAudits,'internalAudits');
+  const setVendorEvals      = mkSet(_setVE,    'vendorEvals');
 
   // ── Document number helpers ──────────────────────────────────────────────────
   function getFY(dateStr) {
@@ -12861,6 +13277,35 @@ export default function App() {
             items={items}
             userRole={userRole}
             businessInfo={businessInfo}
+          />
+        );
+      case 'capa':
+        return (
+          <CAPAView
+            capaRecords={capaRecords}
+            setCapaRecords={setCapaRecords}
+            vendors={vendors}
+            customers={customers}
+            userRole={userRole}
+          />
+        );
+      case 'internalaudit':
+        return (
+          <InternalAuditView
+            internalAudits={internalAudits}
+            setInternalAudits={setInternalAudits}
+            capaRecords={capaRecords}
+            setCapaRecords={setCapaRecords}
+            userRole={userRole}
+          />
+        );
+      case 'vendoreval':
+        return (
+          <VendorEvalView
+            vendorEvals={vendorEvals}
+            setVendorEvals={setVendorEvals}
+            vendors={vendors}
+            userRole={userRole}
           />
         );
       case 'parts':
