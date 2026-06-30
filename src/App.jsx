@@ -601,6 +601,7 @@ function OnboardingSetup({ setBusinessInfo }) {
     { id: 'trading',       icon: '🛒', label: 'Trading / Distribution', desc: 'Buy & sell goods — quotations, invoices, purchase orders, delivery notes, stock management' },
     { id: 'manufacturing', icon: '🏭', label: 'Manufacturing',          desc: 'Produce goods — BOM, raw materials, production orders, quality assurance' },
     { id: 'service',       icon: '🔧', label: 'Services / MEP',         desc: 'Project-based work — site projects, activity planning, manpower, attendance, MEP reports' },
+    { id: 'fmamc',         icon: '🏢', label: 'FM / AMC',               desc: 'Facility management & AMC — asset register, preventive maintenance, work orders, SLA contracts' },
   ];
 
   const filteredCountries = Object.entries(COUNTRY_CONFIG).filter(([id, cfg]) =>
@@ -1606,6 +1607,7 @@ function SettingsView({ businessInfo, setBusinessInfo, onExportData, onSaved, us
               { id: 'trading',       label: '🛒 Trading',             desc: 'Buy & sell goods — invoices, POs, delivery, stock' },
               { id: 'manufacturing', label: '🏭 Manufacturing',        desc: 'Produce goods — BOM, production orders, QA' },
               { id: 'service',       label: '🔧 Services / MEP Suite', desc: 'Manpower & site work — projects, activity planner, attendance' },
+              { id: 'fmamc',         label: '🏢 FM / AMC',             desc: 'Facility management — assets, PM schedules, work orders, SLA contracts' },
             ].map((t) => {
               const cur = form.activeTypes || [form.companyType || 'trading'];
               const active = cur.includes(t.id);
@@ -1626,9 +1628,10 @@ function SettingsView({ businessInfo, setBusinessInfo, onExportData, onSaved, us
             })}
             <button onClick={() => setForm(p => {
               const cur = p.activeTypes || [p.companyType || 'trading'];
-              return { ...p, activeTypes: cur.length === 3 ? ['trading'] : ['trading','manufacturing','service'] };
+              const all = ['trading','manufacturing','service','fmamc'];
+              return { ...p, activeTypes: cur.length === all.length ? ['trading'] : all };
             })} style={{ ...styles.ghostBtn, alignSelf: 'flex-start', marginTop: 2 }}>
-              {((form.activeTypes || [form.companyType || 'trading']).length === 3) ? 'Deselect all' : 'Select all 3 activities'}
+              {((form.activeTypes || [form.companyType || 'trading']).length === 4) ? 'Deselect all' : 'Select all activities'}
             </button>
           </div>
         </div>
@@ -2419,14 +2422,16 @@ const SECTION_VIEWS = {
   quality:     ['isoprinciples', 'deptprocedures', 'inprocessqa', 'qatesting'],
   hr:          ['employees', 'payroll'],
   scope:       ['scopeofwork'],
-  site:        ['siteprojects', 'activityplanner', 'dailyupdates', 'progressboard', 'clientmaterials', 'siteattendance', 'evaluation', 'mepreports'],
+  site:        ['siteprojects', 'tender', 'activityplanner', 'rabilling', 'subcontractors', 'hse', 'tcommissioning', 'handover', 'dailyupdates', 'progressboard', 'clientmaterials', 'siteattendance', 'evaluation', 'mepreports'],
   admin:       ['staff', 'contracts', 'termslibrary'],
+  fmamc:       ['fmkpi','assetregister','pmschedules','fmworkorders','amccontracts','fmspareparts'],
 };
 
 function Sidebar({ view, setView, setActiveDoc, startNewDoc, syncStatus, user, onLogout, userRole, companyType, activeTypes, country, unreadCount = 0, onShowNotifications }) {
   const showTrade      = activeTypes.includes('trading') || activeTypes.includes('manufacturing');
   const showProduction = activeTypes.includes('manufacturing');
   const showService    = activeTypes.includes('service');
+  const showFMAMC      = activeTypes.includes('fmamc');
   const isMultiBiz     = activeTypes.length > 1;
 
   // Track manually collapsed sections (set of section keys)
@@ -2608,14 +2613,20 @@ function Sidebar({ view, setView, setActiveDoc, startNewDoc, syncStatus, user, o
       {/* MEP Suite — service / MEP manpower companies */}
       {showService && (
         <Section sectionKey="site" label="MEP Suite">
-          <NavBtn id="siteprojects"    label="Projects"         icon={MapPin} />
-          <NavBtn id="activityplanner" label="Activity Planner" icon={ClipboardList} />
-          <NavBtn id="dailyupdates"    label="Daily Updates"    icon={Pencil} />
-          <NavBtn id="progressboard"   label="Progress Board"   icon={BarChart2} />
-          <NavBtn id="clientmaterials" label="Client Materials" icon={Package} />
-          <NavBtn id="siteattendance"  label="Attendance"       icon={Users} />
-          <NavBtn id="evaluation"      label="Quarterly Review" icon={BarChart2} />
-          <NavBtn id="mepreports"      label="MEP Reports"      icon={FileText} />
+          <NavBtn id="siteprojects"    label="Projects"           icon={MapPin} />
+          <NavBtn id="tender"          label="Tender & Estimation" icon={FileText} />
+          <NavBtn id="activityplanner" label="Activity Planner"   icon={ClipboardList} />
+          <NavBtn id="rabilling"       label="RA Billing"         icon={FileMinus} />
+          <NavBtn id="subcontractors"  label="Subcontractors"     icon={Truck} />
+          <NavBtn id="hse"             label="HSE"                icon={Shield} />
+          <NavBtn id="tcommissioning"  label="T&C"                icon={CheckCircle} />
+          <NavBtn id="handover"        label="Handover / DLP"     icon={CheckSquare} />
+          <NavBtn id="dailyupdates"    label="Daily Updates"      icon={Pencil} />
+          <NavBtn id="progressboard"   label="Progress Board"     icon={BarChart2} />
+          <NavBtn id="clientmaterials" label="Client Materials"   icon={Package} />
+          <NavBtn id="siteattendance"  label="Attendance"         icon={Users} />
+          <NavBtn id="evaluation"      label="Quarterly Review"   icon={BarChart2} />
+          <NavBtn id="mepreports"      label="MEP Reports"        icon={FileText} />
         </Section>
       )}
 
@@ -2650,6 +2661,22 @@ function Sidebar({ view, setView, setActiveDoc, startNewDoc, syncStatus, user, o
           <NavBtn id="qatesting"      label="QA Testing"      icon={CheckCircle} />
           <NavBtn id="capa"           label="CAPA"            icon={AlertTriangle} />
           <NavBtn id="internalaudit"  label="Internal Audit"  icon={ClipboardList} />
+          <NavBtn id="mis"            label="MIS / Mgmt Review" icon={BarChart2} />
+        </Section>
+      )}
+
+      {/* FM / AMC */}
+      {showFMAMC && (
+        <div style={{ fontSize:10, fontWeight:800, color:'#1AADCE', textTransform:'uppercase', letterSpacing:'0.1em', padding:'6px 14px 2px', marginTop:4, borderTop:'1px solid rgba(255,255,255,0.08)' }}>🏢 FM / AMC</div>
+      )}
+      {showFMAMC && (
+        <Section sectionKey="fmamc" label="FM Suite">
+          <NavBtn id="fmkpi"         label="KPI Dashboard"   icon={BarChart2} />
+          <NavBtn id="assetregister" label="Asset Register"   icon={Package} />
+          <NavBtn id="pmschedules"   label="PM Schedules"     icon={ClipboardList} />
+          <NavBtn id="fmworkorders"  label="Work Orders"      icon={Wrench} />
+          <NavBtn id="amccontracts"  label="AMC Contracts"    icon={FileSignature} />
+          <NavBtn id="fmspareparts"  label="Spare Parts"      icon={Package} />
         </Section>
       )}
 
@@ -10054,11 +10081,27 @@ function InprocessQAForm({ item, productionOrders, onSave, onClose }) {
 }
 
 // ─── QA Testing + PDV (Production Delivery Voucher) ───────────────────────────
-function QATestingView({ productionOrders, setProductionOrders, pdvs, setPdvs, setStockLedger, boms, items, userRole, businessInfo }) {
+function QATestingView({ productionOrders, setProductionOrders, pdvs, setPdvs, setStockLedger, boms, items, userRole, businessInfo, capaRecords, setCapaRecords }) {
   const [viewingPdv, setViewingPdv] = useState(null);
   const pending = productionOrders.filter(o => o.status === 'pending_qa');
+  const failed  = productionOrders.filter(o => o.status === 'failed');
   const approved = pdvs;
   const canApprove = userRole === 'admin' || userRole === 'manager' || userRole === 'inventory';
+
+  function raiseCapaFromNCR(order) {
+    const bom = boms.find(b => b.id === order.bomId);
+    const num = `CAR-${String((capaRecords||[]).length + 1).padStart(3,'0')}`;
+    const capa = {
+      id: crypto.randomUUID(), number: num,
+      date: new Date().toISOString().slice(0,10),
+      source: 'NCR', sourceRef: order.number,
+      description: `QA Rejection — ${bom?.name || order.number}${order.batchNumber ? ` (Batch: ${order.batchNumber})` : ''}. ${order.qaNote || ''}`.trim(),
+      rootCause:'', actionPlan:'', responsibility:'', targetDate:'', effectivenessCheck:'', closedDate:'', status:'open',
+    };
+    if (setCapaRecords) setCapaRecords(prev => [...prev, capa]);
+    setProductionOrders(prev => prev.map(o => o.id === order.id ? { ...o, capaRef: num } : o));
+    alert(`CAPA raised: ${num}`);
+  }
 
   function handleQADecision(orderId, decision, note = '') {
     const now = Date.now();
@@ -10124,6 +10167,35 @@ function QATestingView({ productionOrders, setProductionOrders, pdvs, setPdvs, s
           <QAOrderCard key={o.id} order={o} boms={boms} canApprove={canApprove} onDecision={(d, note) => handleQADecision(o.id, d, note)} />
         ))}
       </div>
+
+      {/* Failed / NCR orders */}
+      {failed.length > 0 && (<>
+        <div style={{ fontWeight: 700, fontSize: 13, color: '#B5453A', textTransform: 'uppercase', letterSpacing: '0.06em', margin: '32px 0 10px' }}>
+          QA Rejected / NCR ({failed.length})
+        </div>
+        <div style={styles.list}>
+          {failed.map(o => {
+            const bom = boms.find(b => b.id === o.bomId);
+            return (
+              <div key={o.id} style={{ ...styles.recordRow, background: '#FFF8F7', border: '1px solid #FBEAE7' }}>
+                <div style={{ flex: 1 }}>
+                  <div style={{ fontWeight: 600, fontSize: 14 }}>{o.number} — {bom?.name || 'Unknown BOM'}</div>
+                  <div style={{ fontSize: 12, color: '#888', marginTop: 2 }}>
+                    {o.quantity} units{o.batchNumber ? ` · Batch: ${o.batchNumber}` : ''} · Rejected: {o.qaNote || '—'}
+                  </div>
+                  {o.capaRef && <div style={{ fontSize: 11, color: '#1a6b30', marginTop: 3, fontWeight: 600 }}>✓ CAPA: {o.capaRef}</div>}
+                </div>
+                <span style={{ background: '#FBEAE7', color: '#B5453A', padding: '3px 10px', borderRadius: 20, fontSize: 12, fontWeight: 600 }}>Failed</span>
+                {canApprove && !o.capaRef && (
+                  <button onClick={() => raiseCapaFromNCR(o)} style={{ ...styles.ghostBtn, fontSize: 12, color: '#E07A3A', borderColor: '#E07A3A' }}>
+                    ⚡ Raise CAPA
+                  </button>
+                )}
+              </div>
+            );
+          })}
+        </div>
+      </>)}
 
       {/* PDVs issued */}
       <div style={{ fontWeight: 700, fontSize: 13, color: '#1E2A4A', textTransform: 'uppercase', letterSpacing: '0.06em', margin: '32px 0 10px' }}>
@@ -12264,6 +12336,1908 @@ function QuarterlyEvalForm({ evaluation, employees, computeStats, onSave, onClos
 
 
 
+// ─── FM: Asset Register ───────────────────────────────────────────────────────
+function AssetRegisterView({ assets, setAssets, userRole }) {
+  const [editing, setEditing] = useState(null);
+  const canEdit = ['admin','manager'].includes(userRole);
+  const ASSET_TYPES = ['HVAC','Electrical','Plumbing','Fire System','Elevator','Generator','UPS','Pump','Lighting','BMS','CCTV','Access Control','Other'];
+  const CONDITIONS  = ['good','fair','poor','critical','decommissioned'];
+  const COND_COLOR  = { good:'#1a6b30', fair:'#856404', poor:'#E07A3A', critical:'#842029', decommissioned:'#888' };
+  const COND_BG     = { good:'#d4edda', fair:'#fff3cd', poor:'#fde8d4', critical:'#f8d7da', decommissioned:'#f0ece5' };
+
+  function blank() {
+    return { id:'', assetId:`AST-${String(assets.length+1).padStart(4,'0')}`, name:'', type:'HVAC', location:'', floor:'', building:'', make:'', model:'', serialNo:'', purchaseDate:'', warrantyExpiry:'', installDate:'', condition:'good', notes:'' };
+  }
+  function save(a) {
+    const rec = { ...a, id:a.id||crypto.randomUUID(), updatedAt:Date.now() };
+    setAssets(prev=>prev.find(x=>x.id===rec.id)?prev.map(x=>x.id===rec.id?rec:x):[...prev,rec]);
+    setEditing(null);
+  }
+
+  if (editing) {
+    const a = editing;
+    const set = (k,v)=>setEditing(p=>({...p,[k]:v}));
+    return (
+      <div style={{ maxWidth:660, margin:'0 auto', padding:'24px 0' }}>
+        <div style={{ display:'flex', gap:12, alignItems:'center', marginBottom:20 }}>
+          <button onClick={()=>setEditing(null)} style={styles.ghostBtn}><X size={14}/> Back</button>
+          <h2 className="serif" style={styles.pageTitle}>{a.id?'Edit':'New'} Asset — {a.assetId}</h2>
+        </div>
+        <div style={{ background:'#fff', borderRadius:10, padding:24, border:'1px solid #EAE6DB', display:'flex', flexDirection:'column', gap:12 }}>
+          <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr 1fr', gap:12 }}>
+            <div style={styles.formGroup}><label style={styles.label}>Asset ID</label><input value={a.assetId} onChange={e=>set('assetId',e.target.value)} style={styles.input}/></div>
+            <div style={styles.formGroup}><label style={styles.label}>Type</label>
+              <select value={a.type} onChange={e=>set('type',e.target.value)} style={styles.input}>
+                {ASSET_TYPES.map(t=><option key={t} value={t}>{t}</option>)}
+              </select>
+            </div>
+            <div style={styles.formGroup}><label style={styles.label}>Condition</label>
+              <select value={a.condition} onChange={e=>set('condition',e.target.value)} style={styles.input}>
+                {CONDITIONS.map(c=><option key={c} value={c}>{c.charAt(0).toUpperCase()+c.slice(1)}</option>)}
+              </select>
+            </div>
+          </div>
+          <div style={styles.formGroup}><label style={styles.label}>Asset Name / Description</label><input value={a.name||''} onChange={e=>set('name',e.target.value)} style={styles.input} placeholder='e.g. AHU-01 Air Handling Unit'/></div>
+          <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr 1fr', gap:12 }}>
+            <div style={styles.formGroup}><label style={styles.label}>Building</label><input value={a.building||''} onChange={e=>set('building',e.target.value)} style={styles.input}/></div>
+            <div style={styles.formGroup}><label style={styles.label}>Floor</label><input value={a.floor||''} onChange={e=>set('floor',e.target.value)} style={styles.input}/></div>
+            <div style={styles.formGroup}><label style={styles.label}>Location / Room</label><input value={a.location||''} onChange={e=>set('location',e.target.value)} style={styles.input}/></div>
+          </div>
+          <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:12 }}>
+            <div style={styles.formGroup}><label style={styles.label}>Make / Brand</label><input value={a.make||''} onChange={e=>set('make',e.target.value)} style={styles.input}/></div>
+            <div style={styles.formGroup}><label style={styles.label}>Model</label><input value={a.model||''} onChange={e=>set('model',e.target.value)} style={styles.input}/></div>
+            <div style={styles.formGroup}><label style={styles.label}>Serial No.</label><input value={a.serialNo||''} onChange={e=>set('serialNo',e.target.value)} style={styles.input}/></div>
+            <div style={styles.formGroup}><label style={styles.label}>Install Date</label><input type='date' value={a.installDate||''} onChange={e=>set('installDate',e.target.value)} style={styles.input}/></div>
+            <div style={styles.formGroup}><label style={styles.label}>Purchase Date</label><input type='date' value={a.purchaseDate||''} onChange={e=>set('purchaseDate',e.target.value)} style={styles.input}/></div>
+            <div style={styles.formGroup}><label style={styles.label}>Warranty Expiry</label><input type='date' value={a.warrantyExpiry||''} onChange={e=>set('warrantyExpiry',e.target.value)} style={styles.input}/></div>
+          </div>
+          <div style={styles.formGroup}><label style={styles.label}>Notes</label><textarea value={a.notes||''} onChange={e=>set('notes',e.target.value)} style={{ ...styles.input, height:60 }}/></div>
+          <div style={{ display:'flex', justifyContent:'flex-end', gap:10 }}>
+            <button onClick={()=>setEditing(null)} style={styles.ghostBtn}>Cancel</button>
+            <button onClick={()=>save(a)} style={styles.primaryBtn}>Save Asset</button>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  const today = new Date().toISOString().slice(0,10);
+  const warrantyExpiring = assets.filter(a=>a.warrantyExpiry && a.warrantyExpiry > today && a.warrantyExpiry <= new Date(Date.now()+90*86400000).toISOString().slice(0,10));
+  const critical = assets.filter(a=>a.condition==='critical'||a.condition==='poor');
+  return (
+    <div style={{ padding:'24px 32px' }}>
+      <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', marginBottom:16 }}>
+        <h2 className="serif" style={styles.pageTitle}>Asset Register</h2>
+        {canEdit && <button onClick={()=>setEditing(blank())} style={styles.primaryBtn}><Plus size={15}/> Add Asset</button>}
+      </div>
+      <div style={{ display:'flex', gap:12, marginBottom:20, flexWrap:'wrap' }}>
+        {[['Total Assets',assets.length,''],['Good Condition',assets.filter(a=>a.condition==='good').length,'#1a6b30'],['Poor / Critical',critical.length,'#B5453A'],['Warranty Expiring',warrantyExpiring.length,'#856404']].map(([l,v,c])=>(
+          <div key={l} style={{ background:'#fff', border:'1px solid #EAE6DB', borderRadius:8, padding:'12px 18px' }}>
+            <div style={{ fontSize:11, color:'#888', fontWeight:600, textTransform:'uppercase' }}>{l}</div>
+            <div style={{ fontSize:22, fontWeight:700, color:c||'#1E2A4A' }}>{v}</div>
+          </div>
+        ))}
+      </div>
+      {assets.length===0 ? <div style={{ textAlign:'center', padding:60, color:'#888' }}>No assets registered yet.</div> : (
+        <div style={{ background:'#fff', borderRadius:10, border:'1px solid #EAE6DB', overflow:'hidden' }}>
+          <table style={{ width:'100%', borderCollapse:'collapse', fontSize:13 }}>
+            <thead><tr style={{ background:'#F8F7F4' }}>
+              {['Asset ID','Name','Type','Location','Make/Model','Warranty','Condition',''].map(h=><th key={h} style={{ padding:'10px 12px', textAlign:'left', fontSize:11, fontWeight:700, color:'#888', textTransform:'uppercase' }}>{h}</th>)}
+            </tr></thead>
+            <tbody>
+              {assets.map(a=>{
+                const warnExpiry = a.warrantyExpiry && a.warrantyExpiry < today;
+                return (
+                  <tr key={a.id} style={{ borderBottom:'1px solid #F0ECE5' }}>
+                    <td style={{ padding:'10px 12px', fontWeight:600, color:'#1E2A4A' }}>{a.assetId}</td>
+                    <td style={{ padding:'10px 12px', fontWeight:500 }}>{a.name||'—'}</td>
+                    <td style={{ padding:'10px 12px', color:'#555' }}>{a.type}</td>
+                    <td style={{ padding:'10px 12px', color:'#555', fontSize:12 }}>{[a.building,a.floor,a.location].filter(Boolean).join(' · ')||'—'}</td>
+                    <td style={{ padding:'10px 12px', color:'#555', fontSize:12 }}>{[a.make,a.model].filter(Boolean).join(' / ')||'—'}</td>
+                    <td style={{ padding:'10px 12px', color:warnExpiry?'#B5453A':'#555', fontSize:12 }}>{a.warrantyExpiry||'—'}{warnExpiry?' ⚠':''}</td>
+                    <td style={{ padding:'10px 12px' }}><span style={{ background:COND_BG[a.condition], color:COND_COLOR[a.condition], borderRadius:6, padding:'2px 8px', fontSize:11, fontWeight:700 }}>{a.condition.toUpperCase()}</span></td>
+                    <td style={{ padding:'10px 12px' }}>
+                      {canEdit && <div style={{ display:'flex', gap:6 }}>
+                        <button onClick={()=>setEditing(a)} style={styles.iconBtn}><Pencil size={14}/></button>
+                        <button onClick={()=>{if(window.confirm('Delete?'))setAssets(prev=>prev.filter(x=>x.id!==a.id))}} style={{ ...styles.iconBtn, color:'#B5453A' }}><Trash2 size={14}/></button>
+                      </div>}
+                    </td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ─── FM: Preventive Maintenance Schedules ─────────────────────────────────────
+function PMScheduleView({ pmSchedules, setPmSchedules, assets, fmWorkOrders, setFmWorkOrders, userRole }) {
+  const [editing, setEditing] = useState(null);
+  const canEdit = ['admin','manager'].includes(userRole);
+  const today = new Date().toISOString().slice(0,10);
+  const FREQ = ['Daily','Weekly','Monthly','Quarterly','Half-Yearly','Annual'];
+
+  function blank() {
+    return { id:'', assetId:'', title:'', frequency:'Monthly', lastDoneDate:'', nextDueDate:'', assignedTo:'', instructions:'', status:'active' };
+  }
+  function calcNext(lastDate, freq) {
+    if(!lastDate) return '';
+    const d = new Date(lastDate);
+    const map = { Daily:1, Weekly:7, Monthly:30, Quarterly:90, 'Half-Yearly':180, Annual:365 };
+    d.setDate(d.getDate() + (map[freq]||30));
+    return d.toISOString().slice(0,10);
+  }
+  function save(pm) {
+    const rec = { ...pm, id:pm.id||crypto.randomUUID(), updatedAt:Date.now() };
+    setPmSchedules(prev=>prev.find(x=>x.id===rec.id)?prev.map(x=>x.id===rec.id?rec:x):[...prev,rec]);
+    setEditing(null);
+  }
+  function raisePMWorkOrder(pm) {
+    const asset = assets.find(a=>a.id===pm.assetId);
+    const wo = { id:crypto.randomUUID(), woNumber:`WO-${String(fmWorkOrders.length+1).padStart(4,'0')}`, type:'preventive', assetId:pm.assetId, assetName:asset?.name||'', title:pm.title, priority:'medium', raisedDate:today, dueDate:pm.nextDueDate||'', assignedTo:pm.assignedTo||'', instructions:pm.instructions||'', status:'open', pmRef:pm.id, cost:0 };
+    setFmWorkOrders(prev=>[...prev, wo]);
+    setPmSchedules(prev=>prev.map(s=>s.id===pm.id?{ ...s, lastDoneDate:today, nextDueDate:calcNext(today,s.frequency) }:s));
+    alert(`Work Order ${wo.woNumber} created.`);
+  }
+
+  if (editing) {
+    const pm = editing;
+    const set = (k,v)=>setEditing(p=>({...p,[k]:v}));
+    return (
+      <div style={{ maxWidth:580, margin:'0 auto', padding:'24px 0' }}>
+        <div style={{ display:'flex', gap:12, alignItems:'center', marginBottom:20 }}>
+          <button onClick={()=>setEditing(null)} style={styles.ghostBtn}><X size={14}/> Back</button>
+          <h2 className="serif" style={styles.pageTitle}>{pm.id?'Edit':'New'} PM Schedule</h2>
+        </div>
+        <div style={{ background:'#fff', borderRadius:10, padding:24, border:'1px solid #EAE6DB', display:'flex', flexDirection:'column', gap:12 }}>
+          <div style={styles.formGroup}><label style={styles.label}>Asset</label>
+            <select value={pm.assetId||''} onChange={e=>set('assetId',e.target.value)} style={styles.input}>
+              <option value=''>Select asset</option>
+              {assets.map(a=><option key={a.id} value={a.id}>{a.assetId} — {a.name}</option>)}
+            </select>
+          </div>
+          <div style={styles.formGroup}><label style={styles.label}>PM Task Title</label><input value={pm.title||''} onChange={e=>set('title',e.target.value)} style={styles.input} placeholder='e.g. AHU Filter Cleaning'/></div>
+          <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:12 }}>
+            <div style={styles.formGroup}><label style={styles.label}>Frequency</label>
+              <select value={pm.frequency} onChange={e=>set('frequency',e.target.value)} style={styles.input}>
+                {FREQ.map(f=><option key={f} value={f}>{f}</option>)}
+              </select>
+            </div>
+            <div style={styles.formGroup}><label style={styles.label}>Assigned To</label><input value={pm.assignedTo||''} onChange={e=>set('assignedTo',e.target.value)} style={styles.input} placeholder='Technician name'/></div>
+            <div style={styles.formGroup}><label style={styles.label}>Last Done Date</label><input type='date' value={pm.lastDoneDate||''} onChange={e=>{ set('lastDoneDate',e.target.value); set('nextDueDate',calcNext(e.target.value,pm.frequency)); }} style={styles.input}/></div>
+            <div style={styles.formGroup}><label style={styles.label}>Next Due Date</label><input type='date' value={pm.nextDueDate||''} onChange={e=>set('nextDueDate',e.target.value)} style={styles.input}/></div>
+          </div>
+          <div style={styles.formGroup}><label style={styles.label}>Instructions / Checklist</label><textarea value={pm.instructions||''} onChange={e=>set('instructions',e.target.value)} style={{ ...styles.input, height:80 }} placeholder='Steps to follow during PM...'/></div>
+          <div style={styles.formGroup}><label style={styles.label}>Status</label>
+            <select value={pm.status||'active'} onChange={e=>set('status',e.target.value)} style={styles.input}>
+              {['active','paused','decommissioned'].map(s=><option key={s} value={s}>{s.charAt(0).toUpperCase()+s.slice(1)}</option>)}
+            </select>
+          </div>
+          <div style={{ display:'flex', justifyContent:'flex-end', gap:10 }}>
+            <button onClick={()=>setEditing(null)} style={styles.ghostBtn}>Cancel</button>
+            <button onClick={()=>save(pm)} style={styles.primaryBtn}>Save Schedule</button>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  const overdue = pmSchedules.filter(pm=>pm.status==='active' && pm.nextDueDate && pm.nextDueDate < today);
+  const dueThisWeek = pmSchedules.filter(pm=>pm.status==='active' && pm.nextDueDate && pm.nextDueDate >= today && pm.nextDueDate <= new Date(Date.now()+7*86400000).toISOString().slice(0,10));
+  return (
+    <div style={{ padding:'24px 32px' }}>
+      <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', marginBottom:16 }}>
+        <h2 className="serif" style={styles.pageTitle}>Preventive Maintenance Schedules</h2>
+        {canEdit && <button onClick={()=>setEditing(blank())} style={styles.primaryBtn}><Plus size={15}/> Add PM Schedule</button>}
+      </div>
+      <div style={{ display:'flex', gap:12, marginBottom:20 }}>
+        {[['Total Schedules',pmSchedules.length,''],['Overdue',overdue.length,'#B5453A'],['Due This Week',dueThisWeek.length,'#856404'],['Active',pmSchedules.filter(p=>p.status==='active').length,'#1a6b30']].map(([l,v,c])=>(
+          <div key={l} style={{ background:c&&v>0?'#FFF8F7':'#fff', border:`1px solid ${c&&v>0?'#FBEAE7':'#EAE6DB'}`, borderRadius:8, padding:'12px 18px' }}>
+            <div style={{ fontSize:11, color:'#888', fontWeight:600, textTransform:'uppercase' }}>{l}</div>
+            <div style={{ fontSize:22, fontWeight:700, color:c||'#1E2A4A' }}>{v}</div>
+          </div>
+        ))}
+      </div>
+      {pmSchedules.length===0 ? <div style={{ textAlign:'center', padding:60, color:'#888' }}>No PM schedules set up yet.</div> : (
+        <div style={{ background:'#fff', borderRadius:10, border:'1px solid #EAE6DB', overflow:'hidden' }}>
+          <table style={{ width:'100%', borderCollapse:'collapse', fontSize:13 }}>
+            <thead><tr style={{ background:'#F8F7F4' }}>
+              {['Asset','Task','Frequency','Last Done','Next Due','Assigned To',''].map(h=><th key={h} style={{ padding:'10px 12px', textAlign:'left', fontSize:11, fontWeight:700, color:'#888', textTransform:'uppercase' }}>{h}</th>)}
+            </tr></thead>
+            <tbody>
+              {[...pmSchedules].sort((a,b)=>(a.nextDueDate||'')>(b.nextDueDate||'')?1:-1).map(pm=>{
+                const asset = assets.find(a=>a.id===pm.assetId);
+                const isOverdue = pm.status==='active' && pm.nextDueDate && pm.nextDueDate < today;
+                return (
+                  <tr key={pm.id} style={{ borderBottom:'1px solid #F0ECE5', background:isOverdue?'#FFF8F7':'#fff' }}>
+                    <td style={{ padding:'10px 12px', fontWeight:600, color:'#1E2A4A' }}>{asset?.assetId||'—'} <span style={{ fontWeight:400, color:'#555' }}>{asset?.name||''}</span></td>
+                    <td style={{ padding:'10px 12px' }}>{pm.title||'—'}</td>
+                    <td style={{ padding:'10px 12px', color:'#555' }}>{pm.frequency}</td>
+                    <td style={{ padding:'10px 12px', color:'#555' }}>{pm.lastDoneDate||'Never'}</td>
+                    <td style={{ padding:'10px 12px', color:isOverdue?'#B5453A':'#555', fontWeight:isOverdue?700:400 }}>{pm.nextDueDate||'—'}{isOverdue?' ⚠':''}</td>
+                    <td style={{ padding:'10px 12px', color:'#555' }}>{pm.assignedTo||'—'}</td>
+                    <td style={{ padding:'10px 12px' }}>
+                      <div style={{ display:'flex', gap:6 }}>
+                        {canEdit && <button onClick={()=>raisePMWorkOrder(pm)} style={{ ...styles.ghostBtn, fontSize:11, color:'#1E2A4A' }}>▶ Raise WO</button>}
+                        {canEdit && <button onClick={()=>setEditing(pm)} style={styles.iconBtn}><Pencil size={14}/></button>}
+                        {canEdit && <button onClick={()=>{if(window.confirm('Delete?'))setPmSchedules(prev=>prev.filter(x=>x.id!==pm.id))}} style={{ ...styles.iconBtn, color:'#B5453A' }}><Trash2 size={14}/></button>}
+                      </div>
+                    </td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ─── FM: Work Orders ──────────────────────────────────────────────────────────
+function FMWorkOrderView({ fmWorkOrders, setFmWorkOrders, assets, fmSpareParts, setFmSpareParts, userRole }) {
+  const [editing, setEditing] = useState(null);
+  const [filterStatus, setFilterStatus] = useState('all');
+  const canEdit = ['admin','manager'].includes(userRole);
+  const today = new Date().toISOString().slice(0,10);
+
+  const TYPES     = ['corrective','preventive','emergency','inspection'];
+  const PRIORITIES= ['low','medium','high','emergency'];
+  const STATUSES  = ['open','in_progress','on_hold','completed','cancelled'];
+  const PRIO_COLOR= { low:'#555', medium:'#0a58ca', high:'#856404', emergency:'#842029' };
+  const PRIO_BG   = { low:'#f0ece5', medium:'#cfe2ff', high:'#fff3cd', emergency:'#f8d7da' };
+  const ST_COLOR  = { open:'#0a58ca', in_progress:'#856404', on_hold:'#888', completed:'#1a6b30', cancelled:'#555' };
+  const ST_BG     = { open:'#cfe2ff', in_progress:'#fff3cd', on_hold:'#f0ece5', completed:'#d4edda', cancelled:'#f0ece5' };
+
+  function blank() {
+    return { id:'', woNumber:`WO-${String(fmWorkOrders.length+1).padStart(4,'0')}`, type:'corrective', assetId:'', title:'', description:'', priority:'medium', raisedDate:today, dueDate:'', assignedTo:'', status:'open', completedDate:'', cost:0, sparesUsed:[], notes:'' };
+  }
+  function save(wo) {
+    const rec = { ...wo, id:wo.id||crypto.randomUUID(), updatedAt:Date.now() };
+    setFmWorkOrders(prev=>prev.find(x=>x.id===rec.id)?prev.map(x=>x.id===rec.id?rec:x):[...prev,rec]);
+    setEditing(null);
+  }
+
+  if (editing) {
+    const wo = editing;
+    const set = (k,v)=>setEditing(p=>({...p,[k]:v}));
+    return (
+      <div style={{ maxWidth:660, margin:'0 auto', padding:'24px 0' }}>
+        <div style={{ display:'flex', gap:12, alignItems:'center', marginBottom:20 }}>
+          <button onClick={()=>setEditing(null)} style={styles.ghostBtn}><X size={14}/> Back</button>
+          <h2 className="serif" style={styles.pageTitle}>{wo.id?'Edit':'New'} Work Order — {wo.woNumber}</h2>
+        </div>
+        <div style={{ background:'#fff', borderRadius:10, padding:24, border:'1px solid #EAE6DB', display:'flex', flexDirection:'column', gap:12 }}>
+          <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr 1fr', gap:12 }}>
+            <div style={styles.formGroup}><label style={styles.label}>WO No.</label><input value={wo.woNumber} onChange={e=>set('woNumber',e.target.value)} style={styles.input}/></div>
+            <div style={styles.formGroup}><label style={styles.label}>Type</label>
+              <select value={wo.type} onChange={e=>set('type',e.target.value)} style={styles.input}>
+                {TYPES.map(t=><option key={t} value={t}>{t.charAt(0).toUpperCase()+t.slice(1)}</option>)}
+              </select>
+            </div>
+            <div style={styles.formGroup}><label style={styles.label}>Priority</label>
+              <select value={wo.priority} onChange={e=>set('priority',e.target.value)} style={{ ...styles.input, background:PRIO_BG[wo.priority], color:PRIO_COLOR[wo.priority], fontWeight:700 }}>
+                {PRIORITIES.map(p=><option key={p} value={p}>{p.toUpperCase()}</option>)}
+              </select>
+            </div>
+          </div>
+          <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:12 }}>
+            <div style={styles.formGroup}><label style={styles.label}>Asset</label>
+              <select value={wo.assetId||''} onChange={e=>{ const a=assets.find(x=>x.id===e.target.value); set('assetId',e.target.value); if(a)set('assetName',a.name); }} style={styles.input}>
+                <option value=''>Select asset</option>
+                {assets.map(a=><option key={a.id} value={a.id}>{a.assetId} — {a.name}</option>)}
+              </select>
+            </div>
+            <div style={styles.formGroup}><label style={styles.label}>Status</label>
+              <select value={wo.status} onChange={e=>set('status',e.target.value)} style={styles.input}>
+                {STATUSES.map(s=><option key={s} value={s}>{s.replace('_',' ').replace(/\b\w/g,c=>c.toUpperCase())}</option>)}
+              </select>
+            </div>
+            <div style={styles.formGroup}><label style={styles.label}>Raised Date</label><input type='date' value={wo.raisedDate||''} onChange={e=>set('raisedDate',e.target.value)} style={styles.input}/></div>
+            <div style={styles.formGroup}><label style={styles.label}>Due Date</label><input type='date' value={wo.dueDate||''} onChange={e=>set('dueDate',e.target.value)} style={styles.input}/></div>
+            <div style={styles.formGroup}><label style={styles.label}>Assigned To</label><input value={wo.assignedTo||''} onChange={e=>set('assignedTo',e.target.value)} style={styles.input} placeholder='Technician'/></div>
+            <div style={styles.formGroup}><label style={styles.label}>Completion Date</label><input type='date' value={wo.completedDate||''} onChange={e=>set('completedDate',e.target.value)} style={styles.input}/></div>
+          </div>
+          <div style={styles.formGroup}><label style={styles.label}>Title</label><input value={wo.title||''} onChange={e=>set('title',e.target.value)} style={styles.input}/></div>
+          <div style={styles.formGroup}><label style={styles.label}>Description / Fault Report</label><textarea value={wo.description||''} onChange={e=>set('description',e.target.value)} style={{ ...styles.input, height:72 }}/></div>
+          <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:12 }}>
+            <div style={styles.formGroup}><label style={styles.label}>Total Cost</label><input type='number' value={wo.cost||0} onChange={e=>set('cost',e.target.value)} style={styles.input}/></div>
+          </div>
+          <div style={styles.formGroup}><label style={styles.label}>Notes / Resolution</label><textarea value={wo.notes||''} onChange={e=>set('notes',e.target.value)} style={{ ...styles.input, height:60 }}/></div>
+          <div style={{ display:'flex', justifyContent:'flex-end', gap:10 }}>
+            <button onClick={()=>setEditing(null)} style={styles.ghostBtn}>Cancel</button>
+            <button onClick={()=>save(wo)} style={styles.primaryBtn}>Save WO</button>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  const list = fmWorkOrders.filter(wo=>filterStatus==='all'||wo.status===filterStatus).sort((a,b)=>{
+    const pOrder = { emergency:0, high:1, medium:2, low:3 };
+    return (pOrder[a.priority]||2) - (pOrder[b.priority]||2);
+  });
+  const open = fmWorkOrders.filter(wo=>wo.status==='open'||wo.status==='in_progress');
+  const overdue = fmWorkOrders.filter(wo=>wo.dueDate && wo.dueDate < today && wo.status!=='completed' && wo.status!=='cancelled');
+  return (
+    <div style={{ padding:'24px 32px' }}>
+      <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', marginBottom:16 }}>
+        <h2 className="serif" style={styles.pageTitle}>FM Work Orders</h2>
+        {canEdit && <button onClick={()=>setEditing(blank())} style={styles.primaryBtn}><Plus size={15}/> New Work Order</button>}
+      </div>
+      <div style={{ display:'flex', gap:12, marginBottom:20, flexWrap:'wrap' }}>
+        {[['Open',open.length,'#0a58ca'],['Overdue',overdue.length,'#B5453A'],['Emergency',fmWorkOrders.filter(w=>w.priority==='emergency'&&w.status!=='completed').length,'#842029'],['Completed',fmWorkOrders.filter(w=>w.status==='completed').length,'#1a6b30']].map(([l,v,c])=>(
+          <div key={l} style={{ background:v>0&&l!=='Completed'?'#FFF8F7':'#fff', border:`1px solid ${v>0&&l!=='Completed'?'#FBEAE7':'#EAE6DB'}`, borderRadius:8, padding:'12px 18px' }}>
+            <div style={{ fontSize:11, color:'#888', fontWeight:600, textTransform:'uppercase' }}>{l}</div>
+            <div style={{ fontSize:22, fontWeight:700, color:c }}>{v}</div>
+          </div>
+        ))}
+      </div>
+      <div style={{ display:'flex', gap:8, marginBottom:16 }}>
+        {['all',...STATUSES].map(s=><button key={s} onClick={()=>setFilterStatus(s)} style={{ ...styles.ghostBtn, background:filterStatus===s?'#1E2A4A':'transparent', color:filterStatus===s?'#fff':'#555', fontSize:12 }}>{s==='all'?'All':s.replace('_',' ').replace(/\b\w/g,c=>c.toUpperCase())}</button>)}
+      </div>
+      {list.length===0 ? <div style={{ textAlign:'center', padding:60, color:'#888' }}>No work orders.</div> : (
+        <div style={{ background:'#fff', borderRadius:10, border:'1px solid #EAE6DB', overflow:'hidden' }}>
+          <table style={{ width:'100%', borderCollapse:'collapse', fontSize:13 }}>
+            <thead><tr style={{ background:'#F8F7F4' }}>
+              {['WO No.','Asset','Title','Priority','Type','Due','Assigned','Status',''].map(h=><th key={h} style={{ padding:'10px 12px', textAlign:'left', fontSize:11, fontWeight:700, color:'#888', textTransform:'uppercase' }}>{h}</th>)}
+            </tr></thead>
+            <tbody>
+              {list.map(wo=>{
+                const asset = assets.find(a=>a.id===wo.assetId);
+                const od = wo.dueDate && wo.dueDate < today && wo.status!=='completed';
+                return (
+                  <tr key={wo.id} style={{ borderBottom:'1px solid #F0ECE5', background:od?'#FFF8F7':wo.priority==='emergency'&&wo.status!=='completed'?'#FFF5F5':'#fff' }}>
+                    <td style={{ padding:'10px 12px', fontWeight:600 }}>{wo.woNumber}</td>
+                    <td style={{ padding:'10px 12px', color:'#555', fontSize:12 }}>{asset?.assetId||'—'}</td>
+                    <td style={{ padding:'10px 12px', maxWidth:160, overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap' }}>{wo.title||'—'}</td>
+                    <td style={{ padding:'10px 12px' }}><span style={{ background:PRIO_BG[wo.priority], color:PRIO_COLOR[wo.priority], borderRadius:6, padding:'2px 8px', fontSize:11, fontWeight:700 }}>{wo.priority.toUpperCase()}</span></td>
+                    <td style={{ padding:'10px 12px', color:'#555', fontSize:12 }}>{wo.type}</td>
+                    <td style={{ padding:'10px 12px', color:od?'#B5453A':'#555', fontWeight:od?700:400 }}>{wo.dueDate||'—'}</td>
+                    <td style={{ padding:'10px 12px', color:'#555' }}>{wo.assignedTo||'—'}</td>
+                    <td style={{ padding:'10px 12px' }}><span style={{ background:ST_BG[wo.status], color:ST_COLOR[wo.status], borderRadius:6, padding:'2px 8px', fontSize:11, fontWeight:700 }}>{wo.status.replace('_',' ').replace(/\b\w/g,c=>c.toUpperCase())}</span></td>
+                    <td style={{ padding:'10px 12px' }}>
+                      {canEdit && <div style={{ display:'flex', gap:6 }}>
+                        <button onClick={()=>setEditing(wo)} style={styles.iconBtn}><Pencil size={14}/></button>
+                        <button onClick={()=>{if(window.confirm('Delete?'))setFmWorkOrders(prev=>prev.filter(x=>x.id!==wo.id))}} style={{ ...styles.iconBtn, color:'#B5453A' }}><Trash2 size={14}/></button>
+                      </div>}
+                    </td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ─── FM: AMC Contracts / SLA ──────────────────────────────────────────────────
+function AMCContractView({ amcContracts, setAmcContracts, customers, assets, userRole }) {
+  const [editing, setEditing] = useState(null);
+  const canEdit = ['admin','manager','accounts'].includes(userRole);
+  const today = new Date().toISOString().slice(0,10);
+  const ST_COLOR = { active:'#1a6b30', expired:'#842029', draft:'#555', terminated:'#888' };
+  const ST_BG    = { active:'#d4edda', expired:'#f8d7da', draft:'#f0ece5', terminated:'#f0ece5' };
+
+  function blank() {
+    const n = `AMC-${String(amcContracts.length+1).padStart(3,'0')}`;
+    return { id:'', contractNo:n, customerId:'', title:'', startDate:'', endDate:'', value:0, slaResponse:'4', slaPriority:'P2', coveredAssets:[], scope:'', billingCycle:'Annual', status:'active', notes:'' };
+  }
+  function save(c) {
+    const rec = { ...c, id:c.id||crypto.randomUUID(), updatedAt:Date.now() };
+    setAmcContracts(prev=>prev.find(x=>x.id===rec.id)?prev.map(x=>x.id===rec.id?rec:x):[...prev,rec]);
+    setEditing(null);
+  }
+  function daysLeft(endDate) {
+    if(!endDate) return null;
+    return Math.ceil((new Date(endDate)-new Date(today))/(1000*86400));
+  }
+
+  if (editing) {
+    const c = editing;
+    const set = (k,v)=>setEditing(p=>({...p,[k]:v}));
+    return (
+      <div style={{ maxWidth:680, margin:'0 auto', padding:'24px 0' }}>
+        <div style={{ display:'flex', gap:12, alignItems:'center', marginBottom:20 }}>
+          <button onClick={()=>setEditing(null)} style={styles.ghostBtn}><X size={14}/> Back</button>
+          <h2 className="serif" style={styles.pageTitle}>{c.id?'Edit':'New'} AMC Contract — {c.contractNo}</h2>
+        </div>
+        <div style={{ background:'#fff', borderRadius:10, padding:24, border:'1px solid #EAE6DB', display:'flex', flexDirection:'column', gap:12 }}>
+          <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr 1fr', gap:12 }}>
+            <div style={styles.formGroup}><label style={styles.label}>Contract No.</label><input value={c.contractNo} onChange={e=>set('contractNo',e.target.value)} style={styles.input}/></div>
+            <div style={styles.formGroup}><label style={styles.label}>Status</label>
+              <select value={c.status} onChange={e=>set('status',e.target.value)} style={styles.input}>
+                {['draft','active','expired','terminated'].map(s=><option key={s} value={s}>{s.charAt(0).toUpperCase()+s.slice(1)}</option>)}
+              </select>
+            </div>
+            <div style={styles.formGroup}><label style={styles.label}>Billing Cycle</label>
+              <select value={c.billingCycle||'Annual'} onChange={e=>set('billingCycle',e.target.value)} style={styles.input}>
+                {['Monthly','Quarterly','Half-Yearly','Annual'].map(b=><option key={b} value={b}>{b}</option>)}
+              </select>
+            </div>
+          </div>
+          <div style={styles.formGroup}><label style={styles.label}>Title / Scope Summary</label><input value={c.title||''} onChange={e=>set('title',e.target.value)} style={styles.input} placeholder='e.g. Full HVAC AMC — Building A'/></div>
+          <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:12 }}>
+            <div style={styles.formGroup}><label style={styles.label}>Client</label>
+              <select value={c.customerId||''} onChange={e=>set('customerId',e.target.value)} style={styles.input}>
+                <option value=''>Select client</option>
+                {customers.map(cu=><option key={cu.id} value={cu.id}>{cu.name}</option>)}
+              </select>
+            </div>
+            <div style={styles.formGroup}><label style={styles.label}>Annual / Contract Value</label><input type='number' value={c.value||0} onChange={e=>set('value',e.target.value)} style={styles.input}/></div>
+            <div style={styles.formGroup}><label style={styles.label}>Start Date</label><input type='date' value={c.startDate||''} onChange={e=>set('startDate',e.target.value)} style={styles.input}/></div>
+            <div style={styles.formGroup}><label style={styles.label}>End Date</label><input type='date' value={c.endDate||''} onChange={e=>set('endDate',e.target.value)} style={styles.input}/></div>
+          </div>
+          {/* SLA */}
+          <div style={{ background:'#F0F8FF', borderRadius:8, padding:14, border:'1px solid #b8d9f8' }}>
+            <div style={{ fontSize:12, fontWeight:700, color:'#0a58ca', marginBottom:10 }}>SLA Terms</div>
+            <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:12 }}>
+              <div style={styles.formGroup}><label style={styles.label}>Response Time (hours)</label><input type='number' value={c.slaResponse||4} onChange={e=>set('slaResponse',e.target.value)} style={styles.input}/></div>
+              <div style={styles.formGroup}><label style={styles.label}>Resolution Target</label>
+                <select value={c.slaPriority||'P2'} onChange={e=>set('slaPriority',e.target.value)} style={styles.input}>
+                  {['P1 — 4hr Fix','P2 — 8hr Fix','P3 — 24hr Fix','P4 — 48hr Fix'].map(p=><option key={p} value={p}>{p}</option>)}
+                </select>
+              </div>
+            </div>
+          </div>
+          {/* Covered Assets */}
+          <div style={styles.formGroup}>
+            <label style={styles.label}>Assets Covered</label>
+            <div style={{ display:'flex', flexWrap:'wrap', gap:6, marginTop:4 }}>
+              {assets.map(a=>(
+                <button key={a.id} onClick={()=>set('coveredAssets', c.coveredAssets.includes(a.id)?c.coveredAssets.filter(x=>x!==a.id):[...c.coveredAssets,a.id])}
+                  style={{ fontSize:11, padding:'3px 8px', borderRadius:6, border:'1px solid', cursor:'pointer', background:c.coveredAssets.includes(a.id)?'#1E2A4A':'transparent', color:c.coveredAssets.includes(a.id)?'#fff':'#555', borderColor:c.coveredAssets.includes(a.id)?'#1E2A4A':'#ccc' }}>
+                  {a.assetId}
+                </button>
+              ))}
+              {assets.length===0 && <span style={{ fontSize:12, color:'#888' }}>Add assets first in the Asset Register.</span>}
+            </div>
+          </div>
+          <div style={styles.formGroup}><label style={styles.label}>Scope / Inclusions</label><textarea value={c.scope||''} onChange={e=>set('scope',e.target.value)} style={{ ...styles.input, height:72 }}/></div>
+          <div style={styles.formGroup}><label style={styles.label}>Notes</label><textarea value={c.notes||''} onChange={e=>set('notes',e.target.value)} style={{ ...styles.input, height:56 }}/></div>
+          <div style={{ display:'flex', justifyContent:'flex-end', gap:10 }}>
+            <button onClick={()=>setEditing(null)} style={styles.ghostBtn}>Cancel</button>
+            <button onClick={()=>save(c)} style={styles.primaryBtn}>Save Contract</button>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  const list = [...amcContracts].sort((a,b)=>a.endDate>b.endDate?1:-1);
+  const active = list.filter(c=>c.status==='active');
+  const expiringSoon = active.filter(c=>{ const d=daysLeft(c.endDate); return d!==null && d<=30 && d>=0; });
+  return (
+    <div style={{ padding:'24px 32px' }}>
+      <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', marginBottom:16 }}>
+        <h2 className="serif" style={styles.pageTitle}>AMC Contracts & SLA</h2>
+        {canEdit && <button onClick={()=>setEditing(blank())} style={styles.primaryBtn}><Plus size={15}/> New Contract</button>}
+      </div>
+      <div style={{ display:'flex', gap:12, marginBottom:20 }}>
+        {[['Active',active.length,'#1a6b30'],['Expiring ≤30d',expiringSoon.length,'#856404'],['Total Value',active.reduce((s,c)=>s+(parseFloat(c.value)||0),0).toLocaleString(undefined,{maximumFractionDigits:0}),'#C9A24B'],['Expired',list.filter(c=>c.status==='expired').length,'#842029']].map(([l,v,c])=>(
+          <div key={l} style={{ background:'#fff', border:'1px solid #EAE6DB', borderRadius:8, padding:'12px 18px' }}>
+            <div style={{ fontSize:11, color:'#888', fontWeight:600, textTransform:'uppercase' }}>{l}</div>
+            <div style={{ fontSize:22, fontWeight:700, color:c }}>{v}</div>
+          </div>
+        ))}
+      </div>
+      {list.length===0 ? <div style={{ textAlign:'center', padding:60, color:'#888' }}>No AMC contracts yet.</div> : (
+        <div style={{ background:'#fff', borderRadius:10, border:'1px solid #EAE6DB', overflow:'hidden' }}>
+          <table style={{ width:'100%', borderCollapse:'collapse', fontSize:13 }}>
+            <thead><tr style={{ background:'#F8F7F4' }}>
+              {['Contract No.','Title','Client','Value','Start','End','Days Left','Status',''].map(h=><th key={h} style={{ padding:'10px 12px', textAlign:'left', fontSize:11, fontWeight:700, color:'#888', textTransform:'uppercase' }}>{h}</th>)}
+            </tr></thead>
+            <tbody>
+              {list.map(c=>{
+                const client = customers.find(cu=>cu.id===c.customerId);
+                const dl = daysLeft(c.endDate);
+                const warn = dl !== null && dl <= 30 && dl >= 0;
+                return (
+                  <tr key={c.id} style={{ borderBottom:'1px solid #F0ECE5', background:warn?'#FFFBF0':'#fff' }}>
+                    <td style={{ padding:'10px 12px', fontWeight:600 }}>{c.contractNo}</td>
+                    <td style={{ padding:'10px 12px', color:'#333' }}>{c.title||'—'}</td>
+                    <td style={{ padding:'10px 12px', color:'#555' }}>{client?.name||'—'}</td>
+                    <td style={{ padding:'10px 12px', fontWeight:600 }}>{parseFloat(c.value||0).toLocaleString(undefined,{maximumFractionDigits:0})}</td>
+                    <td style={{ padding:'10px 12px', color:'#555' }}>{c.startDate||'—'}</td>
+                    <td style={{ padding:'10px 12px', color:dl!==null&&dl<0?'#B5453A':'#555' }}>{c.endDate||'—'}</td>
+                    <td style={{ padding:'10px 12px', fontWeight:warn?700:400, color:warn?'#856404':dl!==null&&dl<0?'#B5453A':'#555' }}>{dl!==null?(dl<0?'Expired':`${dl}d`):('—')}</td>
+                    <td style={{ padding:'10px 12px' }}><span style={{ background:ST_BG[c.status], color:ST_COLOR[c.status], borderRadius:6, padding:'2px 8px', fontSize:11, fontWeight:700 }}>{c.status.toUpperCase()}</span></td>
+                    <td style={{ padding:'10px 12px' }}>
+                      {canEdit && <div style={{ display:'flex', gap:6 }}>
+                        <button onClick={()=>setEditing(c)} style={styles.iconBtn}><Pencil size={14}/></button>
+                        <button onClick={()=>{if(window.confirm('Delete?'))setAmcContracts(prev=>prev.filter(x=>x.id!==c.id))}} style={{ ...styles.iconBtn, color:'#B5453A' }}><Trash2 size={14}/></button>
+                      </div>}
+                    </td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ─── FM: Spare Parts ──────────────────────────────────────────────────────────
+function FMSparePartsView({ fmSpareParts, setFmSpareParts, assets, userRole }) {
+  const [editing, setEditing] = useState(null);
+  const canEdit = ['admin','manager','inventory'].includes(userRole);
+
+  function blank() {
+    return { id:'', partNo:`SPN-${String(fmSpareParts.length+1).padStart(4,'0')}`, name:'', description:'', compatibleAssets:[], supplier:'', unitCost:0, currentStock:0, minStock:0, location:'' };
+  }
+  function save(p) {
+    const rec = { ...p, id:p.id||crypto.randomUUID(), updatedAt:Date.now() };
+    setFmSpareParts(prev=>prev.find(x=>x.id===rec.id)?prev.map(x=>x.id===rec.id?rec:x):[...prev,rec]);
+    setEditing(null);
+  }
+
+  if (editing) {
+    const p = editing;
+    const set = (k,v)=>setEditing(x=>({...x,[k]:v}));
+    return (
+      <div style={{ maxWidth:580, margin:'0 auto', padding:'24px 0' }}>
+        <div style={{ display:'flex', gap:12, alignItems:'center', marginBottom:20 }}>
+          <button onClick={()=>setEditing(null)} style={styles.ghostBtn}><X size={14}/> Back</button>
+          <h2 className="serif" style={styles.pageTitle}>{p.id?'Edit':'New'} Spare Part — {p.partNo}</h2>
+        </div>
+        <div style={{ background:'#fff', borderRadius:10, padding:24, border:'1px solid #EAE6DB', display:'flex', flexDirection:'column', gap:12 }}>
+          <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:12 }}>
+            <div style={styles.formGroup}><label style={styles.label}>Part No.</label><input value={p.partNo} onChange={e=>set('partNo',e.target.value)} style={styles.input}/></div>
+            <div style={styles.formGroup}><label style={styles.label}>Part Name</label><input value={p.name||''} onChange={e=>set('name',e.target.value)} style={styles.input}/></div>
+          </div>
+          <div style={styles.formGroup}><label style={styles.label}>Description</label><input value={p.description||''} onChange={e=>set('description',e.target.value)} style={styles.input}/></div>
+          <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr 1fr', gap:12 }}>
+            <div style={styles.formGroup}><label style={styles.label}>Current Stock</label><input type='number' value={p.currentStock||0} onChange={e=>set('currentStock',e.target.value)} style={styles.input}/></div>
+            <div style={styles.formGroup}><label style={styles.label}>Min Stock</label><input type='number' value={p.minStock||0} onChange={e=>set('minStock',e.target.value)} style={styles.input}/></div>
+            <div style={styles.formGroup}><label style={styles.label}>Unit Cost</label><input type='number' value={p.unitCost||0} onChange={e=>set('unitCost',e.target.value)} style={styles.input}/></div>
+          </div>
+          <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:12 }}>
+            <div style={styles.formGroup}><label style={styles.label}>Supplier</label><input value={p.supplier||''} onChange={e=>set('supplier',e.target.value)} style={styles.input}/></div>
+            <div style={styles.formGroup}><label style={styles.label}>Storage Location</label><input value={p.location||''} onChange={e=>set('location',e.target.value)} style={styles.input}/></div>
+          </div>
+          <div style={styles.formGroup}>
+            <label style={styles.label}>Compatible Assets</label>
+            <div style={{ display:'flex', flexWrap:'wrap', gap:6, marginTop:4 }}>
+              {assets.map(a=>(
+                <button key={a.id} onClick={()=>set('compatibleAssets',(p.compatibleAssets||[]).includes(a.id)?(p.compatibleAssets||[]).filter(x=>x!==a.id):[...(p.compatibleAssets||[]),a.id])}
+                  style={{ fontSize:11, padding:'3px 8px', borderRadius:6, border:'1px solid', cursor:'pointer', background:(p.compatibleAssets||[]).includes(a.id)?'#1E2A4A':'transparent', color:(p.compatibleAssets||[]).includes(a.id)?'#fff':'#555', borderColor:(p.compatibleAssets||[]).includes(a.id)?'#1E2A4A':'#ccc' }}>
+                  {a.assetId}
+                </button>
+              ))}
+            </div>
+          </div>
+          <div style={{ display:'flex', justifyContent:'flex-end', gap:10 }}>
+            <button onClick={()=>setEditing(null)} style={styles.ghostBtn}>Cancel</button>
+            <button onClick={()=>save(p)} style={styles.primaryBtn}>Save Part</button>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  const lowStock = fmSpareParts.filter(p=>(parseFloat(p.currentStock)||0)<(parseFloat(p.minStock)||0));
+  return (
+    <div style={{ padding:'24px 32px' }}>
+      <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', marginBottom:16 }}>
+        <h2 className="serif" style={styles.pageTitle}>FM Spare Parts</h2>
+        {canEdit && <button onClick={()=>setEditing(blank())} style={styles.primaryBtn}><Plus size={15}/> Add Part</button>}
+      </div>
+      <div style={{ display:'flex', gap:12, marginBottom:20 }}>
+        {[['Total Parts',fmSpareParts.length,''],['Low Stock',lowStock.length,'#B5453A'],['Total Value',fmSpareParts.reduce((s,p)=>s+(parseFloat(p.currentStock)||0)*(parseFloat(p.unitCost)||0),0).toLocaleString(undefined,{maximumFractionDigits:0}),'#C9A24B']].map(([l,v,c])=>(
+          <div key={l} style={{ background:c==='#B5453A'&&v>0?'#FFF8F7':'#fff', border:'1px solid #EAE6DB', borderRadius:8, padding:'12px 18px' }}>
+            <div style={{ fontSize:11, color:'#888', fontWeight:600, textTransform:'uppercase' }}>{l}</div>
+            <div style={{ fontSize:22, fontWeight:700, color:c||'#1E2A4A' }}>{v}</div>
+          </div>
+        ))}
+      </div>
+      {fmSpareParts.length===0 ? <div style={{ textAlign:'center', padding:60, color:'#888' }}>No spare parts recorded.</div> : (
+        <div style={{ background:'#fff', borderRadius:10, border:'1px solid #EAE6DB', overflow:'hidden' }}>
+          <table style={{ width:'100%', borderCollapse:'collapse', fontSize:13 }}>
+            <thead><tr style={{ background:'#F8F7F4' }}>
+              {['Part No.','Name','Stock','Min','Unit Cost','Supplier','Location',''].map(h=><th key={h} style={{ padding:'10px 12px', textAlign:'left', fontSize:11, fontWeight:700, color:'#888', textTransform:'uppercase' }}>{h}</th>)}
+            </tr></thead>
+            <tbody>
+              {fmSpareParts.map(p=>{
+                const low = (parseFloat(p.currentStock)||0)<(parseFloat(p.minStock)||0);
+                return (
+                  <tr key={p.id} style={{ borderBottom:'1px solid #F0ECE5', background:low?'#FFF8F7':'#fff' }}>
+                    <td style={{ padding:'10px 12px', fontWeight:600 }}>{p.partNo}</td>
+                    <td style={{ padding:'10px 12px' }}>{p.name||'—'}</td>
+                    <td style={{ padding:'10px 12px', fontWeight:700, color:low?'#B5453A':'#1a6b30' }}>{p.currentStock||0}{low?' ⚠':''}</td>
+                    <td style={{ padding:'10px 12px', color:'#555' }}>{p.minStock||0}</td>
+                    <td style={{ padding:'10px 12px', color:'#555' }}>{parseFloat(p.unitCost||0).toLocaleString(undefined,{maximumFractionDigits:2})}</td>
+                    <td style={{ padding:'10px 12px', color:'#555' }}>{p.supplier||'—'}</td>
+                    <td style={{ padding:'10px 12px', color:'#555' }}>{p.location||'—'}</td>
+                    <td style={{ padding:'10px 12px' }}>
+                      {canEdit && <div style={{ display:'flex', gap:6 }}>
+                        <button onClick={()=>setEditing(p)} style={styles.iconBtn}><Pencil size={14}/></button>
+                        <button onClick={()=>{if(window.confirm('Delete?'))setFmSpareParts(prev=>prev.filter(x=>x.id!==p.id))}} style={{ ...styles.iconBtn, color:'#B5453A' }}><Trash2 size={14}/></button>
+                      </div>}
+                    </td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ─── FM: KPI Dashboard ────────────────────────────────────────────────────────
+function FMKPIView({ assets, pmSchedules, fmWorkOrders, amcContracts, fmSpareParts, businessInfo }) {
+  const today = new Date().toISOString().slice(0,10);
+  const thisMonth = today.slice(0,7);
+
+  // WO stats
+  const openWOs    = fmWorkOrders.filter(w=>w.status==='open'||w.status==='in_progress');
+  const closedThisMonth = fmWorkOrders.filter(w=>w.status==='completed' && (w.completedDate||'').startsWith(thisMonth));
+  const emergencyOpen = openWOs.filter(w=>w.priority==='emergency');
+  const overdueWOs = fmWorkOrders.filter(w=>w.dueDate&&w.dueDate<today&&w.status!=='completed'&&w.status!=='cancelled');
+  const woCostMonth = closedThisMonth.reduce((s,w)=>s+(parseFloat(w.cost)||0),0);
+
+  // PM stats
+  const overduepm = pmSchedules.filter(p=>p.status==='active'&&p.nextDueDate&&p.nextDueDate<today);
+  const dueThisWeek = pmSchedules.filter(p=>p.status==='active'&&p.nextDueDate&&p.nextDueDate>=today&&p.nextDueDate<=new Date(Date.now()+7*86400000).toISOString().slice(0,10));
+
+  // AMC expiring
+  const amcExpiring = amcContracts.filter(c=>{ if(c.status!=='active'||!c.endDate) return false; const d=Math.ceil((new Date(c.endDate)-new Date(today))/86400000); return d>=0&&d<=30; });
+
+  // Asset condition
+  const condCount = {};
+  assets.forEach(a=>{ condCount[a.condition]=(condCount[a.condition]||0)+1; });
+
+  // Low spare parts
+  const lowSpares = fmSpareParts.filter(p=>(parseFloat(p.currentStock)||0)<(parseFloat(p.minStock)||0));
+
+  function KPI({ label, value, sub, color='#1E2A4A', bg='#fff', warn }) {
+    return (
+      <div style={{ background:warn?'#FFF8F7':bg, border:`1px solid ${warn?'#FBEAE7':'#EAE6DB'}`, borderRadius:10, padding:'16px 20px', minWidth:140 }}>
+        <div style={{ fontSize:11, color:'#888', fontWeight:600, textTransform:'uppercase', letterSpacing:'.05em', marginBottom:6 }}>{label}</div>
+        <div style={{ fontSize:28, fontWeight:700, color:warn?'#B5453A':color, lineHeight:1 }}>{value}</div>
+        {sub && <div style={{ fontSize:11, color:'#888', marginTop:4 }}>{sub}</div>}
+      </div>
+    );
+  }
+  function SH({ children }) {
+    return <div style={{ fontSize:12, fontWeight:800, color:'#1E2A4A', textTransform:'uppercase', letterSpacing:'.07em', borderBottom:'2px solid #EAE6DB', paddingBottom:6, marginTop:28, marginBottom:14 }}>{children}</div>;
+  }
+
+  return (
+    <div style={{ padding:'24px 32px', maxWidth:900 }}>
+      <div style={{ marginBottom:24 }}>
+        <h2 className="serif" style={styles.pageTitle}>FM KPI Dashboard</h2>
+        <div style={{ fontSize:12, color:'#888' }}>{businessInfo?.name} · {today}</div>
+      </div>
+
+      <SH>Work Order KPIs</SH>
+      <div style={{ display:'flex', flexWrap:'wrap', gap:12 }}>
+        <KPI label="Open WOs" value={openWOs.length} warn={openWOs.length>5} sub="in queue"/>
+        <KPI label="Emergency Open" value={emergencyOpen.length} warn={emergencyOpen.length>0} sub="needs immediate action"/>
+        <KPI label="Overdue" value={overdueWOs.length} warn={overdueWOs.length>0} sub="past due date"/>
+        <KPI label="Closed This Month" value={closedThisMonth.length} color='#1a6b30'/>
+        <KPI label="WO Cost (Month)" value={woCostMonth.toLocaleString(undefined,{maximumFractionDigits:0})} sub={businessInfo?.currency||''}/>
+      </div>
+      {emergencyOpen.length>0 && (
+        <div style={{ marginTop:12, background:'#FFF5F5', border:'1px solid #f8d7da', borderRadius:8, padding:12 }}>
+          <div style={{ fontSize:12, fontWeight:700, color:'#842029', marginBottom:6 }}>🚨 Emergency Work Orders</div>
+          {emergencyOpen.map(w=><div key={w.id} style={{ fontSize:12, color:'#555', padding:'3px 0' }}>{w.woNumber} — {w.title||assets.find(a=>a.id===w.assetId)?.name||'—'} · Due: {w.dueDate||'—'}</div>)}
+        </div>
+      )}
+
+      <SH>Preventive Maintenance</SH>
+      <div style={{ display:'flex', flexWrap:'wrap', gap:12 }}>
+        <KPI label="Active Schedules" value={pmSchedules.filter(p=>p.status==='active').length} color='#1a6b30'/>
+        <KPI label="Overdue PM" value={overduepm.length} warn={overduepm.length>0} sub="need attention"/>
+        <KPI label="Due This Week" value={dueThisWeek.length} color='#856404'/>
+      </div>
+
+      <SH>AMC Contracts</SH>
+      <div style={{ display:'flex', flexWrap:'wrap', gap:12 }}>
+        <KPI label="Active Contracts" value={amcContracts.filter(c=>c.status==='active').length} color='#1a6b30'/>
+        <KPI label="Expiring ≤30d" value={amcExpiring.length} warn={amcExpiring.length>0} sub="renew soon"/>
+        <KPI label="Annual Value" value={amcContracts.filter(c=>c.status==='active').reduce((s,c)=>s+(parseFloat(c.value)||0),0).toLocaleString(undefined,{maximumFractionDigits:0})} color='#C9A24B' sub={businessInfo?.currency||''}/>
+      </div>
+
+      <SH>Assets & Spares</SH>
+      <div style={{ display:'flex', flexWrap:'wrap', gap:12 }}>
+        <KPI label="Total Assets" value={assets.length}/>
+        {Object.entries(condCount).map(([cond,cnt])=>(
+          <KPI key={cond} label={cond.charAt(0).toUpperCase()+cond.slice(1)} value={cnt} warn={cond==='critical'&&cnt>0} color={cond==='good'?'#1a6b30':cond==='critical'?'#842029':cond==='poor'?'#E07A3A':'#555'}/>
+        ))}
+        <KPI label="Low Spare Parts" value={lowSpares.length} warn={lowSpares.length>0} sub="reorder needed"/>
+      </div>
+    </div>
+  );
+}
+
+// ─── Tender & Estimation ─────────────────────────────────────────────────────
+function TenderView({ tenders, setTenders, customers, siteProjects, userRole }) {
+  const [editing, setEditing] = useState(null);
+  const canEdit = ['admin','manager'].includes(userRole);
+  const STATUS = ['draft','submitted','won','lost','cancelled'];
+  const STATUS_COLOR = { draft:'#555', submitted:'#0a58ca', won:'#1a6b30', lost:'#842029', cancelled:'#888' };
+  const STATUS_BG    = { draft:'#f0ece5', submitted:'#cfe2ff', won:'#d4edda', lost:'#f8d7da', cancelled:'#f0f0f0' };
+
+  function blank() {
+    return { id:'', number:`TND-${String(tenders.length+1).padStart(3,'0')}`, customerId:'', projectRef:'', title:'', submissionDate:'', validUntil:'', status:'draft', boq:[], notes:'' };
+  }
+  function blankLine() { return { id:crypto.randomUUID(), description:'', unit:'', qty:0, rate:0 }; }
+  function lineTotal(l) { return (parseFloat(l.qty)||0)*(parseFloat(l.rate)||0); }
+  function grandTotal(t) { return (t.boq||[]).reduce((s,l)=>s+lineTotal(l),0); }
+  function save(t) {
+    const rec = { ...t, id:t.id||crypto.randomUUID(), updatedAt:Date.now() };
+    setTenders(prev => prev.find(x=>x.id===rec.id)?prev.map(x=>x.id===rec.id?rec:x):[...prev,rec]);
+    setEditing(null);
+  }
+
+  if (editing) {
+    const t = editing;
+    const set = (k,v) => setEditing(p=>({...p,[k]:v}));
+    const total = grandTotal(t);
+    return (
+      <div style={{ maxWidth:760, margin:'0 auto', padding:'24px 0' }}>
+        <div style={{ display:'flex', gap:12, alignItems:'center', marginBottom:20 }}>
+          <button onClick={()=>setEditing(null)} style={styles.ghostBtn}><X size={14}/> Back</button>
+          <h2 className="serif" style={styles.pageTitle}>{t.id?'Edit':'New'} Tender — {t.number}</h2>
+        </div>
+        <div style={{ background:'#fff', borderRadius:10, padding:24, border:'1px solid #EAE6DB', display:'flex', flexDirection:'column', gap:14 }}>
+          <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr 1fr', gap:12 }}>
+            <div style={styles.formGroup}><label style={styles.label}>Tender No.</label><input value={t.number} onChange={e=>set('number',e.target.value)} style={styles.input}/></div>
+            <div style={styles.formGroup}><label style={styles.label}>Submission Date</label><input type='date' value={t.submissionDate||''} onChange={e=>set('submissionDate',e.target.value)} style={styles.input}/></div>
+            <div style={styles.formGroup}><label style={styles.label}>Valid Until</label><input type='date' value={t.validUntil||''} onChange={e=>set('validUntil',e.target.value)} style={styles.input}/></div>
+          </div>
+          <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:12 }}>
+            <div style={styles.formGroup}><label style={styles.label}>Client</label>
+              <select value={t.customerId||''} onChange={e=>set('customerId',e.target.value)} style={styles.input}>
+                <option value=''>Select client</option>
+                {customers.map(c=><option key={c.id} value={c.id}>{c.name}</option>)}
+              </select>
+            </div>
+            <div style={styles.formGroup}><label style={styles.label}>Status</label>
+              <select value={t.status} onChange={e=>set('status',e.target.value)} style={styles.input}>
+                {STATUS.map(s=><option key={s} value={s}>{s.charAt(0).toUpperCase()+s.slice(1)}</option>)}
+              </select>
+            </div>
+          </div>
+          <div style={styles.formGroup}><label style={styles.label}>Tender Title / Scope</label><input value={t.title||''} onChange={e=>set('title',e.target.value)} style={styles.input} placeholder='e.g. MEP Works for Villa Block A'/></div>
+          {/* BOQ */}
+          <div>
+            <div style={{ fontSize:12, fontWeight:700, color:'#1E2A4A', marginBottom:8, textTransform:'uppercase' }}>Bill of Quantities (BOQ)</div>
+            <table style={{ width:'100%', borderCollapse:'collapse', fontSize:13 }}>
+              <thead><tr style={{ background:'#F8F7F4' }}>
+                {['Description','Unit','Qty','Rate','Amount',''].map(h=><th key={h} style={{ padding:'6px 8px', textAlign:'left', fontSize:11, fontWeight:700, color:'#888', textTransform:'uppercase' }}>{h}</th>)}
+              </tr></thead>
+              <tbody>
+                {(t.boq||[]).map((l,i)=>(
+                  <tr key={l.id}>
+                    <td style={{ padding:'4px 4px' }}><input value={l.description} onChange={e=>set('boq',t.boq.map((x,j)=>j===i?{...x,description:e.target.value}:x))} style={{ ...styles.input, margin:0, width:'100%' }}/></td>
+                    <td style={{ padding:'4px 4px', width:70 }}><input value={l.unit} onChange={e=>set('boq',t.boq.map((x,j)=>j===i?{...x,unit:e.target.value}:x))} style={{ ...styles.input, margin:0 }} placeholder='m²'/></td>
+                    <td style={{ padding:'4px 4px', width:80 }}><input type='number' value={l.qty} onChange={e=>set('boq',t.boq.map((x,j)=>j===i?{...x,qty:e.target.value}:x))} style={{ ...styles.input, margin:0 }}/></td>
+                    <td style={{ padding:'4px 4px', width:100 }}><input type='number' value={l.rate} onChange={e=>set('boq',t.boq.map((x,j)=>j===i?{...x,rate:e.target.value}:x))} style={{ ...styles.input, margin:0 }}/></td>
+                    <td style={{ padding:'4px 8px', fontWeight:600, width:100 }}>{lineTotal(l).toLocaleString(undefined,{maximumFractionDigits:2})}</td>
+                    <td style={{ padding:'4px 4px', width:30 }}><button onClick={()=>set('boq',t.boq.filter((_,j)=>j!==i))} style={{ ...styles.iconBtn, color:'#B5453A' }}><Trash2 size={13}/></button></td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+            <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', marginTop:8 }}>
+              <button onClick={()=>set('boq',[...(t.boq||[]),blankLine()])} style={styles.ghostBtn}><Plus size={13}/> Add Line</button>
+              <div style={{ fontWeight:700, fontSize:15, color:'#1E2A4A' }}>Total: {total.toLocaleString(undefined,{maximumFractionDigits:2})}</div>
+            </div>
+          </div>
+          <div style={styles.formGroup}><label style={styles.label}>Notes</label><textarea value={t.notes||''} onChange={e=>set('notes',e.target.value)} style={{ ...styles.input, height:60 }}/></div>
+          <div style={{ display:'flex', justifyContent:'flex-end', gap:10 }}>
+            <button onClick={()=>setEditing(null)} style={styles.ghostBtn}>Cancel</button>
+            <button onClick={()=>save(t)} style={styles.primaryBtn}>Save Tender</button>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  const list = [...tenders].sort((a,b)=>b.submissionDate>a.submissionDate?1:-1);
+  const wonValue = tenders.filter(t=>t.status==='won').reduce((s,t)=>s+grandTotal(t),0);
+  return (
+    <div style={{ padding:'24px 32px' }}>
+      <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', marginBottom:16 }}>
+        <h2 className="serif" style={styles.pageTitle}>Tender & Estimation</h2>
+        {canEdit && <button onClick={()=>setEditing(blank())} style={styles.primaryBtn}><Plus size={15}/> New Tender</button>}
+      </div>
+      <div style={{ display:'flex', gap:16, marginBottom:20 }}>
+        {[['Total',tenders.length,''],['Won',tenders.filter(t=>t.status==='won').length,'#1a6b30'],['Submitted',tenders.filter(t=>t.status==='submitted').length,'#0a58ca'],['Won Value',wonValue.toLocaleString(undefined,{maximumFractionDigits:0}),'#C9A24B']].map(([l,v,c])=>(
+          <div key={l} style={{ background:'#fff', border:'1px solid #EAE6DB', borderRadius:8, padding:'12px 18px', minWidth:100 }}>
+            <div style={{ fontSize:11, color:'#888', fontWeight:600, textTransform:'uppercase' }}>{l}</div>
+            <div style={{ fontSize:22, fontWeight:700, color:c||'#1E2A4A' }}>{v}</div>
+          </div>
+        ))}
+      </div>
+      {list.length===0 ? <div style={{ textAlign:'center', padding:60, color:'#888' }}>No tenders yet.</div> : (
+        <div style={{ background:'#fff', borderRadius:10, border:'1px solid #EAE6DB', overflow:'hidden' }}>
+          <table style={{ width:'100%', borderCollapse:'collapse', fontSize:13 }}>
+            <thead><tr style={{ background:'#F8F7F4' }}>
+              {['Tender No.','Title','Client','Submission','BOQ Value','Status',''].map(h=><th key={h} style={{ padding:'10px 12px', textAlign:'left', fontSize:11, fontWeight:700, color:'#888', textTransform:'uppercase' }}>{h}</th>)}
+            </tr></thead>
+            <tbody>
+              {list.map(t=>{
+                const client = customers.find(c=>c.id===t.customerId);
+                return (
+                  <tr key={t.id} style={{ borderBottom:'1px solid #F0ECE5' }}>
+                    <td style={{ padding:'10px 12px', fontWeight:600 }}>{t.number}</td>
+                    <td style={{ padding:'10px 12px', color:'#333' }}>{t.title||'—'}</td>
+                    <td style={{ padding:'10px 12px', color:'#555' }}>{client?.name||'—'}</td>
+                    <td style={{ padding:'10px 12px', color:'#555' }}>{t.submissionDate||'—'}</td>
+                    <td style={{ padding:'10px 12px', fontWeight:600 }}>{grandTotal(t).toLocaleString(undefined,{maximumFractionDigits:0})}</td>
+                    <td style={{ padding:'10px 12px' }}><span style={{ background:STATUS_BG[t.status], color:STATUS_COLOR[t.status], borderRadius:6, padding:'2px 8px', fontSize:11, fontWeight:700 }}>{t.status.toUpperCase()}</span></td>
+                    <td style={{ padding:'10px 12px' }}>
+                      {canEdit && <div style={{ display:'flex', gap:6 }}>
+                        <button onClick={()=>setEditing(t)} style={styles.iconBtn}><Pencil size={14}/></button>
+                        <button onClick={()=>{if(window.confirm('Delete?'))setTenders(prev=>prev.filter(x=>x.id!==t.id))}} style={{ ...styles.iconBtn, color:'#B5453A' }}><Trash2 size={14}/></button>
+                      </div>}
+                    </td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ─── Subcontractor Management ─────────────────────────────────────────────────
+function SubcontractorView({ subcontractors, setSubcontractors, siteProjects, userRole }) {
+  const [tab, setTab] = useState('register');
+  const [editing, setEditing] = useState(null);
+  const [editingWO, setEditingWO] = useState(null);
+  const canEdit = ['admin','manager'].includes(userRole);
+
+  // All work orders across all subcontractors
+  const allWOs = subcontractors.flatMap(s=>(s.workOrders||[]).map(w=>({...w,subId:s.id,subName:s.name})));
+
+  function blankSub() { return { id:'', name:'', trade:'', contact:'', email:'', phone:'', taxId:'', workOrders:[] }; }
+  function blankWO(subId) { return { id:crypto.randomUUID(), subId, projectId:'', scope:'', value:0, startDate:'', endDate:'', advancePaid:0, progressPaid:0, retentionHeld:0, finalPaid:0, status:'active' }; }
+
+  function saveSub(sub) {
+    const rec = { ...sub, id:sub.id||crypto.randomUUID() };
+    setSubcontractors(prev=>prev.find(x=>x.id===rec.id)?prev.map(x=>x.id===rec.id?rec:x):[...prev,rec]);
+    setEditing(null);
+  }
+  function saveWO(wo) {
+    setSubcontractors(prev=>prev.map(s=>{
+      if(s.id!==wo.subId) return s;
+      const wos = s.workOrders||[];
+      return { ...s, workOrders: wos.find(w=>w.id===wo.id)?wos.map(w=>w.id===wo.id?wo:w):[...wos,wo] };
+    }));
+    setEditingWO(null);
+  }
+  function balance(wo) {
+    return (parseFloat(wo.value)||0) - (parseFloat(wo.advancePaid)||0) - (parseFloat(wo.progressPaid)||0) - (parseFloat(wo.retentionHeld)||0) - (parseFloat(wo.finalPaid)||0);
+  }
+
+  const TABS = [['register','Register'],['workorders','Work Orders']];
+
+  if (editingWO) {
+    const wo = editingWO;
+    const set = (k,v)=>setEditingWO(p=>({...p,[k]:v}));
+    const sub = subcontractors.find(s=>s.id===wo.subId);
+    return (
+      <div style={{ maxWidth:620, margin:'0 auto', padding:'24px 0' }}>
+        <div style={{ display:'flex', gap:12, alignItems:'center', marginBottom:20 }}>
+          <button onClick={()=>setEditingWO(null)} style={styles.ghostBtn}><X size={14}/> Back</button>
+          <h2 className="serif" style={styles.pageTitle}>Work Order — {sub?.name}</h2>
+        </div>
+        <div style={{ background:'#fff', borderRadius:10, padding:24, border:'1px solid #EAE6DB', display:'flex', flexDirection:'column', gap:14 }}>
+          <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:12 }}>
+            <div style={styles.formGroup}><label style={styles.label}>Project</label>
+              <select value={wo.projectId||''} onChange={e=>set('projectId',e.target.value)} style={styles.input}>
+                <option value=''>Select project</option>
+                {siteProjects.map(p=><option key={p.id} value={p.id}>{p.name}</option>)}
+              </select>
+            </div>
+            <div style={styles.formGroup}><label style={styles.label}>Status</label>
+              <select value={wo.status} onChange={e=>set('status',e.target.value)} style={styles.input}>
+                {['active','completed','terminated','on_hold'].map(s=><option key={s} value={s}>{s.replace('_',' ').replace(/\b\w/g,c=>c.toUpperCase())}</option>)}
+              </select>
+            </div>
+            <div style={styles.formGroup}><label style={styles.label}>Start Date</label><input type='date' value={wo.startDate||''} onChange={e=>set('startDate',e.target.value)} style={styles.input}/></div>
+            <div style={styles.formGroup}><label style={styles.label}>End Date</label><input type='date' value={wo.endDate||''} onChange={e=>set('endDate',e.target.value)} style={styles.input}/></div>
+          </div>
+          <div style={styles.formGroup}><label style={styles.label}>Scope of Work</label><textarea value={wo.scope||''} onChange={e=>set('scope',e.target.value)} style={{ ...styles.input, height:72 }}/></div>
+          <div style={styles.formGroup}><label style={styles.label}>Contract Value</label><input type='number' value={wo.value||0} onChange={e=>set('value',e.target.value)} style={styles.input}/></div>
+          <div style={{ background:'#F8F7F4', borderRadius:8, padding:14 }}>
+            <div style={{ fontSize:12, fontWeight:700, color:'#1E2A4A', marginBottom:10 }}>Payment Tracker</div>
+            <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:12 }}>
+              {[['advancePaid','Advance Paid'],['progressPaid','Progress Payments'],['retentionHeld','Retention Held'],['finalPaid','Final Payment']].map(([k,label])=>(
+                <div key={k} style={styles.formGroup}><label style={styles.label}>{label}</label><input type='number' value={wo[k]||0} onChange={e=>set(k,e.target.value)} style={styles.input}/></div>
+              ))}
+            </div>
+            <div style={{ textAlign:'right', fontWeight:700, fontSize:14, color: balance(wo)<0?'#B5453A':'#1a6b30', marginTop:8 }}>
+              Balance Due: {balance(wo).toLocaleString(undefined,{maximumFractionDigits:2})}
+            </div>
+          </div>
+          <div style={{ display:'flex', justifyContent:'flex-end', gap:10 }}>
+            <button onClick={()=>setEditingWO(null)} style={styles.ghostBtn}>Cancel</button>
+            <button onClick={()=>saveWO(wo)} style={styles.primaryBtn}>Save</button>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  if (editing) {
+    const s = editing;
+    const set = (k,v)=>setEditing(p=>({...p,[k]:v}));
+    return (
+      <div style={{ maxWidth:560, margin:'0 auto', padding:'24px 0' }}>
+        <div style={{ display:'flex', gap:12, alignItems:'center', marginBottom:20 }}>
+          <button onClick={()=>setEditing(null)} style={styles.ghostBtn}><X size={14}/> Back</button>
+          <h2 className="serif" style={styles.pageTitle}>{s.id?'Edit':'New'} Subcontractor</h2>
+        </div>
+        <div style={{ background:'#fff', borderRadius:10, padding:24, border:'1px solid #EAE6DB', display:'flex', flexDirection:'column', gap:12 }}>
+          {[['name','Company Name'],['trade','Trade / Discipline'],['contact','Contact Person'],['phone','Phone'],['email','Email'],['taxId','Tax / VAT ID']].map(([k,label])=>(
+            <div key={k} style={styles.formGroup}><label style={styles.label}>{label}</label><input value={s[k]||''} onChange={e=>set(k,e.target.value)} style={styles.input}/></div>
+          ))}
+          <div style={{ display:'flex', justifyContent:'flex-end', gap:10 }}>
+            <button onClick={()=>setEditing(null)} style={styles.ghostBtn}>Cancel</button>
+            <button onClick={()=>saveSub(s)} style={styles.primaryBtn}>Save</button>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div style={{ padding:'24px 32px' }}>
+      <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', marginBottom:16 }}>
+        <h2 className="serif" style={styles.pageTitle}>Subcontractor Management</h2>
+        {canEdit && tab==='register' && <button onClick={()=>setEditing(blankSub())} style={styles.primaryBtn}><Plus size={15}/> Add Subcontractor</button>}
+        {canEdit && tab==='workorders' && <button onClick={()=>{ if(!subcontractors.length){alert('Add a subcontractor first.');return;} setEditingWO(blankWO(subcontractors[0].id)); }} style={styles.primaryBtn}><Plus size={15}/> New Work Order</button>}
+      </div>
+      <div style={{ display:'flex', gap:8, marginBottom:16 }}>
+        {TABS.map(([k,l])=><button key={k} onClick={()=>setTab(k)} style={{ ...styles.ghostBtn, background:tab===k?'#1E2A4A':'transparent', color:tab===k?'#fff':'#555', fontSize:12 }}>{l}</button>)}
+      </div>
+      {tab==='register' && (
+        subcontractors.length===0 ? <div style={{ textAlign:'center', padding:60, color:'#888' }}>No subcontractors registered.</div> : (
+          <div style={{ background:'#fff', borderRadius:10, border:'1px solid #EAE6DB', overflow:'hidden' }}>
+            <table style={{ width:'100%', borderCollapse:'collapse', fontSize:13 }}>
+              <thead><tr style={{ background:'#F8F7F4' }}>
+                {['Name','Trade','Contact','Phone','Work Orders',''].map(h=><th key={h} style={{ padding:'10px 12px', textAlign:'left', fontSize:11, fontWeight:700, color:'#888', textTransform:'uppercase' }}>{h}</th>)}
+              </tr></thead>
+              <tbody>
+                {subcontractors.map(s=>(
+                  <tr key={s.id} style={{ borderBottom:'1px solid #F0ECE5' }}>
+                    <td style={{ padding:'10px 12px', fontWeight:600 }}>{s.name}</td>
+                    <td style={{ padding:'10px 12px', color:'#555' }}>{s.trade||'—'}</td>
+                    <td style={{ padding:'10px 12px', color:'#555' }}>{s.contact||'—'}</td>
+                    <td style={{ padding:'10px 12px', color:'#555' }}>{s.phone||'—'}</td>
+                    <td style={{ padding:'10px 12px', color:'#555' }}>{(s.workOrders||[]).length}</td>
+                    <td style={{ padding:'10px 12px' }}>
+                      {canEdit && <div style={{ display:'flex', gap:6 }}>
+                        <button onClick={()=>setEditing(s)} style={styles.iconBtn}><Pencil size={14}/></button>
+                        <button onClick={()=>setEditingWO(blankWO(s.id))} style={{ ...styles.ghostBtn, fontSize:11 }}><Plus size={13}/> WO</button>
+                        <button onClick={()=>{if(window.confirm('Delete?'))setSubcontractors(prev=>prev.filter(x=>x.id!==s.id))}} style={{ ...styles.iconBtn, color:'#B5453A' }}><Trash2 size={14}/></button>
+                      </div>}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )
+      )}
+      {tab==='workorders' && (
+        allWOs.length===0 ? <div style={{ textAlign:'center', padding:60, color:'#888' }}>No work orders yet.</div> : (
+          <div style={{ background:'#fff', borderRadius:10, border:'1px solid #EAE6DB', overflow:'hidden' }}>
+            <table style={{ width:'100%', borderCollapse:'collapse', fontSize:13 }}>
+              <thead><tr style={{ background:'#F8F7F4' }}>
+                {['Subcontractor','Project','Scope','Value','Balance','Status',''].map(h=><th key={h} style={{ padding:'10px 12px', textAlign:'left', fontSize:11, fontWeight:700, color:'#888', textTransform:'uppercase' }}>{h}</th>)}
+              </tr></thead>
+              <tbody>
+                {allWOs.map(wo=>{
+                  const proj = siteProjects.find(p=>p.id===wo.projectId);
+                  const bal = balance(wo);
+                  return (
+                    <tr key={wo.id} style={{ borderBottom:'1px solid #F0ECE5' }}>
+                      <td style={{ padding:'10px 12px', fontWeight:600 }}>{wo.subName}</td>
+                      <td style={{ padding:'10px 12px', color:'#555' }}>{proj?.name||'—'}</td>
+                      <td style={{ padding:'10px 12px', color:'#333', maxWidth:180, overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap' }}>{wo.scope||'—'}</td>
+                      <td style={{ padding:'10px 12px', fontWeight:600 }}>{parseFloat(wo.value||0).toLocaleString(undefined,{maximumFractionDigits:0})}</td>
+                      <td style={{ padding:'10px 12px', color:bal<0?'#B5453A':'#1a6b30', fontWeight:600 }}>{bal.toLocaleString(undefined,{maximumFractionDigits:0})}</td>
+                      <td style={{ padding:'10px 12px' }}><span style={{ background:wo.status==='active'?'#cfe2ff':wo.status==='completed'?'#d4edda':'#f0ece5', color:wo.status==='active'?'#0a58ca':wo.status==='completed'?'#1a6b30':'#555', borderRadius:6, padding:'2px 8px', fontSize:11, fontWeight:700 }}>{wo.status.replace('_',' ').replace(/\b\w/g,c=>c.toUpperCase())}</span></td>
+                      <td style={{ padding:'10px 12px' }}>{canEdit && <button onClick={()=>setEditingWO(wo)} style={styles.iconBtn}><Pencil size={14}/></button>}</td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+        )
+      )}
+    </div>
+  );
+}
+
+// ─── HSE ──────────────────────────────────────────────────────────────────────
+function HSEView({ hseRecords, setHseRecords, siteProjects, userRole }) {
+  const [tab, setTab] = useState('incidents');
+  const [editing, setEditing] = useState(null);
+  const canEdit = ['admin','manager'].includes(userRole);
+
+  const incidents    = hseRecords.incidents    || [];
+  const toolboxTalks = hseRecords.toolboxTalks || [];
+  const permits      = hseRecords.permits      || [];
+
+  function updateSection(key, fn) {
+    setHseRecords(prev=>({ ...prev, [key]: fn(prev[key]||[]) }));
+  }
+
+  const INCIDENT_TYPES = ['Near Miss','First Aid','Minor Injury','Major Injury','LTI','Property Damage','Environmental'];
+  const PERMIT_TYPES   = ['Hot Work','Confined Space','Electrical Isolation','Working at Height','Excavation','General'];
+
+  const TABS = [['incidents',`Incidents (${incidents.length})`],['toolbox',`Toolbox Talks (${toolboxTalks.length})`],['permits',`Permits to Work (${permits.length})`]];
+
+  // Stats
+  const lti    = incidents.filter(i=>i.type==='LTI').length;
+  const open   = incidents.filter(i=>i.status!=='closed').length;
+  const activeP = permits.filter(p=>p.status==='active').length;
+
+  function blankIncident() { return { id:'', date:new Date().toISOString().slice(0,10), time:'', projectId:'', location:'', type:'Near Miss', description:'', injuredPerson:'', rootCause:'', correctiveAction:'', status:'open', reportedBy:'' }; }
+  function blankTalk()     { return { id:'', date:new Date().toISOString().slice(0,10), projectId:'', topic:'', conductedBy:'', attendeesCount:0, notes:'' }; }
+  function blankPermit()   { return { id:'', number:`PTW-${String(permits.length+1).padStart(3,'0')}`, date:new Date().toISOString().slice(0,10), projectId:'', type:'Hot Work', location:'', description:'', validFrom:'', validUntil:'', issuedBy:'', receiver:'', status:'active' }; }
+
+  function saveRecord(section, key, rec) {
+    const data = { ...rec, id:rec.id||crypto.randomUUID(), updatedAt:Date.now() };
+    updateSection(section, prev=>prev.find(x=>x.id===data.id)?prev.map(x=>x.id===data.id?data:x):[...prev,data]);
+    setEditing(null);
+  }
+
+  const INC_COLOR = { open:'#842029', investigating:'#856404', closed:'#1a6b30' };
+  const INC_BG    = { open:'#f8d7da', investigating:'#fff3cd', closed:'#d4edda' };
+
+  if (editing) {
+    const { section, data } = editing;
+    const set = (k,v) => setEditing(p=>({ ...p, data:{ ...p.data,[k]:v } }));
+    const d = data;
+    return (
+      <div style={{ maxWidth:620, margin:'0 auto', padding:'24px 0' }}>
+        <div style={{ display:'flex', gap:12, alignItems:'center', marginBottom:20 }}>
+          <button onClick={()=>setEditing(null)} style={styles.ghostBtn}><X size={14}/> Back</button>
+          <h2 className="serif" style={styles.pageTitle}>{section==='incidents'?'Incident Report':section==='toolbox'?'Toolbox Talk':'Permit to Work'}</h2>
+        </div>
+        <div style={{ background:'#fff', borderRadius:10, padding:24, border:'1px solid #EAE6DB', display:'flex', flexDirection:'column', gap:12 }}>
+          {section==='incidents' && (<>
+            <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr 1fr', gap:12 }}>
+              <div style={styles.formGroup}><label style={styles.label}>Date</label><input type='date' value={d.date||''} onChange={e=>set('date',e.target.value)} style={styles.input}/></div>
+              <div style={styles.formGroup}><label style={styles.label}>Time</label><input type='time' value={d.time||''} onChange={e=>set('time',e.target.value)} style={styles.input}/></div>
+              <div style={styles.formGroup}><label style={styles.label}>Type</label>
+                <select value={d.type} onChange={e=>set('type',e.target.value)} style={styles.input}>
+                  {INCIDENT_TYPES.map(t=><option key={t} value={t}>{t}</option>)}
+                </select>
+              </div>
+            </div>
+            <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:12 }}>
+              <div style={styles.formGroup}><label style={styles.label}>Project</label>
+                <select value={d.projectId||''} onChange={e=>set('projectId',e.target.value)} style={styles.input}>
+                  <option value=''>Select project</option>
+                  {siteProjects.map(p=><option key={p.id} value={p.id}>{p.name}</option>)}
+                </select>
+              </div>
+              <div style={styles.formGroup}><label style={styles.label}>Location</label><input value={d.location||''} onChange={e=>set('location',e.target.value)} style={styles.input}/></div>
+              <div style={styles.formGroup}><label style={styles.label}>Injured Person (if any)</label><input value={d.injuredPerson||''} onChange={e=>set('injuredPerson',e.target.value)} style={styles.input}/></div>
+              <div style={styles.formGroup}><label style={styles.label}>Reported By</label><input value={d.reportedBy||''} onChange={e=>set('reportedBy',e.target.value)} style={styles.input}/></div>
+            </div>
+            <div style={styles.formGroup}><label style={styles.label}>Description</label><textarea value={d.description||''} onChange={e=>set('description',e.target.value)} style={{ ...styles.input, height:72 }}/></div>
+            <div style={styles.formGroup}><label style={styles.label}>Root Cause</label><textarea value={d.rootCause||''} onChange={e=>set('rootCause',e.target.value)} style={{ ...styles.input, height:60 }}/></div>
+            <div style={styles.formGroup}><label style={styles.label}>Corrective Action</label><textarea value={d.correctiveAction||''} onChange={e=>set('correctiveAction',e.target.value)} style={{ ...styles.input, height:60 }}/></div>
+            <div style={styles.formGroup}><label style={styles.label}>Status</label>
+              <select value={d.status} onChange={e=>set('status',e.target.value)} style={styles.input}>
+                {['open','investigating','closed'].map(s=><option key={s} value={s}>{s.charAt(0).toUpperCase()+s.slice(1)}</option>)}
+              </select>
+            </div>
+          </>)}
+          {section==='toolbox' && (<>
+            <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:12 }}>
+              <div style={styles.formGroup}><label style={styles.label}>Date</label><input type='date' value={d.date||''} onChange={e=>set('date',e.target.value)} style={styles.input}/></div>
+              <div style={styles.formGroup}><label style={styles.label}>Project</label>
+                <select value={d.projectId||''} onChange={e=>set('projectId',e.target.value)} style={styles.input}>
+                  <option value=''>Select project</option>
+                  {siteProjects.map(p=><option key={p.id} value={p.id}>{p.name}</option>)}
+                </select>
+              </div>
+            </div>
+            <div style={styles.formGroup}><label style={styles.label}>Topic</label><input value={d.topic||''} onChange={e=>set('topic',e.target.value)} style={styles.input} placeholder='e.g. Fire Safety, PPE Usage, Electrical Hazards'/></div>
+            <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:12 }}>
+              <div style={styles.formGroup}><label style={styles.label}>Conducted By</label><input value={d.conductedBy||''} onChange={e=>set('conductedBy',e.target.value)} style={styles.input}/></div>
+              <div style={styles.formGroup}><label style={styles.label}>Attendees Count</label><input type='number' value={d.attendeesCount||0} onChange={e=>set('attendeesCount',e.target.value)} style={styles.input}/></div>
+            </div>
+            <div style={styles.formGroup}><label style={styles.label}>Notes</label><textarea value={d.notes||''} onChange={e=>set('notes',e.target.value)} style={{ ...styles.input, height:72 }}/></div>
+          </>)}
+          {section==='permits' && (<>
+            <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr 1fr', gap:12 }}>
+              <div style={styles.formGroup}><label style={styles.label}>PTW No.</label><input value={d.number||''} onChange={e=>set('number',e.target.value)} style={styles.input}/></div>
+              <div style={styles.formGroup}><label style={styles.label}>Date</label><input type='date' value={d.date||''} onChange={e=>set('date',e.target.value)} style={styles.input}/></div>
+              <div style={styles.formGroup}><label style={styles.label}>Type</label>
+                <select value={d.type} onChange={e=>set('type',e.target.value)} style={styles.input}>
+                  {PERMIT_TYPES.map(t=><option key={t} value={t}>{t}</option>)}
+                </select>
+              </div>
+            </div>
+            <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:12 }}>
+              <div style={styles.formGroup}><label style={styles.label}>Project</label>
+                <select value={d.projectId||''} onChange={e=>set('projectId',e.target.value)} style={styles.input}>
+                  <option value=''>Select project</option>
+                  {siteProjects.map(p=><option key={p.id} value={p.id}>{p.name}</option>)}
+                </select>
+              </div>
+              <div style={styles.formGroup}><label style={styles.label}>Location</label><input value={d.location||''} onChange={e=>set('location',e.target.value)} style={styles.input}/></div>
+              <div style={styles.formGroup}><label style={styles.label}>Valid From</label><input type='date' value={d.validFrom||''} onChange={e=>set('validFrom',e.target.value)} style={styles.input}/></div>
+              <div style={styles.formGroup}><label style={styles.label}>Valid Until</label><input type='date' value={d.validUntil||''} onChange={e=>set('validUntil',e.target.value)} style={styles.input}/></div>
+              <div style={styles.formGroup}><label style={styles.label}>Issued By</label><input value={d.issuedBy||''} onChange={e=>set('issuedBy',e.target.value)} style={styles.input}/></div>
+              <div style={styles.formGroup}><label style={styles.label}>Receiver</label><input value={d.receiver||''} onChange={e=>set('receiver',e.target.value)} style={styles.input}/></div>
+            </div>
+            <div style={styles.formGroup}><label style={styles.label}>Work Description</label><textarea value={d.description||''} onChange={e=>set('description',e.target.value)} style={{ ...styles.input, height:60 }}/></div>
+            <div style={styles.formGroup}><label style={styles.label}>Status</label>
+              <select value={d.status} onChange={e=>set('status',e.target.value)} style={styles.input}>
+                {['active','suspended','closed'].map(s=><option key={s} value={s}>{s.charAt(0).toUpperCase()+s.slice(1)}</option>)}
+              </select>
+            </div>
+          </>)}
+          <div style={{ display:'flex', justifyContent:'flex-end', gap:10 }}>
+            <button onClick={()=>setEditing(null)} style={styles.ghostBtn}>Cancel</button>
+            <button onClick={()=>saveRecord(section,section,d)} style={styles.primaryBtn}>Save</button>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div style={{ padding:'24px 32px' }}>
+      <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', marginBottom:16 }}>
+        <h2 className="serif" style={styles.pageTitle}>HSE — Health, Safety & Environment</h2>
+        {canEdit && <button onClick={()=>{
+          if(tab==='incidents') setEditing({ section:'incidents', data:blankIncident() });
+          else if(tab==='toolbox') setEditing({ section:'toolbox', data:blankTalk() });
+          else setEditing({ section:'permits', data:blankPermit() });
+        }} style={styles.primaryBtn}><Plus size={15}/> New {tab==='incidents'?'Incident':tab==='toolbox'?'Talk':'Permit'}</button>}
+      </div>
+      {/* KPIs */}
+      <div style={{ display:'flex', gap:12, marginBottom:20 }}>
+        {[['Total Incidents',incidents.length,''],['LTI',lti,'#B5453A'],['Open',open,'#856404'],['Active Permits',activeP,'#0a58ca'],['Toolbox Talks',toolboxTalks.length,'#1a6b30']].map(([l,v,c])=>(
+          <div key={l} style={{ background:'#fff', border:`1px solid ${c?'#EAE6DB':'#EAE6DB'}`, borderRadius:8, padding:'10px 16px' }}>
+            <div style={{ fontSize:11, color:'#888', fontWeight:600, textTransform:'uppercase' }}>{l}</div>
+            <div style={{ fontSize:22, fontWeight:700, color:c||'#1E2A4A' }}>{v}</div>
+          </div>
+        ))}
+      </div>
+      <div style={{ display:'flex', gap:8, marginBottom:16 }}>
+        {TABS.map(([k,l])=><button key={k} onClick={()=>setTab(k)} style={{ ...styles.ghostBtn, background:tab===k?'#1E2A4A':'transparent', color:tab===k?'#fff':'#555', fontSize:12 }}>{l}</button>)}
+      </div>
+      {tab==='incidents' && (
+        incidents.length===0 ? <div style={{ textAlign:'center', padding:60, color:'#888' }}>No incidents recorded.</div> : (
+          <div style={{ display:'flex', flexDirection:'column', gap:10 }}>
+            {[...incidents].sort((a,b)=>b.date>a.date?1:-1).map(inc=>{
+              const proj = siteProjects.find(p=>p.id===inc.projectId);
+              return (
+                <div key={inc.id} style={{ background:'#fff', border:'1px solid #EAE6DB', borderRadius:8, padding:'12px 16px', display:'flex', gap:12, alignItems:'flex-start' }}>
+                  <div style={{ flex:1 }}>
+                    <div style={{ display:'flex', gap:10, alignItems:'center', marginBottom:4 }}>
+                      <span style={{ fontWeight:700, color:'#1E2A4A' }}>{inc.type}</span>
+                      <span style={{ background:INC_BG[inc.status]||'#f0ece5', color:INC_COLOR[inc.status]||'#555', borderRadius:5, padding:'1px 8px', fontSize:11, fontWeight:700 }}>{(inc.status||'').toUpperCase()}</span>
+                      {proj && <span style={{ fontSize:11, color:'#888' }}>{proj.name}</span>}
+                    </div>
+                    <div style={{ fontSize:13, color:'#333' }}>{inc.description||'—'}</div>
+                    <div style={{ fontSize:11, color:'#888', marginTop:3 }}>{inc.date} {inc.time||''} · {inc.location||''} · Reported by {inc.reportedBy||'—'}</div>
+                  </div>
+                  {canEdit && <div style={{ display:'flex', gap:6 }}>
+                    <button onClick={()=>setEditing({ section:'incidents', data:inc })} style={styles.iconBtn}><Pencil size={14}/></button>
+                    <button onClick={()=>{if(window.confirm('Delete?'))updateSection('incidents',prev=>prev.filter(x=>x.id!==inc.id))}} style={{ ...styles.iconBtn, color:'#B5453A' }}><Trash2 size={14}/></button>
+                  </div>}
+                </div>
+              );
+            })}
+          </div>
+        )
+      )}
+      {tab==='toolbox' && (
+        toolboxTalks.length===0 ? <div style={{ textAlign:'center', padding:60, color:'#888' }}>No toolbox talks recorded.</div> : (
+          <div style={{ background:'#fff', borderRadius:10, border:'1px solid #EAE6DB', overflow:'hidden' }}>
+            <table style={{ width:'100%', borderCollapse:'collapse', fontSize:13 }}>
+              <thead><tr style={{ background:'#F8F7F4' }}>
+                {['Date','Topic','Project','Conducted By','Attendees',''].map(h=><th key={h} style={{ padding:'10px 12px', textAlign:'left', fontSize:11, fontWeight:700, color:'#888', textTransform:'uppercase' }}>{h}</th>)}
+              </tr></thead>
+              <tbody>
+                {[...toolboxTalks].sort((a,b)=>b.date>a.date?1:-1).map(tk=>{
+                  const proj = siteProjects.find(p=>p.id===tk.projectId);
+                  return (
+                    <tr key={tk.id} style={{ borderBottom:'1px solid #F0ECE5' }}>
+                      <td style={{ padding:'10px 12px' }}>{tk.date}</td>
+                      <td style={{ padding:'10px 12px', fontWeight:600 }}>{tk.topic||'—'}</td>
+                      <td style={{ padding:'10px 12px', color:'#555' }}>{proj?.name||'—'}</td>
+                      <td style={{ padding:'10px 12px', color:'#555' }}>{tk.conductedBy||'—'}</td>
+                      <td style={{ padding:'10px 12px', color:'#555' }}>{tk.attendeesCount||0}</td>
+                      <td style={{ padding:'10px 12px' }}>{canEdit && <div style={{ display:'flex', gap:6 }}>
+                        <button onClick={()=>setEditing({ section:'toolbox', data:tk })} style={styles.iconBtn}><Pencil size={14}/></button>
+                        <button onClick={()=>{if(window.confirm('Delete?'))updateSection('toolboxTalks',prev=>prev.filter(x=>x.id!==tk.id))}} style={{ ...styles.iconBtn, color:'#B5453A' }}><Trash2 size={14}/></button>
+                      </div>}</td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+        )
+      )}
+      {tab==='permits' && (
+        permits.length===0 ? <div style={{ textAlign:'center', padding:60, color:'#888' }}>No permits issued.</div> : (
+          <div style={{ background:'#fff', borderRadius:10, border:'1px solid #EAE6DB', overflow:'hidden' }}>
+            <table style={{ width:'100%', borderCollapse:'collapse', fontSize:13 }}>
+              <thead><tr style={{ background:'#F8F7F4' }}>
+                {['PTW No.','Type','Project','Location','Valid Until','Issued By','Status',''].map(h=><th key={h} style={{ padding:'10px 12px', textAlign:'left', fontSize:11, fontWeight:700, color:'#888', textTransform:'uppercase' }}>{h}</th>)}
+              </tr></thead>
+              <tbody>
+                {[...permits].sort((a,b)=>b.date>a.date?1:-1).map(pt=>{
+                  const proj = siteProjects.find(p=>p.id===pt.projectId);
+                  const expired = pt.validUntil && pt.validUntil < new Date().toISOString().slice(0,10);
+                  return (
+                    <tr key={pt.id} style={{ borderBottom:'1px solid #F0ECE5', background:expired&&pt.status==='active'?'#fff8f7':'#fff' }}>
+                      <td style={{ padding:'10px 12px', fontWeight:600 }}>{pt.number}</td>
+                      <td style={{ padding:'10px 12px', color:'#333' }}>{pt.type}</td>
+                      <td style={{ padding:'10px 12px', color:'#555' }}>{proj?.name||'—'}</td>
+                      <td style={{ padding:'10px 12px', color:'#555' }}>{pt.location||'—'}</td>
+                      <td style={{ padding:'10px 12px', color:expired?'#B5453A':'#555', fontWeight:expired?700:400 }}>{pt.validUntil||'—'}{expired?' ⚠':''}</td>
+                      <td style={{ padding:'10px 12px', color:'#555' }}>{pt.issuedBy||'—'}</td>
+                      <td style={{ padding:'10px 12px' }}><span style={{ background:pt.status==='active'?'#d4edda':pt.status==='suspended'?'#fff3cd':'#f0ece5', color:pt.status==='active'?'#1a6b30':pt.status==='suspended'?'#856404':'#555', borderRadius:6, padding:'2px 8px', fontSize:11, fontWeight:700 }}>{pt.status.toUpperCase()}</span></td>
+                      <td style={{ padding:'10px 12px' }}>{canEdit && <div style={{ display:'flex', gap:6 }}>
+                        <button onClick={()=>setEditing({ section:'permits', data:pt })} style={styles.iconBtn}><Pencil size={14}/></button>
+                        <button onClick={()=>{if(window.confirm('Delete?'))updateSection('permits',prev=>prev.filter(x=>x.id!==pt.id))}} style={{ ...styles.iconBtn, color:'#B5453A' }}><Trash2 size={14}/></button>
+                      </div>}</td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+        )
+      )}
+    </div>
+  );
+}
+
+// ─── RA Billing ───────────────────────────────────────────────────────────────
+function RABillingView({ raBillings, setRaBillings, siteProjects, customers, tenders, userRole, businessInfo }) {
+  const [editing, setEditing] = useState(null);
+  const canEdit = ['admin','manager','accounts'].includes(userRole);
+
+  function blank() {
+    return { id:'', billNumber:`RAB-${String(raBillings.length+1).padStart(3,'0')}`, projectId:'', customerId:'', tenderId:'', periodFrom:'', periodTo:'', date:new Date().toISOString().slice(0,10), items:[], status:'draft', notes:'' };
+  }
+  function blankItem() { return { id:crypto.randomUUID(), description:'', contractValue:0, previousQty:0, thisQty:0, unit:'%' }; }
+  function itemAmount(item, tender) {
+    if(!item) return 0;
+    const cv = parseFloat(item.contractValue)||0;
+    const prev = parseFloat(item.previousQty)||0;
+    const curr = parseFloat(item.thisQty)||0;
+    return cv * (curr - prev) / 100;
+  }
+  function billTotal(bill) { return (bill.items||[]).reduce((s,i)=>s+itemAmount(i),0); }
+  function save(bill) {
+    const rec = { ...bill, id:bill.id||crypto.randomUUID(), updatedAt:Date.now() };
+    setRaBillings(prev=>prev.find(x=>x.id===rec.id)?prev.map(x=>x.id===rec.id?rec:x):[...prev,rec]);
+    setEditing(null);
+  }
+
+  if (editing) {
+    const b = editing;
+    const set = (k,v)=>setEditing(p=>({...p,[k]:v}));
+    const total = billTotal(b);
+    return (
+      <div style={{ maxWidth:800, margin:'0 auto', padding:'24px 0' }}>
+        <div style={{ display:'flex', gap:12, alignItems:'center', marginBottom:20 }}>
+          <button onClick={()=>setEditing(null)} style={styles.ghostBtn}><X size={14}/> Back</button>
+          <h2 className="serif" style={styles.pageTitle}>{b.id?'Edit':'New'} RA Bill — {b.billNumber}</h2>
+        </div>
+        <div style={{ background:'#fff', borderRadius:10, padding:24, border:'1px solid #EAE6DB', display:'flex', flexDirection:'column', gap:14 }}>
+          <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr 1fr', gap:12 }}>
+            <div style={styles.formGroup}><label style={styles.label}>Bill No.</label><input value={b.billNumber} onChange={e=>set('billNumber',e.target.value)} style={styles.input}/></div>
+            <div style={styles.formGroup}><label style={styles.label}>Bill Date</label><input type='date' value={b.date} onChange={e=>set('date',e.target.value)} style={styles.input}/></div>
+            <div style={styles.formGroup}><label style={styles.label}>Status</label>
+              <select value={b.status} onChange={e=>set('status',e.target.value)} style={styles.input}>
+                {['draft','submitted','approved','paid','rejected'].map(s=><option key={s} value={s}>{s.charAt(0).toUpperCase()+s.slice(1)}</option>)}
+              </select>
+            </div>
+          </div>
+          <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:12 }}>
+            <div style={styles.formGroup}><label style={styles.label}>Project</label>
+              <select value={b.projectId||''} onChange={e=>set('projectId',e.target.value)} style={styles.input}>
+                <option value=''>Select project</option>
+                {siteProjects.map(p=><option key={p.id} value={p.id}>{p.name}</option>)}
+              </select>
+            </div>
+            <div style={styles.formGroup}><label style={styles.label}>Client</label>
+              <select value={b.customerId||''} onChange={e=>set('customerId',e.target.value)} style={styles.input}>
+                <option value=''>Select client</option>
+                {customers.map(c=><option key={c.id} value={c.id}>{c.name}</option>)}
+              </select>
+            </div>
+            <div style={styles.formGroup}><label style={styles.label}>Period From</label><input type='date' value={b.periodFrom||''} onChange={e=>set('periodFrom',e.target.value)} style={styles.input}/></div>
+            <div style={styles.formGroup}><label style={styles.label}>Period To</label><input type='date' value={b.periodTo||''} onChange={e=>set('periodTo',e.target.value)} style={styles.input}/></div>
+          </div>
+          {/* BOQ Progress Items */}
+          <div>
+            <div style={{ fontSize:12, fontWeight:700, color:'#1E2A4A', marginBottom:8, textTransform:'uppercase' }}>Progress Claim Items</div>
+            <table style={{ width:'100%', borderCollapse:'collapse', fontSize:12 }}>
+              <thead><tr style={{ background:'#F8F7F4' }}>
+                {['Description','Contract Value','Prev %','This Bill %','Amount',''].map(h=><th key={h} style={{ padding:'6px 8px', textAlign:'left', fontSize:11, fontWeight:700, color:'#888' }}>{h}</th>)}
+              </tr></thead>
+              <tbody>
+                {(b.items||[]).map((item,i)=>(
+                  <tr key={item.id}>
+                    <td style={{ padding:'4px 4px' }}><input value={item.description} onChange={e=>set('items',b.items.map((x,j)=>j===i?{...x,description:e.target.value}:x))} style={{ ...styles.input, margin:0, width:'100%' }}/></td>
+                    <td style={{ padding:'4px 4px', width:110 }}><input type='number' value={item.contractValue} onChange={e=>set('items',b.items.map((x,j)=>j===i?{...x,contractValue:e.target.value}:x))} style={{ ...styles.input, margin:0 }}/></td>
+                    <td style={{ padding:'4px 4px', width:80 }}><input type='number' min={0} max={100} value={item.previousQty} onChange={e=>set('items',b.items.map((x,j)=>j===i?{...x,previousQty:e.target.value}:x))} style={{ ...styles.input, margin:0 }}/></td>
+                    <td style={{ padding:'4px 4px', width:80 }}><input type='number' min={0} max={100} value={item.thisQty} onChange={e=>set('items',b.items.map((x,j)=>j===i?{...x,thisQty:e.target.value}:x))} style={{ ...styles.input, margin:0 }}/></td>
+                    <td style={{ padding:'4px 8px', fontWeight:600, width:100 }}>{itemAmount(item).toLocaleString(undefined,{maximumFractionDigits:0})}</td>
+                    <td style={{ padding:'4px 4px', width:30 }}><button onClick={()=>set('items',b.items.filter((_,j)=>j!==i))} style={{ ...styles.iconBtn, color:'#B5453A' }}><Trash2 size={13}/></button></td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+            <div style={{ display:'flex', justifyContent:'space-between', marginTop:8 }}>
+              <button onClick={()=>set('items',[...(b.items||[]),blankItem()])} style={styles.ghostBtn}><Plus size={13}/> Add Item</button>
+              <div style={{ fontWeight:700, fontSize:15, color:'#1E2A4A' }}>This Bill: {total.toLocaleString(undefined,{maximumFractionDigits:0})}</div>
+            </div>
+          </div>
+          <div style={styles.formGroup}><label style={styles.label}>Notes</label><textarea value={b.notes||''} onChange={e=>set('notes',e.target.value)} style={{ ...styles.input, height:56 }}/></div>
+          <div style={{ display:'flex', justifyContent:'flex-end', gap:10 }}>
+            <button onClick={()=>setEditing(null)} style={styles.ghostBtn}>Cancel</button>
+            <button onClick={()=>save(b)} style={styles.primaryBtn}>Save RA Bill</button>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  const ST_COLOR = { draft:'#555', submitted:'#0a58ca', approved:'#1a6b30', paid:'#C9A24B', rejected:'#842029' };
+  const ST_BG    = { draft:'#f0ece5', submitted:'#cfe2ff', approved:'#d4edda', paid:'#FFF8E7', rejected:'#f8d7da' };
+  const list = [...raBillings].sort((a,b)=>b.date>a.date?1:-1);
+  const totalBilled = list.reduce((s,b)=>s+billTotal(b),0);
+  return (
+    <div style={{ padding:'24px 32px' }}>
+      <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', marginBottom:16 }}>
+        <h2 className="serif" style={styles.pageTitle}>RA Billing — Running Account</h2>
+        {canEdit && <button onClick={()=>setEditing(blank())} style={styles.primaryBtn}><Plus size={15}/> New RA Bill</button>}
+      </div>
+      <div style={{ display:'flex', gap:16, marginBottom:20 }}>
+        {[['Total Bills',list.length],['Total Billed',totalBilled.toLocaleString(undefined,{maximumFractionDigits:0})],['Approved',list.filter(b=>b.status==='approved').length],['Paid',list.filter(b=>b.status==='paid').length]].map(([l,v])=>(
+          <div key={l} style={{ background:'#fff', border:'1px solid #EAE6DB', borderRadius:8, padding:'12px 18px' }}>
+            <div style={{ fontSize:11, color:'#888', fontWeight:600, textTransform:'uppercase' }}>{l}</div>
+            <div style={{ fontSize:22, fontWeight:700, color:'#1E2A4A' }}>{v}</div>
+          </div>
+        ))}
+      </div>
+      {list.length===0 ? <div style={{ textAlign:'center', padding:60, color:'#888' }}>No RA bills raised yet.</div> : (
+        <div style={{ background:'#fff', borderRadius:10, border:'1px solid #EAE6DB', overflow:'hidden' }}>
+          <table style={{ width:'100%', borderCollapse:'collapse', fontSize:13 }}>
+            <thead><tr style={{ background:'#F8F7F4' }}>
+              {['Bill No.','Date','Project','Client','Period','Amount','Status',''].map(h=><th key={h} style={{ padding:'10px 12px', textAlign:'left', fontSize:11, fontWeight:700, color:'#888', textTransform:'uppercase' }}>{h}</th>)}
+            </tr></thead>
+            <tbody>
+              {list.map(b=>{
+                const proj = siteProjects.find(p=>p.id===b.projectId);
+                const client = customers.find(c=>c.id===b.customerId);
+                return (
+                  <tr key={b.id} style={{ borderBottom:'1px solid #F0ECE5' }}>
+                    <td style={{ padding:'10px 12px', fontWeight:600 }}>{b.billNumber}</td>
+                    <td style={{ padding:'10px 12px', color:'#555' }}>{b.date}</td>
+                    <td style={{ padding:'10px 12px', color:'#555' }}>{proj?.name||'—'}</td>
+                    <td style={{ padding:'10px 12px', color:'#555' }}>{client?.name||'—'}</td>
+                    <td style={{ padding:'10px 12px', color:'#555', fontSize:11 }}>{b.periodFrom||'—'} → {b.periodTo||'—'}</td>
+                    <td style={{ padding:'10px 12px', fontWeight:700 }}>{billTotal(b).toLocaleString(undefined,{maximumFractionDigits:0})}</td>
+                    <td style={{ padding:'10px 12px' }}><span style={{ background:ST_BG[b.status], color:ST_COLOR[b.status], borderRadius:6, padding:'2px 8px', fontSize:11, fontWeight:700 }}>{b.status.toUpperCase()}</span></td>
+                    <td style={{ padding:'10px 12px' }}>
+                      {canEdit && <div style={{ display:'flex', gap:6 }}>
+                        <button onClick={()=>setEditing(b)} style={styles.iconBtn}><Pencil size={14}/></button>
+                        <button onClick={()=>{if(window.confirm('Delete?'))setRaBillings(prev=>prev.filter(x=>x.id!==b.id))}} style={{ ...styles.iconBtn, color:'#B5453A' }}><Trash2 size={14}/></button>
+                      </div>}
+                    </td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ─── Testing & Commissioning ──────────────────────────────────────────────────
+function TCView({ tcChecklists, setTcChecklists, siteProjects, userRole }) {
+  const [editing, setEditing] = useState(null);
+  const [viewId, setViewId] = useState(null);
+  const canEdit = ['admin','manager'].includes(userRole);
+
+  const SYSTEMS = ['Electrical LV','Electrical MV','Plumbing','HVAC','Fire Fighting','Fire Alarm','BMS','Earthing','Lighting','CCTV','Access Control','Lifts','Other'];
+  const TEST_TYPES = ['Insulation Resistance','Earth Continuity','Polarity Check','Functional Test','Load Test','Pressure Test','Flow Test','Commission & Start-up','Witnessed Test','Other'];
+
+  function blank() {
+    return { id:'', projectId:'', system:'Electrical LV', date:new Date().toISOString().slice(0,10), tests:[], punchList:[], status:'open', preparedBy:'', witnessedBy:'' };
+  }
+  function blankTest()  { return { id:crypto.randomUUID(), testType:'Functional Test', equipment:'', location:'', standard:'', result:'pass', remarks:'' }; }
+  function blankPunch() { return { id:crypto.randomUUID(), description:'', location:'', raisedBy:'', raisedDate:new Date().toISOString().slice(0,10), closedDate:'', status:'open' }; }
+  function save(rec) {
+    const data = { ...rec, id:rec.id||crypto.randomUUID(), updatedAt:Date.now() };
+    setTcChecklists(prev=>prev.find(x=>x.id===data.id)?prev.map(x=>x.id===data.id?data:x):[...prev,data]);
+    setEditing(null); setViewId(null);
+  }
+
+  if (editing) {
+    const r = editing;
+    const set = (k,v)=>setEditing(p=>({...p,[k]:v}));
+    const fails = (r.tests||[]).filter(t=>t.result==='fail').length;
+    return (
+      <div style={{ maxWidth:780, margin:'0 auto', padding:'24px 0' }}>
+        <div style={{ display:'flex', gap:12, alignItems:'center', marginBottom:20 }}>
+          <button onClick={()=>setEditing(null)} style={styles.ghostBtn}><X size={14}/> Back</button>
+          <h2 className="serif" style={styles.pageTitle}>{r.id?'Edit':'New'} T&C Checklist</h2>
+        </div>
+        <div style={{ background:'#fff', borderRadius:10, padding:24, border:'1px solid #EAE6DB', display:'flex', flexDirection:'column', gap:14 }}>
+          <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr 1fr', gap:12 }}>
+            <div style={styles.formGroup}><label style={styles.label}>Project</label>
+              <select value={r.projectId||''} onChange={e=>set('projectId',e.target.value)} style={styles.input}>
+                <option value=''>Select project</option>
+                {siteProjects.map(p=><option key={p.id} value={p.id}>{p.name}</option>)}
+              </select>
+            </div>
+            <div style={styles.formGroup}><label style={styles.label}>System</label>
+              <select value={r.system} onChange={e=>set('system',e.target.value)} style={styles.input}>
+                {SYSTEMS.map(s=><option key={s} value={s}>{s}</option>)}
+              </select>
+            </div>
+            <div style={styles.formGroup}><label style={styles.label}>Date</label><input type='date' value={r.date} onChange={e=>set('date',e.target.value)} style={styles.input}/></div>
+            <div style={styles.formGroup}><label style={styles.label}>Prepared By</label><input value={r.preparedBy||''} onChange={e=>set('preparedBy',e.target.value)} style={styles.input}/></div>
+            <div style={styles.formGroup}><label style={styles.label}>Witnessed By (Client)</label><input value={r.witnessedBy||''} onChange={e=>set('witnessedBy',e.target.value)} style={styles.input}/></div>
+            <div style={styles.formGroup}><label style={styles.label}>Status</label>
+              <select value={r.status} onChange={e=>set('status',e.target.value)} style={styles.input}>
+                {['open','in_progress','completed','signed_off'].map(s=><option key={s} value={s}>{s.replace('_',' ').replace(/\b\w/g,c=>c.toUpperCase())}</option>)}
+              </select>
+            </div>
+          </div>
+          {/* Test Records */}
+          <div>
+            <div style={{ fontSize:12, fontWeight:700, color:'#1E2A4A', marginBottom:8, textTransform:'uppercase' }}>Test Records {fails>0&&<span style={{ color:'#B5453A' }}>({fails} fail{fails>1?'s':''})</span>}</div>
+            {(r.tests||[]).map((t,i)=>(
+              <div key={t.id} style={{ background:t.result==='fail'?'#FFF8F7':'#F8F7F4', border:`1px solid ${t.result==='fail'?'#FBEAE7':'#EAE6DB'}`, borderRadius:8, padding:12, marginBottom:8 }}>
+                <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr 1fr 80px 1fr 24px', gap:8, alignItems:'center' }}>
+                  <select value={t.testType} onChange={e=>set('tests',r.tests.map((x,j)=>j===i?{...x,testType:e.target.value}:x))} style={{ ...styles.input, margin:0, fontSize:12 }}>
+                    {TEST_TYPES.map(ty=><option key={ty} value={ty}>{ty}</option>)}
+                  </select>
+                  <input value={t.equipment} onChange={e=>set('tests',r.tests.map((x,j)=>j===i?{...x,equipment:e.target.value}:x))} style={{ ...styles.input, margin:0, fontSize:12 }} placeholder='Equipment/Circuit'/>
+                  <input value={t.location} onChange={e=>set('tests',r.tests.map((x,j)=>j===i?{...x,location:e.target.value}:x))} style={{ ...styles.input, margin:0, fontSize:12 }} placeholder='Location'/>
+                  <select value={t.result} onChange={e=>set('tests',r.tests.map((x,j)=>j===i?{...x,result:e.target.value}:x))} style={{ ...styles.input, margin:0, fontSize:12, background:t.result==='pass'?'#d4edda':t.result==='fail'?'#f8d7da':'#fff', fontWeight:700, color:t.result==='pass'?'#1a6b30':t.result==='fail'?'#842029':'#555' }}>
+                    <option value='pass'>Pass</option><option value='fail'>Fail</option><option value='na'>N/A</option>
+                  </select>
+                  <input value={t.remarks} onChange={e=>set('tests',r.tests.map((x,j)=>j===i?{...x,remarks:e.target.value}:x))} style={{ ...styles.input, margin:0, fontSize:12 }} placeholder='Remarks'/>
+                  <button onClick={()=>set('tests',r.tests.filter((_,j)=>j!==i))} style={{ ...styles.iconBtn, color:'#B5453A' }}><Trash2 size={13}/></button>
+                </div>
+              </div>
+            ))}
+            <button onClick={()=>set('tests',[...(r.tests||[]),blankTest()])} style={styles.ghostBtn}><Plus size={13}/> Add Test</button>
+          </div>
+          {/* Punch List */}
+          <div>
+            <div style={{ fontSize:12, fontWeight:700, color:'#1E2A4A', marginBottom:8, textTransform:'uppercase' }}>Punch List</div>
+            {(r.punchList||[]).map((p,i)=>(
+              <div key={p.id} style={{ display:'flex', gap:8, alignItems:'center', marginBottom:6, background:'#F8F7F4', borderRadius:6, padding:'6px 8px' }}>
+                <input value={p.description} onChange={e=>set('punchList',r.punchList.map((x,j)=>j===i?{...x,description:e.target.value}:x))} style={{ ...styles.input, margin:0, flex:2, fontSize:12 }} placeholder='Punch item description'/>
+                <input value={p.location} onChange={e=>set('punchList',r.punchList.map((x,j)=>j===i?{...x,location:e.target.value}:x))} style={{ ...styles.input, margin:0, flex:1, fontSize:12 }} placeholder='Location'/>
+                <select value={p.status} onChange={e=>set('punchList',r.punchList.map((x,j)=>j===i?{...x,status:e.target.value}:x))} style={{ ...styles.input, margin:0, width:90, fontSize:12 }}>
+                  <option value='open'>Open</option><option value='closed'>Closed</option>
+                </select>
+                <button onClick={()=>set('punchList',r.punchList.filter((_,j)=>j!==i))} style={{ ...styles.iconBtn, color:'#B5453A' }}><Trash2 size={13}/></button>
+              </div>
+            ))}
+            <button onClick={()=>set('punchList',[...(r.punchList||[]),blankPunch()])} style={styles.ghostBtn}><Plus size={13}/> Add Punch Item</button>
+          </div>
+          <div style={{ display:'flex', justifyContent:'flex-end', gap:10 }}>
+            <button onClick={()=>setEditing(null)} style={styles.ghostBtn}>Cancel</button>
+            <button onClick={()=>save(r)} style={styles.primaryBtn}>Save Checklist</button>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  const list = [...tcChecklists].sort((a,b)=>b.date>a.date?1:-1);
+  const ST_COLOR = { open:'#555', in_progress:'#0a58ca', completed:'#856404', signed_off:'#1a6b30' };
+  const ST_BG    = { open:'#f0ece5', in_progress:'#cfe2ff', completed:'#fff3cd', signed_off:'#d4edda' };
+  return (
+    <div style={{ padding:'24px 32px' }}>
+      <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', marginBottom:20 }}>
+        <h2 className="serif" style={styles.pageTitle}>Testing & Commissioning</h2>
+        {canEdit && <button onClick={()=>setEditing(blank())} style={styles.primaryBtn}><Plus size={15}/> New T&C Checklist</button>}
+      </div>
+      {list.length===0 ? <div style={{ textAlign:'center', padding:60, color:'#888' }}>No T&C checklists yet.</div> : (
+        <div style={{ background:'#fff', borderRadius:10, border:'1px solid #EAE6DB', overflow:'hidden' }}>
+          <table style={{ width:'100%', borderCollapse:'collapse', fontSize:13 }}>
+            <thead><tr style={{ background:'#F8F7F4' }}>
+              {['Project','System','Date','Tests','Punch Items','Witnessed By','Status',''].map(h=><th key={h} style={{ padding:'10px 12px', textAlign:'left', fontSize:11, fontWeight:700, color:'#888', textTransform:'uppercase' }}>{h}</th>)}
+            </tr></thead>
+            <tbody>
+              {list.map(r=>{
+                const proj = siteProjects.find(p=>p.id===r.projectId);
+                const fails = (r.tests||[]).filter(t=>t.result==='fail').length;
+                const openPunch = (r.punchList||[]).filter(p=>p.status==='open').length;
+                return (
+                  <tr key={r.id} style={{ borderBottom:'1px solid #F0ECE5' }}>
+                    <td style={{ padding:'10px 12px', fontWeight:600 }}>{proj?.name||'—'}</td>
+                    <td style={{ padding:'10px 12px', color:'#333' }}>{r.system}</td>
+                    <td style={{ padding:'10px 12px', color:'#555' }}>{r.date}</td>
+                    <td style={{ padding:'10px 12px' }}>
+                      <span>{(r.tests||[]).length} tests</span>
+                      {fails>0&&<span style={{ marginLeft:6, background:'#f8d7da', color:'#842029', borderRadius:5, padding:'1px 6px', fontSize:11, fontWeight:700 }}>{fails} fail</span>}
+                    </td>
+                    <td style={{ padding:'10px 12px' }}>
+                      {(r.punchList||[]).length>0&&<span>{(r.punchList||[]).length}</span>}
+                      {openPunch>0&&<span style={{ marginLeft:4, background:'#fff3cd', color:'#856404', borderRadius:5, padding:'1px 6px', fontSize:11, fontWeight:700 }}>{openPunch} open</span>}
+                      {(r.punchList||[]).length===0&&'—'}
+                    </td>
+                    <td style={{ padding:'10px 12px', color:'#555' }}>{r.witnessedBy||'—'}</td>
+                    <td style={{ padding:'10px 12px' }}><span style={{ background:ST_BG[r.status], color:ST_COLOR[r.status], borderRadius:6, padding:'2px 8px', fontSize:11, fontWeight:700 }}>{(r.status||'').replace('_',' ').replace(/\b\w/g,c=>c.toUpperCase())}</span></td>
+                    <td style={{ padding:'10px 12px' }}>
+                      {canEdit && <div style={{ display:'flex', gap:6 }}>
+                        <button onClick={()=>setEditing(r)} style={styles.iconBtn}><Pencil size={14}/></button>
+                        <button onClick={()=>{if(window.confirm('Delete?'))setTcChecklists(prev=>prev.filter(x=>x.id!==r.id))}} style={{ ...styles.iconBtn, color:'#B5453A' }}><Trash2 size={14}/></button>
+                      </div>}
+                    </td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ─── Project Handover ─────────────────────────────────────────────────────────
+function HandoverView({ handoverDocs, setHandoverDocs, siteProjects, customers, userRole }) {
+  const [editing, setEditing] = useState(null);
+  const canEdit = ['admin','manager'].includes(userRole);
+
+  const CHECKLIST_ITEMS = [
+    'As-built Drawings (Electrical)','As-built Drawings (Plumbing)','As-built Drawings (HVAC)',
+    'O&M Manuals','Test Certificates','Warranties / Guarantees','Spare Parts Handover',
+    'Training to Client','Final Inspection Sign-off','Authority Approvals / NOC',
+    'Snag List Cleared','Final RA Bill Approved','Retention Certificate'
+  ];
+
+  function blank() {
+    return {
+      id:'', projectId:'', customerId:'', handoverDate:'', dlpStart:'', dlpEnd:'',
+      clientRep:'', ourRep:'', checklist: CHECKLIST_ITEMS.map(item=>({ item, done:false, notes:'' })),
+      defects:[], notes:'', status:'in_progress'
+    };
+  }
+  function blankDefect() { return { id:crypto.randomUUID(), description:'', raisedDate:new Date().toISOString().slice(0,10), closedDate:'', status:'open' }; }
+  function save(rec) {
+    const data = { ...rec, id:rec.id||crypto.randomUUID(), updatedAt:Date.now() };
+    setHandoverDocs(prev=>prev.find(x=>x.id===data.id)?prev.map(x=>x.id===data.id?data:x):[...prev,data]);
+    setEditing(null);
+  }
+
+  if (editing) {
+    const r = editing;
+    const set = (k,v)=>setEditing(p=>({...p,[k]:v}));
+    const done = (r.checklist||[]).filter(c=>c.done).length;
+    const total = (r.checklist||[]).length;
+    const pct = total ? Math.round((done/total)*100) : 0;
+    return (
+      <div style={{ maxWidth:720, margin:'0 auto', padding:'24px 0' }}>
+        <div style={{ display:'flex', gap:12, alignItems:'center', marginBottom:20 }}>
+          <button onClick={()=>setEditing(null)} style={styles.ghostBtn}><X size={14}/> Back</button>
+          <h2 className="serif" style={styles.pageTitle}>{r.id?'Edit':'New'} Project Handover</h2>
+        </div>
+        <div style={{ background:'#fff', borderRadius:10, padding:24, border:'1px solid #EAE6DB', display:'flex', flexDirection:'column', gap:14 }}>
+          <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:12 }}>
+            <div style={styles.formGroup}><label style={styles.label}>Project</label>
+              <select value={r.projectId||''} onChange={e=>set('projectId',e.target.value)} style={styles.input}>
+                <option value=''>Select project</option>
+                {siteProjects.map(p=><option key={p.id} value={p.id}>{p.name}</option>)}
+              </select>
+            </div>
+            <div style={styles.formGroup}><label style={styles.label}>Client</label>
+              <select value={r.customerId||''} onChange={e=>set('customerId',e.target.value)} style={styles.input}>
+                <option value=''>Select client</option>
+                {customers.map(c=><option key={c.id} value={c.id}>{c.name}</option>)}
+              </select>
+            </div>
+            <div style={styles.formGroup}><label style={styles.label}>Handover Date</label><input type='date' value={r.handoverDate||''} onChange={e=>set('handoverDate',e.target.value)} style={styles.input}/></div>
+            <div style={styles.formGroup}><label style={styles.label}>Status</label>
+              <select value={r.status} onChange={e=>set('status',e.target.value)} style={styles.input}>
+                {['in_progress','handed_over','dlp','completed'].map(s=><option key={s} value={s}>{s.replace(/_/g,' ').replace(/\b\w/g,c=>c.toUpperCase())}</option>)}
+              </select>
+            </div>
+            <div style={styles.formGroup}><label style={styles.label}>DLP Start (Defects Liability)</label><input type='date' value={r.dlpStart||''} onChange={e=>set('dlpStart',e.target.value)} style={styles.input}/></div>
+            <div style={styles.formGroup}><label style={styles.label}>DLP End</label><input type='date' value={r.dlpEnd||''} onChange={e=>set('dlpEnd',e.target.value)} style={styles.input}/></div>
+            <div style={styles.formGroup}><label style={styles.label}>Our Representative</label><input value={r.ourRep||''} onChange={e=>set('ourRep',e.target.value)} style={styles.input}/></div>
+            <div style={styles.formGroup}><label style={styles.label}>Client Representative</label><input value={r.clientRep||''} onChange={e=>set('clientRep',e.target.value)} style={styles.input}/></div>
+          </div>
+          {/* Handover Checklist */}
+          <div>
+            <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', marginBottom:8 }}>
+              <div style={{ fontSize:12, fontWeight:700, color:'#1E2A4A', textTransform:'uppercase' }}>Handover Checklist</div>
+              <div style={{ fontSize:12, color:'#1a6b30', fontWeight:600 }}>{done}/{total} done ({pct}%)</div>
+            </div>
+            <div style={{ background:'#F8F7F4', borderRadius:8, padding:12 }}>
+              {(r.checklist||[]).map((c,i)=>(
+                <div key={c.item} style={{ display:'flex', gap:10, alignItems:'center', padding:'6px 0', borderBottom:i<(r.checklist.length-1)?'1px solid #EAE6DB':'none' }}>
+                  <input type='checkbox' checked={c.done} onChange={e=>set('checklist',r.checklist.map((x,j)=>j===i?{...x,done:e.target.checked}:x))} style={{ width:16, height:16, accentColor:'#1E2A4A', flexShrink:0 }}/>
+                  <span style={{ flex:1, fontSize:13, color:c.done?'#888':'#333', textDecoration:c.done?'line-through':'none' }}>{c.item}</span>
+                  <input value={c.notes||''} onChange={e=>set('checklist',r.checklist.map((x,j)=>j===i?{...x,notes:e.target.value}:x))} placeholder='Notes...' style={{ ...styles.input, margin:0, width:160, fontSize:11 }}/>
+                </div>
+              ))}
+            </div>
+          </div>
+          {/* DLP Defects */}
+          <div>
+            <div style={{ fontSize:12, fontWeight:700, color:'#1E2A4A', textTransform:'uppercase', marginBottom:8 }}>DLP Defects Log</div>
+            {(r.defects||[]).map((d,i)=>(
+              <div key={d.id} style={{ display:'flex', gap:8, alignItems:'center', marginBottom:6, background:'#F8F7F4', borderRadius:6, padding:'6px 8px' }}>
+                <input value={d.description} onChange={e=>set('defects',r.defects.map((x,j)=>j===i?{...x,description:e.target.value}:x))} style={{ ...styles.input, margin:0, flex:2, fontSize:12 }} placeholder='Defect description'/>
+                <input type='date' value={d.raisedDate||''} onChange={e=>set('defects',r.defects.map((x,j)=>j===i?{...x,raisedDate:e.target.value}:x))} style={{ ...styles.input, margin:0, width:130, fontSize:12 }}/>
+                <select value={d.status} onChange={e=>set('defects',r.defects.map((x,j)=>j===i?{...x,status:e.target.value}:x))} style={{ ...styles.input, margin:0, width:90, fontSize:12 }}>
+                  <option value='open'>Open</option><option value='closed'>Closed</option>
+                </select>
+                <button onClick={()=>set('defects',r.defects.filter((_,j)=>j!==i))} style={{ ...styles.iconBtn, color:'#B5453A' }}><Trash2 size={13}/></button>
+              </div>
+            ))}
+            <button onClick={()=>set('defects',[...(r.defects||[]),blankDefect()])} style={styles.ghostBtn}><Plus size={13}/> Log Defect</button>
+          </div>
+          <div style={styles.formGroup}><label style={styles.label}>Notes</label><textarea value={r.notes||''} onChange={e=>set('notes',e.target.value)} style={{ ...styles.input, height:60 }}/></div>
+          <div style={{ display:'flex', justifyContent:'flex-end', gap:10 }}>
+            <button onClick={()=>setEditing(null)} style={styles.ghostBtn}>Cancel</button>
+            <button onClick={()=>save(r)} style={styles.primaryBtn}>Save Handover</button>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  const ST_COLOR = { in_progress:'#0a58ca', handed_over:'#856404', dlp:'#C9A24B', completed:'#1a6b30' };
+  const ST_BG    = { in_progress:'#cfe2ff', handed_over:'#fff3cd', dlp:'#FFF8E7', completed:'#d4edda' };
+  const list = [...handoverDocs].sort((a,b)=>b.handoverDate>a.handoverDate?1:-1);
+  return (
+    <div style={{ padding:'24px 32px' }}>
+      <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', marginBottom:20 }}>
+        <h2 className="serif" style={styles.pageTitle}>Project Handover & DLP</h2>
+        {canEdit && <button onClick={()=>setEditing(blank())} style={styles.primaryBtn}><Plus size={15}/> New Handover</button>}
+      </div>
+      {list.length===0 ? <div style={{ textAlign:'center', padding:60, color:'#888' }}>No handover records yet.</div> : (
+        <div style={{ background:'#fff', borderRadius:10, border:'1px solid #EAE6DB', overflow:'hidden' }}>
+          <table style={{ width:'100%', borderCollapse:'collapse', fontSize:13 }}>
+            <thead><tr style={{ background:'#F8F7F4' }}>
+              {['Project','Client','Handover Date','Checklist','DLP End','Open Defects','Status',''].map(h=><th key={h} style={{ padding:'10px 12px', textAlign:'left', fontSize:11, fontWeight:700, color:'#888', textTransform:'uppercase' }}>{h}</th>)}
+            </tr></thead>
+            <tbody>
+              {list.map(r=>{
+                const proj = siteProjects.find(p=>p.id===r.projectId);
+                const client = customers.find(c=>c.id===r.customerId);
+                const done = (r.checklist||[]).filter(c=>c.done).length;
+                const total = (r.checklist||[]).length;
+                const openDefects = (r.defects||[]).filter(d=>d.status==='open').length;
+                const dlpExpired = r.dlpEnd && r.dlpEnd < new Date().toISOString().slice(0,10);
+                return (
+                  <tr key={r.id} style={{ borderBottom:'1px solid #F0ECE5' }}>
+                    <td style={{ padding:'10px 12px', fontWeight:600 }}>{proj?.name||'—'}</td>
+                    <td style={{ padding:'10px 12px', color:'#555' }}>{client?.name||'—'}</td>
+                    <td style={{ padding:'10px 12px', color:'#555' }}>{r.handoverDate||'—'}</td>
+                    <td style={{ padding:'10px 12px' }}><span style={{ fontSize:12 }}>{done}/{total}</span> <span style={{ fontSize:11, color:done===total?'#1a6b30':'#856404', fontWeight:600 }}>{done===total?'✓ Complete':'in progress'}</span></td>
+                    <td style={{ padding:'10px 12px', color:dlpExpired?'#1a6b30':'#555' }}>{r.dlpEnd||'—'}</td>
+                    <td style={{ padding:'10px 12px' }}>{openDefects>0?<span style={{ background:'#f8d7da', color:'#842029', borderRadius:5, padding:'1px 8px', fontSize:11, fontWeight:700 }}>{openDefects} open</span>:'—'}</td>
+                    <td style={{ padding:'10px 12px' }}><span style={{ background:ST_BG[r.status]||'#f0ece5', color:ST_COLOR[r.status]||'#555', borderRadius:6, padding:'2px 8px', fontSize:11, fontWeight:700 }}>{(r.status||'').replace(/_/g,' ').replace(/\b\w/g,c=>c.toUpperCase())}</span></td>
+                    <td style={{ padding:'10px 12px' }}>
+                      {canEdit && <div style={{ display:'flex', gap:6 }}>
+                        <button onClick={()=>setEditing(r)} style={styles.iconBtn}><Pencil size={14}/></button>
+                        <button onClick={()=>{if(window.confirm('Delete?'))setHandoverDocs(prev=>prev.filter(x=>x.id!==r.id))}} style={{ ...styles.iconBtn, color:'#B5453A' }}><Trash2 size={14}/></button>
+                      </div>}
+                    </td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ─── MIS / Management Review ─────────────────────────────────────────────────
+function MISView({ productionOrders, pdvs, capaRecords, internalAudits, vendorEvals, vendors, documents, stockLedger, items, employees, businessInfo }) {
+  const now = new Date();
+  const thisMonth = now.toISOString().slice(0,7);
+  const lastMonth = new Date(now.getFullYear(), now.getMonth()-1, 1).toISOString().slice(0,7);
+  const [month, setMonth] = useState(thisMonth);
+
+  // ── helpers ──
+  function inMonth(dateStr, m) { return (dateStr||'').startsWith(m); }
+
+  // Production
+  const ordersThisMonth = productionOrders.filter(o => inMonth(o.startDate||o.createdAt?.toString()?.slice(0,10), month));
+  const completed = ordersThisMonth.filter(o => o.status === 'completed' || o.status === 'failed');
+  const failed    = ordersThisMonth.filter(o => o.status === 'failed');
+  const pdvsMonth = pdvs.filter(p => inMonth(p.date, month));
+  const passRate  = completed.length ? Math.round(((completed.length - failed.length) / completed.length) * 100) : null;
+
+  // CAPA
+  const capaOpen   = capaRecords.filter(c => c.status !== 'closed');
+  const capaMonth  = capaRecords.filter(c => inMonth(c.date, month));
+  const capaBySource = {};
+  capaRecords.forEach(c => { capaBySource[c.source] = (capaBySource[c.source]||0)+1; });
+
+  // Audits
+  const auditsThisMonth  = internalAudits.filter(a => inMonth(a.scheduledDate, month));
+  const allFindings      = internalAudits.flatMap(a => a.findings||[]);
+  const openNCs          = allFindings.filter(f => f.type !== 'observation' && !f.capaRaised);
+
+  // Vendor
+  const approvedVendors    = vendorEvals.filter(v => v.status === 'approved').length;
+  const conditionalVendors = vendorEvals.filter(v => v.status === 'conditional').length;
+  const rejectedVendors    = vendorEvals.filter(v => v.status === 'rejected').length;
+  const overdueVendors     = vendorEvals.filter(v => v.nextReviewDate && v.nextReviewDate < now.toISOString().slice(0,10)).length;
+
+  // Sales docs
+  const invoices = (documents||[]).filter(d => d.type === 'invoice' && inMonth(d.date, month));
+  const invoiceTotal = invoices.reduce((s,d) => s + (parseFloat(d.total)||0), 0);
+
+  // Low stock
+  const lowStock = items.filter(i => i.minStock && (i.currentStock||0) < parseFloat(i.minStock||0));
+
+  // Month options (last 12)
+  const months = Array.from({length:12},(_,i)=>{
+    const d = new Date(now.getFullYear(), now.getMonth()-i, 1);
+    return d.toISOString().slice(0,7);
+  });
+
+  function StatBox({ label, value, sub, color='#1E2A4A', bg='#F8F7F4', warn }) {
+    return (
+      <div style={{ background: warn ? '#FFF8F7' : bg, border: `1px solid ${warn ? '#FBEAE7' : '#EAE6DB'}`, borderRadius:10, padding:'16px 20px', minWidth:140 }}>
+        <div style={{ fontSize:11, color:'#888', fontWeight:600, textTransform:'uppercase', letterSpacing:'.05em', marginBottom:6 }}>{label}</div>
+        <div style={{ fontSize:28, fontWeight:700, color: warn ? '#B5453A' : color, lineHeight:1 }}>{value}</div>
+        {sub && <div style={{ fontSize:11, color:'#888', marginTop:4 }}>{sub}</div>}
+      </div>
+    );
+  }
+
+  function SectionHead({ children }) {
+    return <div style={{ fontSize:12, fontWeight:800, color:'#1E2A4A', textTransform:'uppercase', letterSpacing:'.07em', borderBottom:'2px solid #EAE6DB', paddingBottom:6, marginTop:28, marginBottom:14 }}>{children}</div>;
+  }
+
+  return (
+    <div style={{ padding:'24px 32px', maxWidth:900 }}>
+      {/* Header */}
+      <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', marginBottom:24 }}>
+        <div>
+          <h2 className="serif" style={styles.pageTitle}>Management Review — MIS</h2>
+          <div style={{ fontSize:12, color:'#888' }}>{businessInfo?.name || 'Company'} · ISO 9.3 Management Review Input</div>
+        </div>
+        <select value={month} onChange={e=>setMonth(e.target.value)} style={{ ...styles.input, width:'auto', fontSize:13, padding:'6px 12px' }}>
+          {months.map(m=><option key={m} value={m}>{new Date(m+'-01').toLocaleString('default',{month:'long',year:'numeric'})}</option>)}
+        </select>
+      </div>
+
+      {/* KPI Cards */}
+      <SectionHead>Production KPIs</SectionHead>
+      <div style={{ display:'flex', flexWrap:'wrap', gap:12 }}>
+        <StatBox label="Orders (month)" value={ordersThisMonth.length} sub="production orders started"/>
+        <StatBox label="PDVs Issued" value={pdvsMonth.length} sub="QA approved"/>
+        <StatBox label="QA Pass Rate" value={passRate !== null ? `${passRate}%` : '—'} sub={`${failed.length} failed`} warn={passRate !== null && passRate < 90}/>
+        <StatBox label="Low Stock Items" value={lowStock.length} warn={lowStock.length > 0} sub="below min stock"/>
+      </div>
+
+      {/* CAPA Summary */}
+      <SectionHead>CAPA Summary (ISO 10.2)</SectionHead>
+      <div style={{ display:'flex', flexWrap:'wrap', gap:12, marginBottom:16 }}>
+        <StatBox label="Open CAPAs" value={capaOpen.length} warn={capaOpen.length > 0} sub="not yet closed"/>
+        <StatBox label="Raised This Month" value={capaMonth.length} sub={month}/>
+        <StatBox label="Total CAPAs" value={capaRecords.length}/>
+      </div>
+      {Object.keys(capaBySource).length > 0 && (
+        <div style={{ background:'#F8F7F4', borderRadius:8, padding:14, border:'1px solid #EAE6DB' }}>
+          <div style={{ fontSize:12, fontWeight:600, color:'#555', marginBottom:8 }}>CAPA by Source</div>
+          <div style={{ display:'flex', flexWrap:'wrap', gap:8 }}>
+            {Object.entries(capaBySource).map(([src,count])=>(
+              <span key={src} style={{ background:'#fff', border:'1px solid #EAE6DB', borderRadius:6, padding:'3px 10px', fontSize:12 }}>
+                {src}: <strong>{count}</strong>
+              </span>
+            ))}
+          </div>
+        </div>
+      )}
+      {capaOpen.length > 0 && (
+        <div style={{ marginTop:12, background:'#fff', borderRadius:8, border:'1px solid #EAE6DB', overflow:'hidden' }}>
+          <table style={{ width:'100%', borderCollapse:'collapse', fontSize:12 }}>
+            <thead><tr style={{ background:'#F8F7F4' }}>
+              {['CAR No.','Source','Description','Responsibility','Target','Status'].map(h=><th key={h} style={{ padding:'8px 12px', textAlign:'left', fontSize:11, fontWeight:700, color:'#888', textTransform:'uppercase' }}>{h}</th>)}
+            </tr></thead>
+            <tbody>
+              {capaOpen.map(c=>(
+                <tr key={c.id} style={{ borderTop:'1px solid #F0ECE5' }}>
+                  <td style={{ padding:'8px 12px', fontWeight:600 }}>{c.number}</td>
+                  <td style={{ padding:'8px 12px', color:'#555' }}>{c.source}</td>
+                  <td style={{ padding:'8px 12px', color:'#333', maxWidth:200, overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap' }}>{c.description||'—'}</td>
+                  <td style={{ padding:'8px 12px', color:'#555' }}>{c.responsibility||'—'}</td>
+                  <td style={{ padding:'8px 12px', color: c.targetDate && c.targetDate < now.toISOString().slice(0,10) ? '#B5453A' : '#555', fontWeight: c.targetDate && c.targetDate < now.toISOString().slice(0,10) ? 700 : 400 }}>{c.targetDate||'—'}</td>
+                  <td style={{ padding:'8px 12px' }}>
+                    <span style={{ background: c.status==='open'?'#f8d7da':c.status==='in_progress'?'#fff3cd':'#cfe2ff', color: c.status==='open'?'#842029':c.status==='in_progress'?'#856404':'#0a58ca', borderRadius:5, padding:'1px 7px', fontSize:11, fontWeight:700 }}>
+                      {c.status.replace('_',' ').replace(/\b\w/g,x=>x.toUpperCase())}
+                    </span>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+
+      {/* Internal Audit */}
+      <SectionHead>Internal Audit (ISO 9.2)</SectionHead>
+      <div style={{ display:'flex', flexWrap:'wrap', gap:12, marginBottom:16 }}>
+        <StatBox label="Total Audits" value={internalAudits.length}/>
+        <StatBox label="This Month" value={auditsThisMonth.length} sub={month}/>
+        <StatBox label="Open NCs" value={openNCs.length} warn={openNCs.length > 0} sub="no CAPA raised yet"/>
+        <StatBox label="Completed" value={internalAudits.filter(a=>a.status==='completed'||a.status==='closed').length}/>
+      </div>
+      {openNCs.length > 0 && (
+        <div style={{ background:'#FFF8F7', border:'1px solid #FBEAE7', borderRadius:8, padding:12 }}>
+          <div style={{ fontSize:12, fontWeight:700, color:'#B5453A', marginBottom:6 }}>⚠ Open Non-Conformances without CAPA</div>
+          {openNCs.slice(0,5).map(f=>(
+            <div key={f.id} style={{ fontSize:12, color:'#555', padding:'4px 0', borderBottom:'1px solid #F0ECE5' }}>
+              <strong>{f.type==='major_nc'?'Major NC':'Minor NC'}</strong> — {f.clause}: {f.description}
+            </div>
+          ))}
+          {openNCs.length > 5 && <div style={{ fontSize:11, color:'#888', marginTop:4 }}>+{openNCs.length-5} more</div>}
+        </div>
+      )}
+
+      {/* Vendor */}
+      <SectionHead>Vendor Evaluation Status</SectionHead>
+      <div style={{ display:'flex', flexWrap:'wrap', gap:12 }}>
+        <StatBox label="Approved" value={approvedVendors} color='#1a6b30' bg='#d4edda'/>
+        <StatBox label="Conditional" value={conditionalVendors} color='#856404' bg='#fff3cd'/>
+        <StatBox label="Rejected" value={rejectedVendors} color='#842029' bg='#f8d7da'/>
+        <StatBox label="Overdue Review" value={overdueVendors} warn={overdueVendors>0} sub="past next review date"/>
+        <StatBox label="Not Evaluated" value={Math.max(0, vendors.length - vendorEvals.length)} sub={`of ${vendors.length} vendors`}/>
+      </div>
+
+      {/* Sales snapshot */}
+      <SectionHead>Sales Snapshot — {new Date(month+'-01').toLocaleString('default',{month:'long',year:'numeric'})}</SectionHead>
+      <div style={{ display:'flex', flexWrap:'wrap', gap:12 }}>
+        <StatBox label="Invoices" value={invoices.length} sub="issued this month"/>
+        <StatBox label="Invoice Value" value={invoiceTotal.toLocaleString(undefined,{maximumFractionDigits:0})} sub={businessInfo?.currency||''}/>
+      </div>
+
+      {/* Footer note */}
+      <div style={{ marginTop:32, padding:'12px 16px', background:'#F8F7F4', borderRadius:8, fontSize:12, color:'#888', border:'1px solid #EAE6DB' }}>
+        📋 ISO 9.3 — This review covers: quality objectives, process performance, product conformity, NC/CAPA status, audit results, supplier performance, and resource adequacy.
+      </div>
+    </div>
+  );
+}
+
 // ─── Vendor Evaluation ────────────────────────────────────────────────────────
 function VendorEvalView({ vendorEvals, setVendorEvals, vendors, userRole }) {
   const [editing, setEditing] = useState(null);
@@ -12717,6 +14691,19 @@ export default function App() {
   const [capaRecords,      _setCapa]   = useState([]);
   const [internalAudits,   _setAudits] = useState([]);
   const [vendorEvals,      _setVE]     = useState([]);
+  // Phase 2 — MEP Suite
+  const [tenders,          _setTend]   = useState([]);
+  // Phase 3 — FM/AMC
+  const [assets,           _setAssets] = useState([]);
+  const [pmSchedules,      _setPMS]    = useState([]);
+  const [fmWorkOrders,     _setFMWO]   = useState([]);
+  const [amcContracts,     _setAMC]    = useState([]);
+  const [fmSpareParts,     _setFMSP]   = useState([]);
+  const [subcontractors,   _setSubs]   = useState([]);
+  const [hseRecords,       _setHSE]    = useState({ incidents:[], toolboxTalks:[], permits:[] });
+  const [raBillings,       _setRAB]    = useState([]);
+  const [tcChecklists,     _setTC]     = useState([]);
+  const [handoverDocs,     _setHDocs]  = useState([]);
   const [notifications,    setNotifications] = useState([]);
 
   // ── Auth ────────────────────────────────────────────────────────────────────
@@ -12786,6 +14773,17 @@ export default function App() {
       _setCapa(data.capaRecords || []);
       _setAudits(data.internalAudits || []);
       _setVE(data.vendorEvals || []);
+      _setTend(data.tenders || []);
+      _setSubs(data.subcontractors || []);
+      _setAssets(data.assets || []);
+      _setPMS(data.pmSchedules || []);
+      _setFMWO(data.fmWorkOrders || []);
+      _setAMC(data.amcContracts || []);
+      _setFMSP(data.fmSpareParts || []);
+      _setHSE(data.hseRecords || { incidents:[], toolboxTalks:[], permits:[] });
+      _setRAB(data.raBillings || []);
+      _setTC(data.tcChecklists || []);
+      _setHDocs(data.handoverDocs || []);
     });
     return unsub;
   }, [ownerUid]);
@@ -12848,6 +14846,17 @@ export default function App() {
   const setCapaRecords      = mkSet(_setCapa,  'capaRecords');
   const setInternalAudits   = mkSet(_setAudits,'internalAudits');
   const setVendorEvals      = mkSet(_setVE,    'vendorEvals');
+  const setTenders          = mkSet(_setTend,  'tenders');
+  const setSubcontractors   = mkSet(_setSubs,  'subcontractors');
+  const setHseRecords       = mkSet(_setHSE,   'hseRecords');
+  const setRaBillings       = mkSet(_setRAB,   'raBillings');
+  const setTcChecklists     = mkSet(_setTC,    'tcChecklists');
+  const setHandoverDocs     = mkSet(_setHDocs, 'handoverDocs');
+  const setAssets           = mkSet(_setAssets,'assets');
+  const setPmSchedules      = mkSet(_setPMS,   'pmSchedules');
+  const setFmWorkOrders     = mkSet(_setFMWO,  'fmWorkOrders');
+  const setAmcContracts     = mkSet(_setAMC,   'amcContracts');
+  const setFmSpareParts     = mkSet(_setFMSP,  'fmSpareParts');
 
   // ── Document number helpers ──────────────────────────────────────────────────
   function getFY(dateStr) {
@@ -13277,6 +15286,8 @@ export default function App() {
             items={items}
             userRole={userRole}
             businessInfo={businessInfo}
+            capaRecords={capaRecords}
+            setCapaRecords={setCapaRecords}
           />
         );
       case 'capa':
@@ -13305,6 +15316,82 @@ export default function App() {
             vendorEvals={vendorEvals}
             setVendorEvals={setVendorEvals}
             vendors={vendors}
+            userRole={userRole}
+          />
+        );
+      case 'mis':
+        return (
+          <MISView
+            productionOrders={productionOrders}
+            pdvs={pdvs}
+            capaRecords={capaRecords}
+            internalAudits={internalAudits}
+            vendorEvals={vendorEvals}
+            vendors={vendors}
+            documents={documents}
+            stockLedger={stockLedger}
+            items={items}
+            employees={employees}
+            businessInfo={businessInfo}
+          />
+        );
+      case 'fmkpi':
+        return (
+          <FMKPIView
+            assets={assets}
+            pmSchedules={pmSchedules}
+            fmWorkOrders={fmWorkOrders}
+            amcContracts={amcContracts}
+            fmSpareParts={fmSpareParts}
+            businessInfo={businessInfo}
+          />
+        );
+      case 'assetregister':
+        return (
+          <AssetRegisterView
+            assets={assets}
+            setAssets={setAssets}
+            userRole={userRole}
+          />
+        );
+      case 'pmschedules':
+        return (
+          <PMScheduleView
+            pmSchedules={pmSchedules}
+            setPmSchedules={setPmSchedules}
+            assets={assets}
+            fmWorkOrders={fmWorkOrders}
+            setFmWorkOrders={setFmWorkOrders}
+            userRole={userRole}
+          />
+        );
+      case 'fmworkorders':
+        return (
+          <FMWorkOrderView
+            fmWorkOrders={fmWorkOrders}
+            setFmWorkOrders={setFmWorkOrders}
+            assets={assets}
+            fmSpareParts={fmSpareParts}
+            setFmSpareParts={setFmSpareParts}
+            userRole={userRole}
+          />
+        );
+      case 'amccontracts':
+        return (
+          <AMCContractView
+            amcContracts={amcContracts}
+            setAmcContracts={setAmcContracts}
+            customers={customers}
+            assets={assets}
+            userRole={userRole}
+          />
+        );
+      case 'fmspareparts':
+        return (
+          <FMSparePartsView
+            fmSpareParts={fmSpareParts}
+            setFmSpareParts={setFmSpareParts}
+            assets={assets}
             userRole={userRole}
           />
         );
@@ -13438,6 +15525,65 @@ export default function App() {
             employees={employees}
             siteActivities={siteActivities}
             progressUpdates={progressUpdates}
+            userRole={userRole}
+          />
+        );
+      case 'tender':
+        return (
+          <TenderView
+            tenders={tenders}
+            setTenders={setTenders}
+            customers={customers}
+            siteProjects={siteProjects}
+            userRole={userRole}
+          />
+        );
+      case 'subcontractors':
+        return (
+          <SubcontractorView
+            subcontractors={subcontractors}
+            setSubcontractors={setSubcontractors}
+            siteProjects={siteProjects}
+            userRole={userRole}
+          />
+        );
+      case 'hse':
+        return (
+          <HSEView
+            hseRecords={hseRecords}
+            setHseRecords={setHseRecords}
+            siteProjects={siteProjects}
+            userRole={userRole}
+          />
+        );
+      case 'rabilling':
+        return (
+          <RABillingView
+            raBillings={raBillings}
+            setRaBillings={setRaBillings}
+            siteProjects={siteProjects}
+            customers={customers}
+            tenders={tenders}
+            userRole={userRole}
+            businessInfo={businessInfo}
+          />
+        );
+      case 'tcommissioning':
+        return (
+          <TCView
+            tcChecklists={tcChecklists}
+            setTcChecklists={setTcChecklists}
+            siteProjects={siteProjects}
+            userRole={userRole}
+          />
+        );
+      case 'handover':
+        return (
+          <HandoverView
+            handoverDocs={handoverDocs}
+            setHandoverDocs={setHandoverDocs}
+            siteProjects={siteProjects}
+            customers={customers}
             userRole={userRole}
           />
         );
