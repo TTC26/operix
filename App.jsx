@@ -2418,7 +2418,7 @@ function ActivityColumn({ bizType, label, color, icon, docs, stats, customers, v
   );
 }
 
-function Dashboard({ stats, documents, customers, vendors, businessInfo, startNewDoc, openDoc, setView, vouchers = [], pettyCash = {}, productionOrders = [], rawMaterials = [], items = [], companyType = 'trading', activeTypes = ['trading'], isMultiBiz = false, siteProjects = [], siteAttendance = [] }) {
+function Dashboard({ stats, documents, customers, vendors, businessInfo, startNewDoc, openDoc, setView, vouchers = [], pettyCash = {}, productionOrders = [], rawMaterials = [], items = [], companyType = 'trading', activeTypes = ['trading'], isMultiBiz = false, siteProjects = [], siteAttendance = [], serviceOrders = [] }) {
   const allowedTypes = DASHBOARD_DOC_TYPES[companyType] || Object.keys(DOC_TYPES);
   const recent = [...documents].sort((a, b) => b.createdAt - a.createdAt).slice(0, 5);
   const showProduction = activeTypes.includes('manufacturing');
@@ -2505,6 +2505,15 @@ function Dashboard({ stats, documents, customers, vendors, businessInfo, startNe
             <StatCard label="Customers" value={customers.length} accent="#1E2A4A" sub="registered" />
           </div>
 
+          {/* ── Department Overview Chart ── */}
+          <DeptChart
+            documents={documents}
+            productionOrders={productionOrders}
+            serviceOrders={serviceOrders}
+            activeTypes={activeTypes}
+            cur={cur}
+          />
+
           {showTrade && <>
             <div style={styles.dashSection}>Inventory</div>
             <div style={styles.statGrid}>
@@ -2541,6 +2550,179 @@ function Dashboard({ stats, documents, customers, vendors, businessInfo, startNe
           )}
         </>
       )}
+    </div>
+  );
+}
+
+// ─── Department Overview Chart ───────────────────────────────────────────────
+function DeptChart({ documents = [], productionOrders = [], serviceOrders = [], activeTypes = ['trading'], cur = v => v }) {
+  const [tab, setTab] = React.useState('sales');
+  const [chartType, setChartType] = React.useState('bar');
+
+  const months = React.useMemo(() => {
+    const arr = [];
+    for (let i = 5; i >= 0; i--) {
+      const d = new Date();
+      d.setDate(1);
+      d.setMonth(d.getMonth() - i);
+      arr.push({
+        key: `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`,
+        label: d.toLocaleString('default', { month: 'short' }),
+      });
+    }
+    return arr;
+  }, []);
+
+  const tabs = [
+    { id: 'sales',      label: 'Sales',      emoji: '💰', color: '#1E2A4A', show: true },
+    { id: 'purchase',   label: 'Purchase',   emoji: '🛒', color: '#6B5BAE', show: activeTypes.some(t => ['trading', 'manufacturing'].includes(t)) },
+    { id: 'production', label: 'Production', emoji: '🏭', color: '#C9A24B', show: activeTypes.includes('manufacturing') },
+    { id: 'service',    label: 'Service',    emoji: '🔧', color: '#1E7A9A', show: activeTypes.some(t => ['service', 'fmamc'].includes(t)) },
+  ].filter(t => t.show);
+
+  const activeTab = tabs.find(t => t.id === tab) || tabs[0];
+  const safeTab = activeTab.id;
+
+  function mKey(s) { return (s || '').slice(0, 7); }
+  function docAmt(d) { return (d.items || []).reduce((s, it) => s + (parseFloat(it.qty) || 0) * (parseFloat(it.rate) || 0), 0); }
+
+  const data = React.useMemo(() => {
+    switch (safeTab) {
+      case 'sales':
+        return months.map(m => ({ label: m.label, value: documents.filter(d => d.type === 'invoice' && mKey(d.date) === m.key).reduce((s, d) => s + docAmt(d), 0) }));
+      case 'purchase':
+        return months.map(m => ({ label: m.label, value: documents.filter(d => d.type === 'purchase' && mKey(d.date) === m.key).reduce((s, d) => s + docAmt(d), 0) }));
+      case 'production':
+        return months.map(m => ({ label: m.label, value: productionOrders.filter(p => mKey(p.plannedDate || p.date || '') === m.key).length }));
+      case 'service':
+        return months.map(m => ({ label: m.label, value: serviceOrders.filter(s => mKey(s.date || s.createdAt || '') === m.key).length }));
+      default:
+        return months.map(m => ({ label: m.label, value: 0 }));
+    }
+  }, [safeTab, documents, productionOrders, serviceOrders, months]);
+
+  const isAmount = safeTab === 'sales' || safeTab === 'purchase';
+  const maxVal = Math.max(...data.map(d => d.value), 1);
+  const total6m = data.reduce((s, d) => s + d.value, 0);
+  const peak = data.reduce((a, b) => b.value > a.value ? b : a, data[0]);
+
+  // SVG layout
+  const W = 560, H = 160, PL = 4, PR = 4, PT = 12, PB = 24;
+  const chartW = W - PL - PR;
+  const chartH = H - PT - PB;
+  const n = data.length;
+  const slotW = chartW / n;
+  const barW = slotW * 0.45;
+
+  const pts = data.map((d, i) => ({
+    x: PL + i * slotW + slotW / 2,
+    y: PT + chartH - (maxVal > 0 ? (d.value / maxVal) * chartH : 0),
+    value: d.value,
+    label: d.label,
+  }));
+
+  const color = activeTab.color;
+
+  return (
+    <div style={{ background: '#fff', border: '1px solid #EDEAE0', borderRadius: 14, padding: '20px 24px', marginBottom: 24 }}>
+      {/* Header row */}
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 14, flexWrap: 'wrap', gap: 8 }}>
+        <div className="serif" style={{ fontSize: 15, fontWeight: 700, color: '#1E2A4A' }}>Department Overview</div>
+        <div style={{ display: 'flex', gap: 5 }}>
+          {[['bar', '▮▮ Bar'], ['line', '〜 Line']].map(([ct, lbl]) => (
+            <button key={ct} onClick={() => setChartType(ct)}
+              style={{ padding: '4px 11px', borderRadius: 6, border: '1px solid #DDD', fontSize: 11, fontWeight: 600, cursor: 'pointer',
+                background: chartType === ct ? '#1E2A4A' : '#F8F6F2', color: chartType === ct ? '#fff' : '#666' }}>
+              {lbl}
+            </button>
+          ))}
+        </div>
+      </div>
+
+      {/* Tab pills */}
+      <div style={{ display: 'flex', gap: 6, marginBottom: 14, flexWrap: 'wrap' }}>
+        {tabs.map(t => (
+          <button key={t.id} onClick={() => setTab(t.id)}
+            style={{ padding: '5px 13px', borderRadius: 20, border: `1.5px solid ${tab === t.id ? t.color : '#DDD'}`,
+              fontSize: 12, fontWeight: 600, cursor: 'pointer',
+              background: tab === t.id ? t.color : '#fff', color: tab === t.id ? '#fff' : '#666' }}>
+            {t.emoji} {t.label}
+          </button>
+        ))}
+      </div>
+
+      {/* SVG Chart */}
+      <svg viewBox={`0 0 ${W} ${H}`} width="100%" style={{ display: 'block', overflow: 'visible' }}>
+        {/* Horizontal grid lines */}
+        {[0, 0.25, 0.5, 0.75, 1].map((f, i) => {
+          const y = PT + chartH * (1 - f);
+          return <line key={i} x1={PL} y1={y} x2={W - PR} y2={y}
+            stroke={f === 0 ? '#D8D4CC' : '#EDEAE0'} strokeWidth={f === 0 ? 1.5 : 0.8}
+            strokeDasharray={f === 0 ? 'none' : '5 4'} />;
+        })}
+
+        {chartType === 'bar' ? (
+          pts.map((pt, i) => (
+            <g key={i}>
+              <rect x={pt.x - barW / 2} y={pt.y} width={barW} height={PT + chartH - pt.y}
+                rx={3} fill={color} opacity={0.82} />
+              {pt.value > 0 && (
+                <text x={pt.x} y={pt.y - 4} textAnchor="middle" fontSize={8.5} fill={color} fontFamily="sans-serif" fontWeight="600">
+                  {isAmount ? (pt.value >= 100000 ? `${(pt.value/100000).toFixed(1)}L` : pt.value >= 1000 ? `${(pt.value/1000).toFixed(0)}K` : Math.round(pt.value)) : pt.value}
+                </text>
+              )}
+            </g>
+          ))
+        ) : (
+          <g>
+            {/* Area */}
+            <path d={`M ${pts[0].x},${PT + chartH} ${pts.map(p => `L ${p.x},${p.y}`).join(' ')} L ${pts[pts.length - 1].x},${PT + chartH} Z`}
+              fill={color} opacity={0.07} />
+            {/* Line */}
+            <polyline points={pts.map(p => `${p.x},${p.y}`).join(' ')}
+              fill="none" stroke={color} strokeWidth={2.5} strokeLinejoin="round" strokeLinecap="round" />
+            {/* Dots + value labels */}
+            {pts.map((pt, i) => (
+              <g key={i}>
+                <circle cx={pt.x} cy={pt.y} r={4} fill={color} stroke="#fff" strokeWidth={2} />
+                {pt.value > 0 && (
+                  <text x={pt.x} y={pt.y - 8} textAnchor="middle" fontSize={8.5} fill={color} fontFamily="sans-serif" fontWeight="600">
+                    {isAmount ? (pt.value >= 100000 ? `${(pt.value/100000).toFixed(1)}L` : pt.value >= 1000 ? `${(pt.value/1000).toFixed(0)}K` : Math.round(pt.value)) : pt.value}
+                  </text>
+                )}
+              </g>
+            ))}
+          </g>
+        )}
+
+        {/* X-axis month labels */}
+        {pts.map((pt, i) => (
+          <text key={i} x={pt.x} y={H - 5} textAnchor="middle" fontSize={10} fill="#999" fontFamily="sans-serif">
+            {pt.label}
+          </text>
+        ))}
+      </svg>
+
+      {/* Summary strip */}
+      <div style={{ display: 'flex', gap: 24, marginTop: 8, paddingTop: 10, borderTop: '1px solid #F0EDE4', flexWrap: 'wrap' }}>
+        <div style={{ fontSize: 12, color: '#888' }}>
+          6-month total:{' '}
+          <strong style={{ color: '#1E2A4A' }}>
+            {isAmount ? cur(total6m) : `${total6m} orders`}
+          </strong>
+        </div>
+        {peak && peak.value > 0 && (
+          <div style={{ fontSize: 12, color: '#888' }}>
+            Peak month:{' '}
+            <strong style={{ color: '#1E2A4A' }}>
+              {peak.label} ({isAmount ? cur(peak.value) : peak.value})
+            </strong>
+          </div>
+        )}
+        {total6m === 0 && (
+          <div style={{ fontSize: 12, color: '#BBB', fontStyle: 'italic' }}>No data yet for this period.</div>
+        )}
+      </div>
     </div>
   );
 }
@@ -5139,7 +5321,7 @@ function VoucherPrintHeader({ businessInfo, useLH }) {
         <div className="lh-pad-header" style={{ background: '#fff' }}>
           <img src={businessInfo.letterhead} alt="letterhead" style={{ width: '100%', display: 'block' }} />
         </div>
-        <div style={{ paddingTop: 215, paddingTop: 0 }} />
+        <div style={{ paddingTop: 0 }} />
       </>
     );
   }
@@ -5694,11 +5876,70 @@ function BinCard({ items, stockLedger, businessInfo }) {
   );
 }
 
+// ─── GRN Print ─────────────────────────────────────────────────
+function GRNPrint({ grn, businessInfo, onClose }) {
+  const useLH = !!(businessInfo?.letterhead);
+  return (
+    <div style={{ position:'fixed',inset:0,background:'#fff',zIndex:9999,overflowY:'auto' }}>
+      <div className="no-print" style={{ display:'flex',gap:8,padding:'12px 20px',borderBottom:'1px solid #EEE',background:'#F8F6F2' }}>
+        <button onClick={onClose} style={styles.ghostBtn}>← Back</button>
+        <button onClick={() => window.print()} style={styles.primaryBtn}><Printer size={14}/> Print / PDF</button>
+      </div>
+      <div className="print-area" style={{ maxWidth:800,margin:'0 auto',padding:'32px 40px',fontFamily:'Arial,sans-serif',fontSize:12 }}>
+        {useLH && (businessInfo?.letterhead || businessInfo?.letterheadFooter) && <LetterpadPrintStyle />}
+        {useLH && businessInfo?.letterhead && <img src={businessInfo.letterhead} alt="letterhead" style={{width:'100%',display:'block',marginBottom:8}} />}
+        {!useLH && (
+          <div style={{textAlign:'center',marginBottom:16}}>
+            <div style={{fontSize:16,fontWeight:700}}>{businessInfo?.name}</div>
+            <div style={{fontSize:11,color:'#555'}}>{businessInfo?.address}</div>
+          </div>
+        )}
+        <div style={{textAlign:'center',fontSize:16,fontWeight:700,letterSpacing:1,borderTop:'2px solid #1E2A4A',borderBottom:'2px solid #1E2A4A',padding:'6px 0',marginBottom:16}}>GOODS RECEIPT NOTE</div>
+        <div style={{display:'flex',justifyContent:'space-between',marginBottom:16}}>
+          <div><strong>GRN No:</strong> {grn.number}</div>
+          <div><strong>Date:</strong> {grn.date}</div>
+          <div><strong>Vendor:</strong> {grn.vendorName || '—'}</div>
+          <div><strong>PO Ref:</strong> {grn.poRef || grn.poId || '—'}</div>
+        </div>
+        <table style={{width:'100%',borderCollapse:'collapse',marginBottom:16}}>
+          <thead>
+            <tr style={{background:'#1E2A4A',color:'#fff'}}>
+              {['#','Item','Ordered Qty','Received Qty','QA Status','Remarks'].map(h => (
+                <th key={h} style={{padding:'6px 8px',textAlign:'left',fontSize:11}}>{h}</th>
+              ))}
+            </tr>
+          </thead>
+          <tbody>
+            {(grn.lines || []).map((l, i) => (
+              <tr key={i} style={{borderBottom:'1px solid #EEE',background: i%2===0?'#fff':'#F9F8F5'}}>
+                <td style={{padding:'5px 8px'}}>{i+1}</td>
+                <td style={{padding:'5px 8px'}}>{l.itemName || l.itemId}</td>
+                <td style={{padding:'5px 8px',textAlign:'center'}}>{l.orderedQty || 0}</td>
+                <td style={{padding:'5px 8px',textAlign:'center'}}>{l.receivedQty || 0}</td>
+                <td style={{padding:'5px 8px'}}>{l.qaStatus || '—'}</td>
+                <td style={{padding:'5px 8px'}}>{l.remarks || ''}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+        {grn.notes && <div style={{marginBottom:12}}><strong>Notes:</strong> {grn.notes}</div>}
+        <div style={{display:'flex',justifyContent:'space-between',marginTop:40,paddingTop:16,borderTop:'1px solid #CCC'}}>
+          <div style={{textAlign:'center',minWidth:120}}><div style={{borderTop:'1px solid #333',paddingTop:4,fontSize:11}}>Received By</div></div>
+          <div style={{textAlign:'center',minWidth:120}}><div style={{borderTop:'1px solid #333',paddingTop:4,fontSize:11}}>Checked By</div></div>
+          <div style={{textAlign:'center',minWidth:120}}><div style={{borderTop:'1px solid #333',paddingTop:4,fontSize:11}}>Authorised By</div></div>
+        </div>
+        {useLH && businessInfo?.letterheadFooter && <img src={businessInfo.letterheadFooter} alt="footer" style={{width:'100%',display:'block',marginTop:16}} />}
+      </div>
+    </div>
+  );
+}
+
 // ─── GRN ───────────────────────────────────────────────────────
 
 function GRNList({ grns, setGrns, documents, vendors, items, setStockLedger, userRole, businessInfo }) {
   const [showForm, setShowForm] = useState(false);
   const [editing, setEditing] = useState(null);
+  const [printGrn, setPrintGrn] = useState(null);
   const canEdit = userRole === 'admin' || userRole === 'manager' || userRole === 'inventory' || userRole === 'purchase';
 
   const poList = (documents || []).filter(d => d.type === 'purchase');
@@ -5795,6 +6036,7 @@ function GRNList({ grns, setGrns, documents, vendors, items, setStockLedger, use
                   </td>
                   <td style={styles.td}>
                     <div style={{ display: 'flex', gap: 6 }}>
+                      <button style={styles.iconBtn} onClick={() => setPrintGrn(g)} title="Print GRN"><Printer size={14} /></button>
                       {canEdit && g.status !== 'submitted' && <button style={styles.iconBtn} onClick={() => { setEditing(g); setShowForm(true); }}>✏️</button>}
                       {canEdit && g.status !== 'submitted' && <button style={{ ...styles.iconBtn, color: '#E08A7D' }} onClick={() => deleteGRN(g.id)}><Trash2 size={14} /></button>}
                     </div>
@@ -5809,6 +6051,7 @@ function GRNList({ grns, setGrns, documents, vendors, items, setStockLedger, use
       {showForm && (
         <GRNForm grn={editing} poList={poList} vendors={vendors} items={items} onSave={saveGRN} onClose={() => { setShowForm(false); setEditing(null); }} />
       )}
+      {printGrn && <GRNPrint grn={printGrn} businessInfo={businessInfo} onClose={() => setPrintGrn(null)} />}
     </div>
   );
 }
@@ -8604,9 +8847,75 @@ const PO_STATUS = {
   failed:      { label: 'QC Failed',   bg: '#FBEAE7', color: '#B5453A' },
 };
 
-function ProductionOrdersList({ productionOrders, setProductionOrders, boms, rawMaterials, setRawMaterials, userRole, ownerUid, setStockLedger, items = [] }) {
+function ProductionOrderPrint({ order, bom, businessInfo, onClose }) {
+  const useLH = !!(businessInfo?.letterhead);
+  const rmLines = bom?.materials || [];
+  return (
+    <div style={{ position:'fixed',inset:0,background:'#fff',zIndex:9999,overflowY:'auto' }}>
+      <div className="no-print" style={{ display:'flex',gap:8,padding:'12px 20px',borderBottom:'1px solid #EEE',background:'#F8F6F2' }}>
+        <button onClick={onClose} style={styles.ghostBtn}>← Back</button>
+        <button onClick={() => window.print()} style={styles.primaryBtn}><Printer size={14}/> Print / PDF</button>
+      </div>
+      <div className="print-area" style={{ maxWidth:800,margin:'0 auto',padding:'32px 40px',fontFamily:'Arial,sans-serif',fontSize:12 }}>
+        {useLH && (businessInfo?.letterhead || businessInfo?.letterheadFooter) && <LetterpadPrintStyle />}
+        {useLH && businessInfo?.letterhead && <img src={businessInfo.letterhead} alt="letterhead" style={{width:'100%',display:'block',marginBottom:8}} />}
+        {!useLH && (
+          <div style={{textAlign:'center',marginBottom:16}}>
+            <div style={{fontSize:16,fontWeight:700}}>{businessInfo?.name}</div>
+            <div style={{fontSize:11,color:'#555'}}>{businessInfo?.address}</div>
+          </div>
+        )}
+        <div style={{textAlign:'center',fontSize:16,fontWeight:700,letterSpacing:1,borderTop:'2px solid #1E2A4A',borderBottom:'2px solid #1E2A4A',padding:'6px 0',marginBottom:16}}>PRODUCTION ORDER</div>
+        <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:'8px 24px',marginBottom:16,padding:'12px 16px',background:'#F8F6F2',borderRadius:8}}>
+          <div><strong>Order No:</strong> {order.number}</div>
+          <div><strong>Date:</strong> {order.startDate || order.plannedDate || '—'}</div>
+          <div><strong>BOM / Product:</strong> {bom?.name || order.bomId}</div>
+          <div><strong>Quantity:</strong> {order.quantity} units</div>
+          {order.batchNumber && <div><strong>Batch No:</strong> {order.batchNumber}</div>}
+          <div><strong>Status:</strong> {(order.status || 'planned').replace(/_/g,' ')}</div>
+          {order.dueDate && <div><strong>Due Date:</strong> {order.dueDate}</div>}
+        </div>
+        {rmLines.length > 0 && (
+          <>
+            <div style={{fontWeight:700,marginBottom:8,color:'#1E2A4A'}}>Raw Material Requirements</div>
+            <table style={{width:'100%',borderCollapse:'collapse',marginBottom:16}}>
+              <thead>
+                <tr style={{background:'#1E2A4A',color:'#fff'}}>
+                  {['#','Material','Required Qty','Unit','Remarks'].map(h => (
+                    <th key={h} style={{padding:'6px 8px',textAlign:'left',fontSize:11}}>{h}</th>
+                  ))}
+                </tr>
+              </thead>
+              <tbody>
+                {rmLines.map((m, i) => (
+                  <tr key={i} style={{borderBottom:'1px solid #EEE',background:i%2===0?'#fff':'#F9F8F5'}}>
+                    <td style={{padding:'5px 8px'}}>{i+1}</td>
+                    <td style={{padding:'5px 8px'}}>{m.name || m.materialId}</td>
+                    <td style={{padding:'5px 8px',textAlign:'center'}}>{((m.qty||0)*(order.quantity||1)).toFixed(2)}</td>
+                    <td style={{padding:'5px 8px'}}>{m.unit || 'pcs'}</td>
+                    <td style={{padding:'5px 8px'}}>{m.remarks || ''}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </>
+        )}
+        {order.notes && <div style={{marginBottom:12}}><strong>Notes:</strong> {order.notes}</div>}
+        <div style={{display:'flex',justifyContent:'space-between',marginTop:40,paddingTop:16,borderTop:'1px solid #CCC'}}>
+          <div style={{textAlign:'center',minWidth:130}}><div style={{borderTop:'1px solid #333',paddingTop:4,fontSize:11}}>Prepared By</div></div>
+          <div style={{textAlign:'center',minWidth:130}}><div style={{borderTop:'1px solid #333',paddingTop:4,fontSize:11}}>Production Manager</div></div>
+          <div style={{textAlign:'center',minWidth:130}}><div style={{borderTop:'1px solid #333',paddingTop:4,fontSize:11}}>Authorised By</div></div>
+        </div>
+        {useLH && businessInfo?.letterheadFooter && <img src={businessInfo.letterheadFooter} alt="footer" style={{width:'100%',display:'block',marginTop:16}} />}
+      </div>
+    </div>
+  );
+}
+
+function ProductionOrdersList({ productionOrders, setProductionOrders, boms, rawMaterials, setRawMaterials, userRole, ownerUid, setStockLedger, items = [], businessInfo }) {
   const [creating, setCreating] = useState(false);
   const [editing, setEditing] = useState(null);
+  const [printOrder, setPrintOrder] = useState(null);
   const canCreate = userRole === 'admin' || userRole === 'manager' || userRole === 'sales' || userRole === 'purchase';
   const canApprove = userRole === 'admin';
 
@@ -8741,6 +9050,7 @@ function ProductionOrdersList({ productionOrders, setProductionOrders, boms, raw
                     → QA
                   </button>
                 )}
+                <button onClick={() => setPrintOrder(o)} style={styles.iconBtn} title="Print"><Printer size={14} /></button>
                 {o.approvalStatus !== 'submitted' && <button onClick={() => setEditing(o)} style={styles.iconBtn}><Pencil size={14} /></button>}
                 {o.approvalStatus !== 'submitted' && <button onClick={() => deleteOrder(o.id)} style={{ ...styles.iconBtn, color: '#B5453A' }}><Trash2 size={14} /></button>}
               </div>
@@ -8753,6 +9063,7 @@ function ProductionOrdersList({ productionOrders, setProductionOrders, boms, raw
           <ProductionOrderForm order={editing} boms={boms} items={items} onSave={(o) => { saveOrder(o); setCreating(false); setEditing(null); }} onClose={() => { setCreating(false); setEditing(null); }} />
         </Modal>
       )}
+      {printOrder && <ProductionOrderPrint order={printOrder} bom={boms.find(b => b.id === printOrder.bomId)} businessInfo={businessInfo} onClose={() => setPrintOrder(null)} />}
     </div>
   );
 }
@@ -13180,9 +13491,12 @@ function FMWorkOrderView({ fmWorkOrders, setFmWorkOrders, assets, fmSpareParts, 
     return { id:'', woNumber:`WO-${String(fmWorkOrders.length+1).padStart(4,'0')}`, type:'corrective', assetId:'', title:'', description:'', priority:'medium', raisedDate:today, dueDate:'', assignedTo:'', status:'open', completedDate:'', cost:0, sparesUsed:[], notes:'' };
   }
   function save(wo) {
-    const rec = { ...wo, id:wo.id||crypto.randomUUID(), updatedAt:Date.now() };
+    const rec = { ...wo, id:wo.id||crypto.randomUUID(), approvalStatus:wo.approvalStatus||'draft', approvalNote:wo.approvalNote||'', updatedAt:Date.now() };
     setFmWorkOrders(prev=>prev.find(x=>x.id===rec.id)?prev.map(x=>x.id===rec.id?rec:x):[...prev,rec]);
     setEditing(null);
+  }
+  function updateApproval(id, patch) {
+    setFmWorkOrders(prev=>prev.map(x=>x.id===id?{...x,approvalStatus:patch.status,approvalNote:patch.rejectionNote||''}:x));
   }
 
   if (editing) {
@@ -13285,8 +13599,10 @@ function FMWorkOrderView({ fmWorkOrders, setFmWorkOrders, assets, fmSpareParts, 
                     <td style={{ padding:'10px 12px' }}><span style={{ background:ST_BG[wo.status], color:ST_COLOR[wo.status], borderRadius:6, padding:'2px 8px', fontSize:11, fontWeight:700 }}>{wo.status.replace('_',' ').replace(/\b\w/g,c=>c.toUpperCase())}</span></td>
                     <td style={{ padding:'10px 12px' }}>
                       {canEdit && <div style={{ display:'flex', gap:6 }}>
-                        <button onClick={()=>setEditing(wo)} style={styles.iconBtn}><Pencil size={14}/></button>
-                        <button onClick={()=>{if(window.confirm('Delete?'))setFmWorkOrders(prev=>prev.filter(x=>x.id!==wo.id))}} style={{ ...styles.iconBtn, color:'#B5453A' }}><Trash2 size={14}/></button>
+                        <StatusBadge status={wo.approvalStatus||'draft'} />
+                        <ApprovalActions item={{ status:wo.approvalStatus||'draft', rejectionNote:wo.approvalNote||'' }} onUpdate={(patch)=>updateApproval(wo.id,patch)} userRole={userRole} compact />
+                        {wo.approvalStatus!=='submitted' && <button onClick={()=>setEditing(wo)} style={styles.iconBtn}><Pencil size={14}/></button>}
+                        {wo.approvalStatus!=='submitted' && <button onClick={()=>{if(window.confirm('Delete?'))setFmWorkOrders(prev=>prev.filter(x=>x.id!==wo.id))}} style={{ ...styles.iconBtn, color:'#B5453A' }}><Trash2 size={14}/></button>}
                       </div>}
                     </td>
                   </tr>
@@ -13317,9 +13633,12 @@ function AMCContractView({ amcContracts, setAmcContracts, customers, assets, use
     return { id:'', contractNo:n, customerId:'', title:'', startDate:'', endDate:'', value:0, taxRate:cc.defaultTaxRate||0, placeOfSupply:'', slaResponse:'4', slaPriority:'P2', coveredAssets:[], scope:'', billingCycle:'Annual', status:'active', notes:'' };
   }
   function save(c) {
-    const rec = { ...c, id:c.id||crypto.randomUUID(), updatedAt:Date.now() };
+    const rec = { ...c, id:c.id||crypto.randomUUID(), approvalStatus:c.approvalStatus||'draft', approvalNote:c.approvalNote||'', updatedAt:Date.now() };
     setAmcContracts(prev=>prev.find(x=>x.id===rec.id)?prev.map(x=>x.id===rec.id?rec:x):[...prev,rec]);
     setEditing(null);
+  }
+  function updateApproval(id, patch) {
+    setAmcContracts(prev=>prev.map(x=>x.id===id?{...x,approvalStatus:patch.status,approvalNote:patch.rejectionNote||''}:x));
   }
   function daysLeft(endDate) {
     if(!endDate) return null;
@@ -13446,8 +13765,10 @@ function AMCContractView({ amcContracts, setAmcContracts, customers, assets, use
                     <td style={{ padding:'10px 12px' }}><span style={{ background:ST_BG[c.status], color:ST_COLOR[c.status], borderRadius:6, padding:'2px 8px', fontSize:11, fontWeight:700 }}>{c.status.toUpperCase()}</span></td>
                     <td style={{ padding:'10px 12px' }}>
                       <div style={{ display:'flex', gap:6 }}>
+                        <StatusBadge status={c.approvalStatus||'draft'} />
+                        <ApprovalActions item={{ status:c.approvalStatus||'draft', rejectionNote:c.approvalNote||'' }} onUpdate={(patch)=>updateApproval(c.id,patch)} userRole={userRole} compact />
                         <button onClick={()=>setPrintDoc(c)} style={styles.iconBtn} title="Print"><Printer size={14}/></button>
-                        {canEdit && <><button onClick={()=>setEditing(c)} style={styles.iconBtn}><Pencil size={14}/></button>
+                        {canEdit && c.approvalStatus!=='submitted' && <><button onClick={()=>setEditing(c)} style={styles.iconBtn}><Pencil size={14}/></button>
                         <button onClick={()=>{if(window.confirm('Delete?'))setAmcContracts(prev=>prev.filter(x=>x.id!==c.id))}} style={{ ...styles.iconBtn, color:'#B5453A' }}><Trash2 size={14}/></button></>}
                       </div>
                     </td>
@@ -13749,9 +14070,12 @@ function TenderView({ tenders, setTenders, customers, siteProjects, userRole, bu
     return calcModuleTax(sub, t.taxRate||0, cc, t.placeOfSupply, sellerState).grandTotal;
   }
   function save(t) {
-    const rec = { ...t, id:t.id||crypto.randomUUID(), updatedAt:Date.now() };
+    const rec = { ...t, id:t.id||crypto.randomUUID(), approvalStatus: t.approvalStatus||'draft', approvalNote: t.approvalNote||'', updatedAt:Date.now() };
     setTenders(prev => prev.find(x=>x.id===rec.id)?prev.map(x=>x.id===rec.id?rec:x):[...prev,rec]);
     setEditing(null);
+  }
+  function updateApproval(id, patch) {
+    setTenders(prev => prev.map(x => x.id===id ? { ...x, approvalStatus: patch.status, approvalNote: patch.rejectionNote||'' } : x));
   }
 
   if (editing) {
@@ -13864,9 +14188,11 @@ function TenderView({ tenders, setTenders, customers, siteProjects, userRole, bu
                     {cc.hasTax && <td style={{ padding:'10px 12px', fontWeight:700, color:'#1E2A4A' }}>{(cc.currency||'')+gt.toLocaleString(undefined,{maximumFractionDigits:0})}</td>}
                     <td style={{ padding:'10px 12px' }}><span style={{ background:STATUS_BG[t.status], color:STATUS_COLOR[t.status], borderRadius:6, padding:'2px 8px', fontSize:11, fontWeight:700 }}>{t.status.toUpperCase()}</span></td>
                     <td style={{ padding:'10px 12px' }}>
-                      <div style={{ display:'flex', gap:6 }}>
+                      <div style={{ display:'flex', gap:6, flexWrap:'wrap', alignItems:'center', justifyContent:'flex-end' }}>
+                        <StatusBadge status={t.approvalStatus||'draft'} />
+                        <ApprovalActions item={{ status:t.approvalStatus||'draft', rejectionNote:t.approvalNote||'' }} onUpdate={(patch)=>updateApproval(t.id,patch)} userRole={userRole} compact />
                         <button onClick={()=>setPrintDoc(t)} style={styles.iconBtn} title="Print"><Printer size={14}/></button>
-                        {canEdit && <><button onClick={()=>setEditing(t)} style={styles.iconBtn}><Pencil size={14}/></button>
+                        {canEdit && t.approvalStatus!=='submitted' && <><button onClick={()=>setEditing(t)} style={styles.iconBtn}><Pencil size={14}/></button>
                         <button onClick={()=>{if(window.confirm('Delete?'))setTenders(prev=>prev.filter(x=>x.id!==t.id))}} style={{ ...styles.iconBtn, color:'#B5453A' }}><Trash2 size={14}/></button></>}
                       </div>
                     </td>
@@ -13970,12 +14296,19 @@ function SubcontractorView({ subcontractors, setSubcontractors, siteProjects, us
     setEditing(null);
   }
   function saveWO(wo) {
+    const rec = { ...wo, approvalStatus: wo.approvalStatus||'draft', approvalNote: wo.approvalNote||'' };
     setSubcontractors(prev=>prev.map(s=>{
-      if(s.id!==wo.subId) return s;
+      if(s.id!==rec.subId) return s;
       const wos = s.workOrders||[];
-      return { ...s, workOrders: wos.find(w=>w.id===wo.id)?wos.map(w=>w.id===wo.id?wo:w):[...wos,wo] };
+      return { ...s, workOrders: wos.find(w=>w.id===rec.id)?wos.map(w=>w.id===rec.id?rec:w):[...wos,rec] };
     }));
     setEditingWO(null);
+  }
+  function updateWOApproval(woId, subId, patch) {
+    setSubcontractors(prev=>prev.map(s=>{
+      if(s.id!==subId) return s;
+      return { ...s, workOrders:(s.workOrders||[]).map(w=>w.id===woId?{...w,approvalStatus:patch.status,approvalNote:patch.rejectionNote||''}:w) };
+    }));
   }
   function balance(wo) {
     return (parseFloat(wo.value)||0) - (parseFloat(wo.advancePaid)||0) - (parseFloat(wo.progressPaid)||0) - (parseFloat(wo.retentionHeld)||0) - (parseFloat(wo.finalPaid)||0);
@@ -14123,9 +14456,11 @@ function SubcontractorView({ subcontractors, setSubcontractors, siteProjects, us
                       <td style={{ padding:'10px 12px', color:bal<0?'#B5453A':'#1a6b30', fontWeight:600 }}>{bal.toLocaleString(undefined,{maximumFractionDigits:0})}</td>
                       <td style={{ padding:'10px 12px' }}><span style={{ background:wo.status==='active'?'#cfe2ff':wo.status==='completed'?'#d4edda':'#f0ece5', color:wo.status==='active'?'#0a58ca':wo.status==='completed'?'#1a6b30':'#555', borderRadius:6, padding:'2px 8px', fontSize:11, fontWeight:700 }}>{wo.status.replace('_',' ').replace(/\b\w/g,c=>c.toUpperCase())}</span></td>
                       <td style={{ padding:'10px 12px' }}>
-                        <div style={{ display:'flex', gap:6 }}>
+                        <div style={{ display:'flex', gap:6, flexWrap:'wrap', alignItems:'center', justifyContent:'flex-end' }}>
+                          <StatusBadge status={wo.approvalStatus||'draft'} />
+                          <ApprovalActions item={{ status:wo.approvalStatus||'draft', rejectionNote:wo.approvalNote||'' }} onUpdate={(patch)=>updateWOApproval(wo.id,wo.subId,patch)} userRole={userRole} compact />
                           <button onClick={()=>setPrintWO(wo)} style={styles.iconBtn} title="Print"><Printer size={14}/></button>
-                          {canEdit && <button onClick={()=>setEditingWO(wo)} style={styles.iconBtn}><Pencil size={14}/></button>}
+                          {canEdit && wo.approvalStatus!=='submitted' && <button onClick={()=>setEditingWO(wo)} style={styles.iconBtn}><Pencil size={14}/></button>}
                         </div>
                       </td>
                     </tr>
@@ -14237,9 +14572,12 @@ function HSEView({ hseRecords, setHseRecords, siteProjects, userRole, businessIn
   function blankPermit()   { return { id:'', number:`PTW-${String(permits.length+1).padStart(3,'0')}`, date:new Date().toISOString().slice(0,10), projectId:'', type:'Hot Work', location:'', description:'', validFrom:'', validUntil:'', issuedBy:'', receiver:'', status:'active' }; }
 
   function saveRecord(section, key, rec) {
-    const data = { ...rec, id:rec.id||crypto.randomUUID(), updatedAt:Date.now() };
+    const data = { ...rec, id:rec.id||crypto.randomUUID(), approvalStatus: rec.approvalStatus||'draft', approvalNote: rec.approvalNote||'', updatedAt:Date.now() };
     updateSection(section, prev=>prev.find(x=>x.id===data.id)?prev.map(x=>x.id===data.id?data:x):[...prev,data]);
     setEditing(null);
+  }
+  function updatePermitApproval(id, patch) {
+    updateSection('permits', prev=>prev.map(x=>x.id===id?{...x,approvalStatus:patch.status,approvalNote:patch.rejectionNote||''}:x));
   }
 
   const INC_COLOR = { open:'#842029', investigating:'#856404', closed:'#1a6b30' };
@@ -14442,8 +14780,10 @@ function HSEView({ hseRecords, setHseRecords, siteProjects, userRole, businessIn
                       <td style={{ padding:'10px 12px' }}><span style={{ background:pt.status==='active'?'#d4edda':pt.status==='suspended'?'#fff3cd':'#f0ece5', color:pt.status==='active'?'#1a6b30':pt.status==='suspended'?'#856404':'#555', borderRadius:6, padding:'2px 8px', fontSize:11, fontWeight:700 }}>{pt.status.toUpperCase()}</span></td>
                       <td style={{ padding:'10px 12px' }}>
                         <div style={{ display:'flex', gap:6 }}>
+                          <StatusBadge status={pt.approvalStatus||'draft'} />
+                          <ApprovalActions item={{ status:pt.approvalStatus||'draft', rejectionNote:pt.approvalNote||'' }} onUpdate={(patch)=>updatePermitApproval(pt.id,patch)} userRole={userRole} compact />
                           <button onClick={()=>setPrintPermit(pt)} style={styles.iconBtn} title="Print PTW"><Printer size={14}/></button>
-                          {canEdit && <><button onClick={()=>setEditing({ section:'permits', data:pt })} style={styles.iconBtn}><Pencil size={14}/></button>
+                          {canEdit && pt.approvalStatus!=='submitted' && <><button onClick={()=>setEditing({ section:'permits', data:pt })} style={styles.iconBtn}><Pencil size={14}/></button>
                           <button onClick={()=>{if(window.confirm('Delete?'))updateSection('permits',prev=>prev.filter(x=>x.id!==pt.id))}} style={{ ...styles.iconBtn, color:'#B5453A' }}><Trash2 size={14}/></button></>}
                         </div>
                       </td>
@@ -14540,9 +14880,12 @@ function RABillingView({ raBillings, setRaBillings, siteProjects, customers, ten
   }
   function billTotal(bill) { return (bill.items||[]).reduce((s,i)=>s+itemAmount(i),0); }
   function save(bill) {
-    const rec = { ...bill, id:bill.id||crypto.randomUUID(), updatedAt:Date.now() };
+    const rec = { ...bill, id:bill.id||crypto.randomUUID(), approvalStatus:bill.approvalStatus||'draft', approvalNote:bill.approvalNote||'', updatedAt:Date.now() };
     setRaBillings(prev=>prev.find(x=>x.id===rec.id)?prev.map(x=>x.id===rec.id?rec:x):[...prev,rec]);
     setEditing(null);
+  }
+  function updateApproval(id, patch) {
+    setRaBillings(prev=>prev.map(x=>x.id===id?{...x,approvalStatus:patch.status,approvalNote:patch.rejectionNote||''}:x));
   }
 
   if (editing) {
@@ -14670,8 +15013,10 @@ function RABillingView({ raBillings, setRaBillings, siteProjects, customers, ten
                     <td style={{ padding:'10px 12px' }}><span style={{ background:ST_BG[b.status], color:ST_COLOR[b.status], borderRadius:6, padding:'2px 8px', fontSize:11, fontWeight:700 }}>{b.status.toUpperCase()}</span></td>
                     <td style={{ padding:'10px 12px' }}>
                       <div style={{ display:'flex', gap:6 }}>
+                        <StatusBadge status={b.approvalStatus||'draft'} />
+                        <ApprovalActions item={{ status:b.approvalStatus||'draft', rejectionNote:b.approvalNote||'' }} onUpdate={(patch)=>updateApproval(b.id,patch)} userRole={userRole} compact />
                         <button onClick={()=>setPrintDoc(b)} style={styles.iconBtn} title="Print"><Printer size={14}/></button>
-                        {canEdit && <><button onClick={()=>setEditing(b)} style={styles.iconBtn}><Pencil size={14}/></button>
+                        {canEdit && b.approvalStatus!=='submitted' && <><button onClick={()=>setEditing(b)} style={styles.iconBtn}><Pencil size={14}/></button>
                         <button onClick={()=>{if(window.confirm('Delete?'))setRaBillings(prev=>prev.filter(x=>x.id!==b.id))}} style={{ ...styles.iconBtn, color:'#B5453A' }}><Trash2 size={14}/></button></>}
                       </div>
                     </td>
@@ -14750,9 +15095,103 @@ function RABillingView({ raBillings, setRaBillings, siteProjects, customers, ten
 }
 
 // ─── Testing & Commissioning ──────────────────────────────────────────────────
-function TCView({ tcChecklists, setTcChecklists, siteProjects, userRole }) {
+function TCPrint({ checklist, project, businessInfo, onClose }) {
+  const useLH = !!(businessInfo?.letterhead);
+  const tests = checklist.tests || [];
+  const punch = checklist.punchList || [];
+  const fails = tests.filter(t => t.result === 'fail').length;
+  return (
+    <div style={{ position:'fixed',inset:0,background:'#fff',zIndex:9999,overflowY:'auto' }}>
+      <div className="no-print" style={{ display:'flex',gap:8,padding:'12px 20px',borderBottom:'1px solid #EEE',background:'#F8F6F2' }}>
+        <button onClick={onClose} style={styles.ghostBtn}>← Back</button>
+        <button onClick={() => window.print()} style={styles.primaryBtn}><Printer size={14}/> Print / PDF</button>
+      </div>
+      <div className="print-area" style={{ maxWidth:800,margin:'0 auto',padding:'32px 40px',fontFamily:'Arial,sans-serif',fontSize:12 }}>
+        {useLH && businessInfo?.letterhead && <img src={businessInfo.letterhead} alt="letterhead" style={{width:'100%',display:'block',marginBottom:8}} />}
+        {!useLH && (
+          <div style={{textAlign:'center',marginBottom:12}}>
+            <div style={{fontSize:16,fontWeight:700}}>{businessInfo?.name}</div>
+            <div style={{fontSize:11,color:'#555'}}>{businessInfo?.address}</div>
+          </div>
+        )}
+        <div style={{textAlign:'center',fontSize:15,fontWeight:700,letterSpacing:1,borderTop:'2px solid #1E2A4A',borderBottom:'2px solid #1E2A4A',padding:'6px 0',marginBottom:16}}>TESTING & COMMISSIONING CHECKLIST</div>
+        <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:'6px 24px',marginBottom:16,padding:'12px 16px',background:'#F8F6F2',borderRadius:8}}>
+          <div><strong>Project:</strong> {project?.name || '—'}</div>
+          <div><strong>System:</strong> {checklist.system}</div>
+          <div><strong>Date:</strong> {checklist.date}</div>
+          <div><strong>Status:</strong> {(checklist.status||'').replace(/_/g,' ').replace(/\b\w/g,c=>c.toUpperCase())}</div>
+          <div><strong>Prepared By:</strong> {checklist.preparedBy || '—'}</div>
+          <div><strong>Witnessed By:</strong> {checklist.witnessedBy || '—'}</div>
+        </div>
+        {tests.length > 0 && (
+          <>
+            <div style={{fontWeight:700,marginBottom:8,color:'#1E2A4A'}}>Test Records {fails > 0 && <span style={{color:'#B5453A',fontWeight:400}}>({fails} failure{fails>1?'s':''})</span>}</div>
+            <table style={{width:'100%',borderCollapse:'collapse',marginBottom:16,fontSize:11}}>
+              <thead>
+                <tr style={{background:'#1E2A4A',color:'#fff'}}>
+                  {['#','Test Type','Equipment / Circuit','Location','Standard','Result','Remarks'].map(h => (
+                    <th key={h} style={{padding:'6px 8px',textAlign:'left'}}>{h}</th>
+                  ))}
+                </tr>
+              </thead>
+              <tbody>
+                {tests.map((t, i) => (
+                  <tr key={i} style={{borderBottom:'1px solid #EEE',background:t.result==='fail'?'#FFF8F7':i%2===0?'#fff':'#F9F8F5'}}>
+                    <td style={{padding:'5px 8px'}}>{i+1}</td>
+                    <td style={{padding:'5px 8px'}}>{t.testType}</td>
+                    <td style={{padding:'5px 8px'}}>{t.equipment}</td>
+                    <td style={{padding:'5px 8px'}}>{t.location}</td>
+                    <td style={{padding:'5px 8px'}}>{t.standard}</td>
+                    <td style={{padding:'5px 8px',fontWeight:700,color:t.result==='pass'?'#1a6b30':t.result==='fail'?'#842029':'#555'}}>{(t.result||'').toUpperCase()}</td>
+                    <td style={{padding:'5px 8px'}}>{t.remarks}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </>
+        )}
+        {punch.length > 0 && (
+          <>
+            <div style={{fontWeight:700,marginBottom:8,color:'#1E2A4A'}}>Punch List</div>
+            <table style={{width:'100%',borderCollapse:'collapse',marginBottom:16,fontSize:11}}>
+              <thead>
+                <tr style={{background:'#555',color:'#fff'}}>
+                  {['#','Description','Location','Raised By','Raised Date','Closed Date','Status'].map(h => (
+                    <th key={h} style={{padding:'6px 8px',textAlign:'left'}}>{h}</th>
+                  ))}
+                </tr>
+              </thead>
+              <tbody>
+                {punch.map((p, i) => (
+                  <tr key={i} style={{borderBottom:'1px solid #EEE',background:p.status==='open'?'#FFF8F7':i%2===0?'#fff':'#F9F8F5'}}>
+                    <td style={{padding:'5px 8px'}}>{i+1}</td>
+                    <td style={{padding:'5px 8px'}}>{p.description}</td>
+                    <td style={{padding:'5px 8px'}}>{p.location}</td>
+                    <td style={{padding:'5px 8px'}}>{p.raisedBy}</td>
+                    <td style={{padding:'5px 8px'}}>{p.raisedDate}</td>
+                    <td style={{padding:'5px 8px'}}>{p.closedDate || '—'}</td>
+                    <td style={{padding:'5px 8px',fontWeight:600,color:p.status==='open'?'#842029':'#1a6b30'}}>{(p.status||'').replace(/_/g,' ').replace(/\b\w/g,c=>c.toUpperCase())}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </>
+        )}
+        <div style={{display:'flex',justifyContent:'space-between',marginTop:40,paddingTop:16,borderTop:'1px solid #CCC'}}>
+          <div style={{textAlign:'center',minWidth:140}}><div style={{borderTop:'1px solid #333',paddingTop:4,fontSize:11}}>Prepared By<br/><strong>{checklist.preparedBy || ''}</strong></div></div>
+          <div style={{textAlign:'center',minWidth:140}}><div style={{borderTop:'1px solid #333',paddingTop:4,fontSize:11}}>Client / Witness<br/><strong>{checklist.witnessedBy || ''}</strong></div></div>
+          <div style={{textAlign:'center',minWidth:140}}><div style={{borderTop:'1px solid #333',paddingTop:4,fontSize:11}}>Authorised Signatory</div></div>
+        </div>
+        {useLH && businessInfo?.letterheadFooter && <img src={businessInfo.letterheadFooter} alt="footer" style={{width:'100%',display:'block',marginTop:16}} />}
+      </div>
+    </div>
+  );
+}
+
+function TCView({ tcChecklists, setTcChecklists, siteProjects, userRole, businessInfo }) {
   const [editing, setEditing] = useState(null);
   const [viewId, setViewId] = useState(null);
+  const [printDoc, setPrintDoc] = useState(null);
   const canEdit = ['admin','manager'].includes(userRole);
 
   const SYSTEMS = ['Electrical LV','Electrical MV','Plumbing','HVAC','Fire Fighting','Fire Alarm','BMS','Earthing','Lighting','CCTV','Access Control','Lifts','Other'];
@@ -14764,9 +15203,12 @@ function TCView({ tcChecklists, setTcChecklists, siteProjects, userRole }) {
   function blankTest()  { return { id:crypto.randomUUID(), testType:'Functional Test', equipment:'', location:'', standard:'', result:'pass', remarks:'' }; }
   function blankPunch() { return { id:crypto.randomUUID(), description:'', location:'', raisedBy:'', raisedDate:new Date().toISOString().slice(0,10), closedDate:'', status:'open' }; }
   function save(rec) {
-    const data = { ...rec, id:rec.id||crypto.randomUUID(), updatedAt:Date.now() };
+    const data = { ...rec, id:rec.id||crypto.randomUUID(), approvalStatus:rec.approvalStatus||'draft', approvalNote:rec.approvalNote||'', updatedAt:Date.now() };
     setTcChecklists(prev=>prev.find(x=>x.id===data.id)?prev.map(x=>x.id===data.id?data:x):[...prev,data]);
     setEditing(null); setViewId(null);
+  }
+  function updateApproval(id, patch) {
+    setTcChecklists(prev=>prev.map(x=>x.id===id?{...x,approvalStatus:patch.status,approvalNote:patch.rejectionNote||''}:x));
   }
 
   if (editing) {
@@ -14883,10 +15325,13 @@ function TCView({ tcChecklists, setTcChecklists, siteProjects, userRole }) {
                     <td style={{ padding:'10px 12px', color:'#555' }}>{r.witnessedBy||'—'}</td>
                     <td style={{ padding:'10px 12px' }}><span style={{ background:ST_BG[r.status], color:ST_COLOR[r.status], borderRadius:6, padding:'2px 8px', fontSize:11, fontWeight:700 }}>{(r.status||'').replace('_',' ').replace(/\b\w/g,c=>c.toUpperCase())}</span></td>
                     <td style={{ padding:'10px 12px' }}>
-                      {canEdit && <div style={{ display:'flex', gap:6 }}>
-                        <button onClick={()=>setEditing(r)} style={styles.iconBtn}><Pencil size={14}/></button>
-                        <button onClick={()=>{if(window.confirm('Delete?'))setTcChecklists(prev=>prev.filter(x=>x.id!==r.id))}} style={{ ...styles.iconBtn, color:'#B5453A' }}><Trash2 size={14}/></button>
-                      </div>}
+                      <div style={{ display:'flex', gap:6, flexWrap:'wrap', alignItems:'center', justifyContent:'flex-end' }}>
+                        <StatusBadge status={r.approvalStatus||'draft'} />
+                        <ApprovalActions item={{ status:r.approvalStatus||'draft', rejectionNote:r.approvalNote||'' }} onUpdate={(patch)=>updateApproval(r.id,patch)} userRole={userRole} compact />
+                        <button onClick={()=>setPrintDoc(r)} style={styles.iconBtn} title="Print"><Printer size={14}/></button>
+                        {canEdit && r.approvalStatus!=='submitted' && <><button onClick={()=>setEditing(r)} style={styles.iconBtn}><Pencil size={14}/></button>
+                        <button onClick={()=>{if(window.confirm('Delete?'))setTcChecklists(prev=>prev.filter(x=>x.id!==r.id))}} style={{ ...styles.iconBtn, color:'#B5453A' }}><Trash2 size={14}/></button></>}
+                      </div>
                     </td>
                   </tr>
                 );
@@ -14895,6 +15340,7 @@ function TCView({ tcChecklists, setTcChecklists, siteProjects, userRole }) {
           </table>
         </div>
       )}
+      {printDoc && <TCPrint checklist={printDoc} project={siteProjects.find(p=>p.id===printDoc.projectId)} businessInfo={businessInfo} onClose={()=>setPrintDoc(null)} />}
     </div>
   );
 }
@@ -14921,9 +15367,12 @@ function HandoverView({ handoverDocs, setHandoverDocs, siteProjects, customers, 
   }
   function blankDefect() { return { id:crypto.randomUUID(), description:'', raisedDate:new Date().toISOString().slice(0,10), closedDate:'', status:'open' }; }
   function save(rec) {
-    const data = { ...rec, id:rec.id||crypto.randomUUID(), updatedAt:Date.now() };
+    const data = { ...rec, id:rec.id||crypto.randomUUID(), approvalStatus:rec.approvalStatus||'draft', approvalNote:rec.approvalNote||'', updatedAt:Date.now() };
     setHandoverDocs(prev=>prev.find(x=>x.id===data.id)?prev.map(x=>x.id===data.id?data:x):[...prev,data]);
     setEditing(null);
+  }
+  function updateApproval(id, patch) {
+    setHandoverDocs(prev=>prev.map(x=>x.id===id?{...x,approvalStatus:patch.status,approvalNote:patch.rejectionNote||''}:x));
   }
 
   if (editing) {
@@ -15038,9 +15487,11 @@ function HandoverView({ handoverDocs, setHandoverDocs, siteProjects, customers, 
                     <td style={{ padding:'10px 12px' }}>{openDefects>0?<span style={{ background:'#f8d7da', color:'#842029', borderRadius:5, padding:'1px 8px', fontSize:11, fontWeight:700 }}>{openDefects} open</span>:'—'}</td>
                     <td style={{ padding:'10px 12px' }}><span style={{ background:ST_BG[r.status]||'#f0ece5', color:ST_COLOR[r.status]||'#555', borderRadius:6, padding:'2px 8px', fontSize:11, fontWeight:700 }}>{(r.status||'').replace(/_/g,' ').replace(/\b\w/g,c=>c.toUpperCase())}</span></td>
                     <td style={{ padding:'10px 12px' }}>
-                      <div style={{ display:'flex', gap:6 }}>
+                      <div style={{ display:'flex', gap:6, flexWrap:'wrap', alignItems:'center', justifyContent:'flex-end' }}>
+                        <StatusBadge status={r.approvalStatus||'draft'} />
+                        <ApprovalActions item={{ status:r.approvalStatus||'draft', rejectionNote:r.approvalNote||'' }} onUpdate={(patch)=>updateApproval(r.id,patch)} userRole={userRole} compact />
                         <button onClick={()=>setPrintDoc(r)} style={styles.iconBtn} title="Print Certificate"><Printer size={14}/></button>
-                        {canEdit && <><button onClick={()=>setEditing(r)} style={styles.iconBtn}><Pencil size={14}/></button>
+                        {canEdit && r.approvalStatus!=='submitted' && <><button onClick={()=>setEditing(r)} style={styles.iconBtn}><Pencil size={14}/></button>
                         <button onClick={()=>{if(window.confirm('Delete?'))setHandoverDocs(prev=>prev.filter(x=>x.id!==r.id))}} style={{ ...styles.iconBtn, color:'#B5453A' }}><Trash2 size={14}/></button></>}
                       </div>
                     </td>
@@ -15325,9 +15776,12 @@ function VendorEvalView({ vendorEvals, setVendorEvals, vendors, userRole }) {
   }
   function save(ev) {
     const status = getStatus(parseFloat(avgRating(ev.ratings)));
-    const rec = { ...ev, status, updatedAt: Date.now(), id: ev.id || crypto.randomUUID() };
+    const rec = { ...ev, status, approvalStatus:ev.approvalStatus||'draft', approvalNote:ev.approvalNote||'', updatedAt: Date.now(), id: ev.id || crypto.randomUUID() };
     setVendorEvals(prev => prev.find(x=>x.id===rec.id) ? prev.map(x=>x.id===rec.id?rec:x) : [...prev, rec]);
     setEditing(null);
+  }
+  function updateApproval(id, patch) {
+    setVendorEvals(prev=>prev.map(x=>x.id===id?{...x,approvalStatus:patch.status,approvalNote:patch.rejectionNote||''}:x));
   }
 
   if (editing) {
@@ -15405,10 +15859,12 @@ function VendorEvalView({ vendorEvals, setVendorEvals, vendors, userRole }) {
                     <td style={{ padding:'10px 14px', color:'#555' }}>{ev.nextReviewDate||'—'}</td>
                     <td style={{ padding:'10px 14px', color:'#555' }}>{ev.evaluator||'—'}</td>
                     <td style={{ padding:'10px 14px' }}>
-                      {canEdit && <div style={{ display:'flex', gap:6 }}>
-                        <button onClick={()=>setEditing(ev)} style={styles.iconBtn}><Pencil size={14}/></button>
-                        <button onClick={()=>{if(window.confirm('Delete?'))setVendorEvals(prev=>prev.filter(x=>x.id!==ev.id))}} style={{ ...styles.iconBtn, color:'#B5453A' }}><Trash2 size={14}/></button>
-                      </div>}
+                      <div style={{ display:'flex', gap:6, flexWrap:'wrap', alignItems:'center', justifyContent:'flex-end' }}>
+                        <StatusBadge status={ev.approvalStatus||'draft'} />
+                        <ApprovalActions item={{ status:ev.approvalStatus||'draft', rejectionNote:ev.approvalNote||'' }} onUpdate={(patch)=>updateApproval(ev.id,patch)} userRole={userRole} compact />
+                        {canEdit && ev.approvalStatus!=='submitted' && <><button onClick={()=>setEditing(ev)} style={styles.iconBtn}><Pencil size={14}/></button>
+                        <button onClick={()=>{if(window.confirm('Delete?'))setVendorEvals(prev=>prev.filter(x=>x.id!==ev.id))}} style={{ ...styles.iconBtn, color:'#B5453A' }}><Trash2 size={14}/></button></>}
+                      </div>
                     </td>
                   </tr>
                 );
@@ -15438,9 +15894,12 @@ function CAPAView({ capaRecords, setCapaRecords, vendors, customers, userRole })
     return { id:'', number:num, date: new Date().toISOString().slice(0,10), source:'NCR', sourceRef:'', description:'', rootCause:'', actionPlan:'', responsibility:'', targetDate:'', effectivenessCheck:'', closedDate:'', status:'open' };
   }
   function save(rec) {
-    const data = { ...rec, id: rec.id||crypto.randomUUID(), updatedAt: Date.now() };
+    const data = { ...rec, id: rec.id||crypto.randomUUID(), approvalStatus:rec.approvalStatus||'draft', approvalNote:rec.approvalNote||'', updatedAt: Date.now() };
     setCapaRecords(prev => prev.find(x=>x.id===data.id) ? prev.map(x=>x.id===data.id?data:x) : [...prev, data]);
     setEditing(null);
+  }
+  function updateApproval(id, patch) {
+    setCapaRecords(prev=>prev.map(x=>x.id===id?{...x,approvalStatus:patch.status,approvalNote:patch.rejectionNote||''}:x));
   }
 
   const list = capaRecords.filter(r => filterStatus==='all' || r.status===filterStatus).sort((a,b)=>b.date>a.date?1:-1);
@@ -15529,10 +15988,12 @@ function CAPAView({ capaRecords, setCapaRecords, vendors, customers, userRole })
                   <td style={{ padding:'10px 12px', color:'#555' }}>{r.targetDate||'—'}</td>
                   <td style={{ padding:'10px 12px' }}><span style={{ background:STATUS_BG[r.status], color:STATUS_COLOR[r.status], borderRadius:6, padding:'2px 8px', fontSize:11, fontWeight:700 }}>{STATUS_LABEL[r.status]}</span></td>
                   <td style={{ padding:'10px 12px' }}>
-                    {canEdit && <div style={{ display:'flex', gap:6 }}>
-                      <button onClick={()=>setEditing(r)} style={styles.iconBtn}><Pencil size={14}/></button>
-                      <button onClick={()=>{if(window.confirm('Delete?'))setCapaRecords(prev=>prev.filter(x=>x.id!==r.id))}} style={{ ...styles.iconBtn, color:'#B5453A' }}><Trash2 size={14}/></button>
-                    </div>}
+                    <div style={{ display:'flex', gap:6, flexWrap:'wrap', alignItems:'center', justifyContent:'flex-end' }}>
+                      <StatusBadge status={r.approvalStatus||'draft'} />
+                      <ApprovalActions item={{ status:r.approvalStatus||'draft', rejectionNote:r.approvalNote||'' }} onUpdate={(patch)=>updateApproval(r.id,patch)} userRole={userRole} compact />
+                      {canEdit && r.approvalStatus!=='submitted' && <><button onClick={()=>setEditing(r)} style={styles.iconBtn}><Pencil size={14}/></button>
+                      <button onClick={()=>{if(window.confirm('Delete?'))setCapaRecords(prev=>prev.filter(x=>x.id!==r.id))}} style={{ ...styles.iconBtn, color:'#B5453A' }}><Trash2 size={14}/></button></>}
+                    </div>
                   </td>
                 </tr>
               ))}
@@ -15560,9 +16021,12 @@ function InternalAuditView({ internalAudits, setInternalAudits, capaRecords, set
     return { id: crypto.randomUUID(), clause:'', type:'observation', description:'', requirement:'', evidence:'', capaRaised:false };
   }
   function save(audit) {
-    const data = { ...audit, id: audit.id||crypto.randomUUID(), updatedAt: Date.now() };
+    const data = { ...audit, id: audit.id||crypto.randomUUID(), approvalStatus:audit.approvalStatus||'draft', approvalNote:audit.approvalNote||'', updatedAt: Date.now() };
     setInternalAudits(prev => prev.find(x=>x.id===data.id) ? prev.map(x=>x.id===data.id?data:x) : [...prev, data]);
     setEditing(null);
+  }
+  function updateApproval(id, patch) {
+    setInternalAudits(prev=>prev.map(x=>x.id===id?{...x,approvalStatus:patch.status,approvalNote:patch.rejectionNote||''}:x));
   }
   function raiseCAPAFromFinding(audit, finding) {
     const num = `CAR-${String(capaRecords.length+1).padStart(3,'0')}`;
@@ -15687,10 +16151,12 @@ function InternalAuditView({ internalAudits, setInternalAudits, capaRecords, set
                     </td>
                     <td style={{ padding:'10px 12px' }}><span style={{ background:STATUS_BG[a.status], color:STATUS_COLOR[a.status], borderRadius:6, padding:'2px 8px', fontSize:11, fontWeight:700 }}>{(a.status||'').replace('_',' ').replace(/\b\w/g,c=>c.toUpperCase())}</span></td>
                     <td style={{ padding:'10px 12px' }}>
-                      <div style={{ display:'flex', gap:6 }}>
+                      <div style={{ display:'flex', gap:6, flexWrap:'wrap', alignItems:'center', justifyContent:'flex-end' }}>
+                        <StatusBadge status={a.approvalStatus||'draft'} />
+                        <ApprovalActions item={{ status:a.approvalStatus||'draft', rejectionNote:a.approvalNote||'' }} onUpdate={(patch)=>updateApproval(a.id,patch)} userRole={userRole} compact />
                         <button onClick={()=>setViewFindings(a.id)} style={{ ...styles.ghostBtn, fontSize:11 }}>Findings</button>
-                        {canEdit && <button onClick={()=>setEditing(a)} style={styles.iconBtn}><Pencil size={14}/></button>}
-                        {canEdit && <button onClick={()=>{if(window.confirm('Delete?'))setInternalAudits(prev=>prev.filter(x=>x.id!==a.id))}} style={{ ...styles.iconBtn, color:'#B5453A' }}><Trash2 size={14}/></button>}
+                        {canEdit && a.approvalStatus!=='submitted' && <button onClick={()=>setEditing(a)} style={styles.iconBtn}><Pencil size={14}/></button>}
+                        {canEdit && a.approvalStatus!=='submitted' && <button onClick={()=>{if(window.confirm('Delete?'))setInternalAudits(prev=>prev.filter(x=>x.id!==a.id))}} style={{ ...styles.iconBtn, color:'#B5453A' }}><Trash2 size={14}/></button>}
                       </div>
                     </td>
                   </tr>
@@ -16201,6 +16667,8 @@ export default function App() {
             rawMaterials={rawMaterials}
             items={items}
             companyType={companyType}
+            activeTypes={activeTypes}
+            serviceOrders={serviceOrders}
           />
         );
       case 'documents':
@@ -16282,6 +16750,7 @@ export default function App() {
           />
         );
       case 'stock':
+      case 'stockledger':
         return (
           <StockView
             items={items}
@@ -16298,6 +16767,7 @@ export default function App() {
           />
         );
       case 'hr':
+      case 'employees':
         return (
           <HRView
             employees={employees}
@@ -16326,6 +16796,144 @@ export default function App() {
             userRole={userRole}
           />
         );
+      // ── MEP / Service Suite ─────────────────────────────────────────────────
+      case 'siteprojects':
+        return (
+          <MEPProjectsView
+            siteProjects={siteProjects}
+            setSiteProjects={setSiteProjects}
+            employees={employees}
+            siteActivities={siteActivities}
+            progressUpdates={progressUpdates}
+            userRole={userRole}
+          />
+        );
+      case 'activityplanner':
+        return (
+          <ActivityPlannerView
+            siteActivities={siteActivities}
+            setSiteActivities={setSiteActivities}
+            siteProjects={siteProjects}
+            progressUpdates={progressUpdates}
+            setProgressUpdates={setProgressUpdates}
+            userRole={userRole}
+          />
+        );
+      case 'dailyupdates':
+        return (
+          <DailyUpdateView
+            progressUpdates={progressUpdates}
+            setProgressUpdates={setProgressUpdates}
+            siteActivities={siteActivities}
+            siteProjects={siteProjects}
+            employees={employees}
+            userRole={userRole}
+          />
+        );
+      case 'progressboard':
+        return (
+          <ProgressBoardView
+            siteProjects={siteProjects}
+            siteActivities={siteActivities}
+            progressUpdates={progressUpdates}
+          />
+        );
+      case 'clientmaterials':
+        return (
+          <ClientMaterialView
+            clientMaterials={clientMaterials}
+            setClientMaterials={setClientMaterials}
+            siteProjects={siteProjects}
+            employees={employees}
+            userRole={userRole}
+          />
+        );
+      case 'siteattendance':
+        return (
+          <SiteAttendanceView
+            siteAttendance={siteAttendance}
+            setSiteAttendance={setSiteAttendance}
+            siteProjects={siteProjects}
+            employees={employees}
+            userRole={userRole}
+          />
+        );
+      case 'evaluation':
+        return (
+          <QuarterlyEvalView
+            evaluations={evaluations}
+            setEvaluations={setEvaluations}
+            employees={employees}
+            siteAttendance={siteAttendance}
+            progressUpdates={progressUpdates}
+            siteProjects={siteProjects}
+            userRole={userRole}
+          />
+        );
+      case 'tender':
+        return (
+          <TenderView
+            tenders={tenders}
+            setTenders={setTenders}
+            customers={customers}
+            siteProjects={siteProjects}
+            userRole={userRole}
+            businessInfo={businessInfo}
+          />
+        );
+      case 'rabilling':
+        return (
+          <RABillingView
+            raBillings={raBillings}
+            setRaBillings={setRaBillings}
+            siteProjects={siteProjects}
+            customers={customers}
+            tenders={tenders}
+            userRole={userRole}
+            businessInfo={businessInfo}
+          />
+        );
+      case 'subcontractors':
+        return (
+          <SubcontractorView
+            subcontractors={subcontractors}
+            setSubcontractors={setSubcontractors}
+            siteProjects={siteProjects}
+            userRole={userRole}
+            businessInfo={businessInfo}
+          />
+        );
+      case 'hse':
+        return (
+          <HSEView
+            hseRecords={hseRecords}
+            setHseRecords={setHseRecords}
+            siteProjects={siteProjects}
+            userRole={userRole}
+            businessInfo={businessInfo}
+          />
+        );
+      case 'handover':
+        return (
+          <HandoverView
+            handoverDocs={handoverDocs}
+            setHandoverDocs={setHandoverDocs}
+            siteProjects={siteProjects}
+            customers={customers}
+            userRole={userRole}
+            businessInfo={businessInfo}
+          />
+        );
+      case 'tc':
+        return (
+          <TCView
+            tcChecklists={tcChecklists}
+            setTcChecklists={setTcChecklists}
+            siteProjects={siteProjects}
+            userRole={userRole}
+            businessInfo={businessInfo}
+          />
+        );
       case 'rawmaterials':
         return (
           <RawMaterialsList
@@ -16348,6 +16956,7 @@ export default function App() {
           />
         );
       case 'production':
+      case 'productionorders':
         return (
           <ProductionOrdersList
             productionOrders={productionOrders}
@@ -16359,6 +16968,7 @@ export default function App() {
             ownerUid={ownerUid}
             setStockLedger={setStockLedger}
             items={items}
+            businessInfo={businessInfo}
           />
         );
       case 'qualitycheck':
@@ -16494,6 +17104,7 @@ export default function App() {
           />
         );
       case 'parts':
+      case 'partsmaster':
         return (
           <PartsMasterList
             parts={parts}
