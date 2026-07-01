@@ -49,7 +49,7 @@ const PLAN_MODULES = {
     'dashboard','documents','customers','vendors','items','staff','settings','notifications',
     'pettycash','vouchers','gstr1','gstr3b','vatreport','taxreport',
     'enquiries','channelpartners','contracts','termslibrary',
-    'stock','bincard','grn',
+    'stock','bincard','grn','storeissue',
   ],
   trading:       [],
   manufacturing: [
@@ -1540,33 +1540,41 @@ function DeleteAccountModal({ user, ownerUid, isSubscribed, onExportData, onClos
   const deletionDate = new Date(Date.now() + 30 * 24 * 60 * 60 * 1000);
   const deletionDateStr = deletionDate.toLocaleDateString('en-GB', { day: 'numeric', month: 'long', year: 'numeric' });
 
+  // Auto-redirect after step 4 shown for non-grace-period (immediate delete)
+  useEffect(() => {
+    if (step === 4 && !gracePeriod) {
+      const t = setTimeout(() => onDeleted('deleted'), 2500);
+      return () => clearTimeout(t);
+    }
+  }, [step, gracePeriod]); // eslint-disable-line
+
   async function execute() {
     setBusy(true);
     setError('');
     try {
       await reauthenticateUser(user, passwordInput);
-      setStep(4);
       if (gracePeriod) {
-        // Option B — schedule
+        // Option B — schedule (no real deletion, just flag)
         await saveCompanyData(ownerUid, {
           deletionScheduled: true,
           deletionDate: deletionDate.toISOString(),
           deletionRequestedAt: new Date().toISOString(),
         });
+        setStep(4);
         onDeleted('scheduled');
       } else {
-        // Option A — immediate
+        // Option A — delete everything first, THEN show success
         await deleteAllCompanyFirestore(ownerUid);
         await deleteCompanyStorage(ownerUid);
         await deleteFirebaseUser(user);
-        onDeleted('deleted');
+        setStep(4); // show success only after real deletion
       }
     } catch (e) {
       const msg = e.message || '';
       if (msg.includes('wrong-password') || msg.includes('invalid-credential') || msg.includes('INVALID_LOGIN')) {
         setError('Incorrect password. Please try again.');
       } else {
-        setError('Error: ' + msg);
+        setError('Error: ' + (msg || 'Deletion failed. Please try again.'));
       }
       setStep(3);
     } finally {
@@ -1676,7 +1684,8 @@ function DeleteAccountModal({ user, ownerUid, isSubscribed, onExportData, onClos
           ) : (
             <>
               <div style={{ fontSize:18, fontWeight:700, color:'#B91C1C', marginBottom:8 }}>Account Deleted</div>
-              <div style={{ fontSize:13, color:'#666' }}>All your data has been permanently removed.<br/>You have been signed out.</div>
+              <div style={{ fontSize:13, color:'#666', marginBottom:8 }}>All your data has been permanently removed.</div>
+              <div style={{ fontSize:12, color:'#aaa' }}>Redirecting to sign-in…</div>
             </>
           )}
         </div>
@@ -1701,7 +1710,7 @@ function LockedModuleScreen() {
   );
 }
 
-function SettingsView({ businessInfo, setBusinessInfo, onExportData, onSaved, userRole = 'admin', userEmail = '', onRequestDelete }) {
+function SettingsView({ businessInfo, setBusinessInfo, onExportData, onSaved, userRole = 'admin', isOwner = false, userEmail = '', onRequestDelete }) {
   const [form, setForm] = useState(businessInfo);
   const [saved, setSaved] = useState(false);
   useEffect(() => setForm(businessInfo), [businessInfo]);
@@ -2077,8 +2086,8 @@ function SettingsView({ businessInfo, setBusinessInfo, onExportData, onSaved, us
               )}
             </div>
 
-            {/* ── Danger Zone ── */}
-            {userRole === 'admin' && (
+            {/* ── Danger Zone — owner only ── */}
+            {userRole === 'admin' && isOwner && (
               <div style={{ marginTop: 32, paddingTop: 24, borderTop: '2px solid #FECACA' }}>
                 <div style={{ fontSize: 11, fontWeight: 700, color: '#B91C1C', textTransform: 'uppercase', letterSpacing: 1, marginBottom: 8 }}>⚠ Danger Zone</div>
                 <div style={{ background: '#FEF2F2', border: '1px solid #FECACA', borderRadius: 10, padding: '16px 20px' }}>
@@ -2940,7 +2949,7 @@ const SECTION_VIEWS = {
   sales:       ['customers', 'enquiries', 'documents', 'channelpartners', 'serviceorders'],
   accounts:    ['pettycash', 'vouchers', 'gstr1', 'gstr3b', 'vatreport', 'taxreport'],
   purchase:    ['vendors', 'grn'],
-  stores:      ['stock', 'stockledger', 'bincard', 'items'],
+  stores:      ['stock', 'stockledger', 'bincard', 'items', 'storeissue'],
   engineering: ['partsmaster', 'engdocs'],
   production:  ['rawmaterials', 'bom', 'productionorders'],
   quality:     ['isoprinciples', 'deptprocedures', 'inprocessqa', 'qatesting'],
@@ -3118,9 +3127,10 @@ function Sidebar({ view, setView, setActiveDoc, startNewDoc, syncStatus, user, o
           {!showService && <NavBtn id="items" label="Item Master" icon={Package} />}
           <CreateBtn docKey="delivery" />
           <CreateBtn docKey="packing_list" />
-          <NavBtn id="stock"       label="Stock Position" icon={ClipboardList} />
-          <NavBtn id="stockledger" label="Stock Ledger"   icon={FileText} />
-          <NavBtn id="bincard"     label="Bin Card"       icon={ClipboardList} />
+          <NavBtn id="stock"       label="Stock Position"      icon={ClipboardList} />
+          <NavBtn id="stockledger" label="Stock Ledger"        icon={FileText} />
+          <NavBtn id="storeissue"  label="Stores Issue Voucher" icon={FileMinus} />
+          <NavBtn id="bincard"     label="Bin Card"            icon={ClipboardList} />
         </Section>
       )}
 
@@ -3276,9 +3286,10 @@ function Sidebar({ view, setView, setActiveDoc, startNewDoc, syncStatus, user, o
       {showTrade && (
         <Section sectionKey="stores" label="Stores">
           <NavBtn id="items"       label="Items"          icon={Package} />
-          <NavBtn id="stock"       label="Stock Position" icon={Package} />
-          <NavBtn id="stockledger" label="Stock Ledger"   icon={ClipboardList} />
-          <NavBtn id="grn"         label="GRN"            icon={Truck} />
+          <NavBtn id="stock"       label="Stock Position"      icon={Package} />
+          <NavBtn id="stockledger" label="Stock Ledger"        icon={ClipboardList} />
+          <NavBtn id="grn"         label="GRN"                icon={Truck} />
+          <NavBtn id="storeissue"  label="Stores Issue Voucher" icon={FileMinus} />
         </Section>
       )}
       {showProduction && (
@@ -5761,7 +5772,7 @@ function BinCard({ items, stockLedger, businessInfo }) {
   const item = items.find(i => i.id === selectedItemId);
 
   const SOURCE_LABEL = { invoice: 'Invoice', purchasebill: 'Purchase Bill', delivery: 'Delivery Note',
-    packing_list: 'Packing List', manual: 'Manual Adj.', production: 'Production', grn: 'GRN' };
+    packing_list: 'Packing List', manual: 'Manual Adj.', production: 'Production', grn: 'GRN', siv: 'Issue Voucher' };
 
   const entries = (stockLedger || [])
     .filter(e => e.itemId === selectedItemId)
@@ -5876,11 +5887,302 @@ function BinCard({ items, stockLedger, businessInfo }) {
   );
 }
 
+// ─── GRN Print ─────────────────────────────────────────────────
+function GRNPrint({ grn, businessInfo, onClose }) {
+  const useLH = !!(businessInfo?.letterhead);
+  return (
+    <div style={{ position:'fixed',inset:0,background:'#fff',zIndex:9999,overflowY:'auto' }}>
+      <div className="no-print" style={{ display:'flex',gap:8,padding:'12px 20px',borderBottom:'1px solid #EEE',background:'#F8F6F2' }}>
+        <button onClick={onClose} style={styles.ghostBtn}>← Back</button>
+        <button onClick={() => window.print()} style={styles.primaryBtn}><Printer size={14}/> Print / PDF</button>
+      </div>
+      <div className="print-area" style={{ maxWidth:800,margin:'0 auto',padding:'32px 40px',fontFamily:'Arial,sans-serif',fontSize:12 }}>
+        {useLH && (businessInfo?.letterhead || businessInfo?.letterheadFooter) && <LetterpadPrintStyle />}
+        {useLH && businessInfo?.letterhead && <img src={businessInfo.letterhead} alt="letterhead" style={{width:'100%',display:'block',marginBottom:8}} />}
+        {!useLH && (
+          <div style={{textAlign:'center',marginBottom:16}}>
+            <div style={{fontSize:16,fontWeight:700}}>{businessInfo?.name}</div>
+            <div style={{fontSize:11,color:'#555'}}>{businessInfo?.address}</div>
+          </div>
+        )}
+        <div style={{textAlign:'center',fontSize:16,fontWeight:700,letterSpacing:1,borderTop:'2px solid #1E2A4A',borderBottom:'2px solid #1E2A4A',padding:'6px 0',marginBottom:16}}>GOODS RECEIPT NOTE</div>
+        <div style={{display:'flex',justifyContent:'space-between',marginBottom:16}}>
+          <div><strong>GRN No:</strong> {grn.number}</div>
+          <div><strong>Date:</strong> {grn.date}</div>
+          <div><strong>Vendor:</strong> {grn.vendorName || '—'}</div>
+          <div><strong>PO Ref:</strong> {grn.poRef || grn.poId || '—'}</div>
+        </div>
+        <table style={{width:'100%',borderCollapse:'collapse',marginBottom:16}}>
+          <thead>
+            <tr style={{background:'#1E2A4A',color:'#fff'}}>
+              {['#','Item','Ordered Qty','Received Qty','QA Status','Remarks'].map(h => (
+                <th key={h} style={{padding:'6px 8px',textAlign:'left',fontSize:11}}>{h}</th>
+              ))}
+            </tr>
+          </thead>
+          <tbody>
+            {(grn.lines || []).map((l, i) => (
+              <tr key={i} style={{borderBottom:'1px solid #EEE',background: i%2===0?'#fff':'#F9F8F5'}}>
+                <td style={{padding:'5px 8px'}}>{i+1}</td>
+                <td style={{padding:'5px 8px'}}>{l.itemName || l.itemId}</td>
+                <td style={{padding:'5px 8px',textAlign:'center'}}>{l.orderedQty || 0}</td>
+                <td style={{padding:'5px 8px',textAlign:'center'}}>{l.receivedQty || 0}</td>
+                <td style={{padding:'5px 8px'}}>{l.qaStatus || '—'}</td>
+                <td style={{padding:'5px 8px'}}>{l.remarks || ''}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+        {grn.notes && <div style={{marginBottom:12}}><strong>Notes:</strong> {grn.notes}</div>}
+        <div style={{display:'flex',justifyContent:'space-between',marginTop:40,paddingTop:16,borderTop:'1px solid #CCC'}}>
+          <div style={{textAlign:'center',minWidth:120}}><div style={{borderTop:'1px solid #333',paddingTop:4,fontSize:11}}>Received By</div></div>
+          <div style={{textAlign:'center',minWidth:120}}><div style={{borderTop:'1px solid #333',paddingTop:4,fontSize:11}}>Checked By</div></div>
+          <div style={{textAlign:'center',minWidth:120}}><div style={{borderTop:'1px solid #333',paddingTop:4,fontSize:11}}>Authorised By</div></div>
+        </div>
+        {useLH && businessInfo?.letterheadFooter && <img src={businessInfo.letterheadFooter} alt="footer" style={{width:'100%',display:'block',marginTop:16}} />}
+      </div>
+    </div>
+  );
+}
+
+// ─── Stores Issue Voucher ──────────────────────────────────────
+function StoreIssuePrint({ siv, businessInfo, onClose }) {
+  const useLH = !!(businessInfo?.letterhead);
+  return (
+    <div style={{ position:'fixed',inset:0,background:'#fff',zIndex:9999,overflowY:'auto' }}>
+      <div className="no-print" style={{ display:'flex',gap:8,padding:'12px 20px',borderBottom:'1px solid #EEE',background:'#F8F6F2' }}>
+        <button onClick={onClose} style={styles.ghostBtn}>← Back</button>
+        <button onClick={() => window.print()} style={styles.primaryBtn}><Printer size={14}/> Print / PDF</button>
+      </div>
+      <div className="print-area" style={{ maxWidth:800,margin:'0 auto',padding:'32px 40px',fontFamily:'Arial,sans-serif',fontSize:12 }}>
+        {useLH && businessInfo?.letterhead && <img src={businessInfo.letterhead} alt="letterhead" style={{width:'100%',display:'block',marginBottom:8}} />}
+        {!useLH && (
+          <div style={{textAlign:'center',marginBottom:12}}>
+            <div style={{fontSize:16,fontWeight:700}}>{businessInfo?.name}</div>
+            <div style={{fontSize:11,color:'#555'}}>{businessInfo?.address}</div>
+          </div>
+        )}
+        <div style={{textAlign:'center',fontSize:15,fontWeight:700,letterSpacing:1,borderTop:'2px solid #1E2A4A',borderBottom:'2px solid #1E2A4A',padding:'6px 0',marginBottom:16}}>STORES ISSUE VOUCHER</div>
+        <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:'6px 24px',marginBottom:16,padding:'12px 16px',background:'#F8F6F2',borderRadius:8}}>
+          <div><strong>SIV No:</strong> {siv.sivNumber}</div>
+          <div><strong>Date:</strong> {siv.date}</div>
+          <div><strong>Issued To / Dept:</strong> {siv.issuedTo || '—'}</div>
+          <div><strong>Purpose / Ref:</strong> {siv.purpose || '—'}</div>
+          {siv.projectRef && <div><strong>Project Ref:</strong> {siv.projectRef}</div>}
+          {siv.productionRef && <div><strong>Production Order:</strong> {siv.productionRef}</div>}
+        </div>
+        <table style={{width:'100%',borderCollapse:'collapse',marginBottom:20,fontSize:11}}>
+          <thead>
+            <tr style={{background:'#1E2A4A',color:'#fff'}}>
+              {['#','Item / Material','Unit','Qty Requested','Qty Issued','Rate','Value','Remarks'].map(h=>(
+                <th key={h} style={{padding:'6px 8px',textAlign:h==='Qty Requested'||h==='Qty Issued'||h==='Rate'||h==='Value'?'right':'left'}}>{h}</th>
+              ))}
+            </tr>
+          </thead>
+          <tbody>
+            {(siv.lines||[]).map((l,i)=>(
+              <tr key={i} style={{borderBottom:'1px solid #EEE',background:i%2===0?'#fff':'#F9F8F5'}}>
+                <td style={{padding:'5px 8px'}}>{i+1}</td>
+                <td style={{padding:'5px 8px'}}>{l.itemName}</td>
+                <td style={{padding:'5px 8px'}}>{l.unit||'pcs'}</td>
+                <td style={{padding:'5px 8px',textAlign:'right'}}>{l.qtyRequested||l.qty}</td>
+                <td style={{padding:'5px 8px',textAlign:'right',fontWeight:600}}>{l.qty}</td>
+                <td style={{padding:'5px 8px',textAlign:'right'}}>{l.rate?Number(l.rate).toFixed(2):'—'}</td>
+                <td style={{padding:'5px 8px',textAlign:'right'}}>{l.rate?((parseFloat(l.qty)||0)*(parseFloat(l.rate)||0)).toFixed(2):'—'}</td>
+                <td style={{padding:'5px 8px'}}>{l.remarks||''}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+        {siv.notes && <div style={{marginBottom:16,padding:'8px 12px',background:'#F8F6F2',borderRadius:6}}><strong>Notes:</strong> {siv.notes}</div>}
+        <div style={{display:'flex',justifyContent:'space-between',marginTop:40,paddingTop:16,borderTop:'1px solid #CCC'}}>
+          <div style={{textAlign:'center',minWidth:130}}><div style={{borderTop:'1px solid #333',paddingTop:4,fontSize:11}}>Requested By</div></div>
+          <div style={{textAlign:'center',minWidth:130}}><div style={{borderTop:'1px solid #333',paddingTop:4,fontSize:11}}>Issued By<br/><strong>{siv.issuedBy||''}</strong></div></div>
+          <div style={{textAlign:'center',minWidth:130}}><div style={{borderTop:'1px solid #333',paddingTop:4,fontSize:11}}>Received By<br/><strong>{siv.receivedBy||''}</strong></div></div>
+          <div style={{textAlign:'center',minWidth:130}}><div style={{borderTop:'1px solid #333',paddingTop:4,fontSize:11}}>Authorised By</div></div>
+        </div>
+        {useLH && businessInfo?.letterheadFooter && <img src={businessInfo.letterheadFooter} alt="footer" style={{width:'100%',display:'block',marginTop:16}} />}
+      </div>
+    </div>
+  );
+}
+
+function StoreIssueList({ storeIssues, setStoreIssues, items, setStockLedger, userRole, businessInfo, productionOrders = [] }) {
+  const [editing, setEditing] = useState(null);
+  const [printSiv, setPrintSiv] = useState(null);
+  const canEdit = ['admin','manager','inventory','purchase'].includes(userRole);
+
+  function nextNumber() {
+    const nums = storeIssues.map(s=>parseInt((s.sivNumber||'').replace(/\D/g,''))||0);
+    return `SIV-${String(Math.max(0,...nums)+1).padStart(4,'0')}`;
+  }
+  function blank() {
+    return { id:'', sivNumber:nextNumber(), date:new Date().toISOString().slice(0,10), issuedTo:'', purpose:'', projectRef:'', productionRef:'', lines:[], issuedBy:'', receivedBy:'', notes:'', approvalStatus:'draft', approvalNote:'' };
+  }
+  function blankLine() { return { id:crypto.randomUUID(), itemId:'', itemName:'', unit:'pcs', qtyRequested:1, qty:1, rate:0, remarks:'' }; }
+
+  function saveSIV(siv) {
+    const isNew = !storeIssues.find(s=>s.id===siv.id);
+    const rec = { ...siv, id:siv.id||crypto.randomUUID(), approvalStatus:siv.approvalStatus||'draft', approvalNote:siv.approvalNote||'', updatedAt:Date.now() };
+    // Create OUT stock ledger entries
+    const now = new Date().toISOString();
+    const newEntries = (rec.lines||[]).filter(l=>l.itemId&&l.qty>0).map(l=>({
+      id: crypto.randomUUID(), date: rec.date, itemId: l.itemId, itemName: l.itemName,
+      type: 'out', qty: parseFloat(l.qty)||0, rate: parseFloat(l.rate)||0,
+      sourceType: 'siv', sourceId: rec.id, sourceNumber: rec.sivNumber, createdAt: now,
+    }));
+    setStockLedger(prev => [...prev.filter(e=>e.sourceId!==rec.id), ...newEntries]);
+    setStoreIssues(prev => isNew ? [rec,...prev] : prev.map(s=>s.id===rec.id?rec:s));
+    setEditing(null);
+  }
+
+  function deleteSIV(id) {
+    if (!window.confirm('Delete this SIV? Stock ledger entries will be removed.')) return;
+    setStockLedger(prev => prev.filter(e=>e.sourceId!==id));
+    setStoreIssues(prev => prev.filter(s=>s.id!==id));
+  }
+
+  function updateApproval(id, patch) {
+    setStoreIssues(prev=>prev.map(s=>s.id===id?{...s,approvalStatus:patch.status,approvalNote:patch.rejectionNote||''}:s));
+  }
+
+  // ── FORM ────────────────────────────────────────────────────────
+  if (editing) {
+    const s = editing;
+    const set = (k,v)=>setEditing(p=>({...p,[k]:v}));
+    const setLine = (idx,k,v)=>set('lines',s.lines.map((l,i)=>i===idx?{...l,[k]:v}:l));
+    return (
+      <div style={{ maxWidth:820, margin:'0 auto', padding:'24px 0' }}>
+        <div style={{ display:'flex', gap:12, alignItems:'center', marginBottom:20 }}>
+          <button onClick={()=>setEditing(null)} style={styles.ghostBtn}><X size={14}/> Back</button>
+          <h2 className="serif" style={styles.pageTitle}>{s.id?'Edit':'New'} Stores Issue Voucher — {s.sivNumber}</h2>
+        </div>
+        <div style={{ background:'#fff', borderRadius:10, padding:24, border:'1px solid #EAE6DB', display:'flex', flexDirection:'column', gap:14 }}>
+          {/* Header grid */}
+          <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr 1fr', gap:12 }}>
+            <div style={styles.formGroup}><label style={styles.label}>SIV Number</label><input value={s.sivNumber} onChange={e=>set('sivNumber',e.target.value)} style={styles.input}/></div>
+            <div style={styles.formGroup}><label style={styles.label}>Date</label><input type="date" value={s.date} onChange={e=>set('date',e.target.value)} style={styles.input}/></div>
+            <div style={styles.formGroup}><label style={styles.label}>Issued To / Dept</label><input value={s.issuedTo||''} onChange={e=>set('issuedTo',e.target.value)} style={styles.input} placeholder="Dept or person name"/></div>
+            <div style={styles.formGroup}><label style={styles.label}>Purpose</label><input value={s.purpose||''} onChange={e=>set('purpose',e.target.value)} style={styles.input} placeholder="e.g. Site consumption, production"/></div>
+            <div style={styles.formGroup}><label style={styles.label}>Project Ref</label><input value={s.projectRef||''} onChange={e=>set('projectRef',e.target.value)} style={styles.input} placeholder="Project name or number"/></div>
+            <div style={styles.formGroup}><label style={styles.label}>Production Order Ref</label>
+              <select value={s.productionRef||''} onChange={e=>set('productionRef',e.target.value)} style={styles.input}>
+                <option value=''>None</option>
+                {productionOrders.map(o=><option key={o.id} value={o.number}>{o.number}</option>)}
+              </select>
+            </div>
+            <div style={styles.formGroup}><label style={styles.label}>Issued By</label><input value={s.issuedBy||''} onChange={e=>set('issuedBy',e.target.value)} style={styles.input}/></div>
+            <div style={styles.formGroup}><label style={styles.label}>Received By</label><input value={s.receivedBy||''} onChange={e=>set('receivedBy',e.target.value)} style={styles.input}/></div>
+          </div>
+          {/* Lines */}
+          <div>
+            <div style={{ fontSize:12, fontWeight:700, color:'#1E2A4A', marginBottom:8, textTransform:'uppercase' }}>Items to Issue</div>
+            <table style={{ width:'100%', borderCollapse:'collapse', fontSize:12 }}>
+              <thead><tr style={{ background:'#F8F7F4' }}>
+                {['Item','Unit','Qty Requested','Qty Issued','Rate (opt.)','Remarks',''].map(h=>(
+                  <th key={h} style={{ padding:'6px 8px', textAlign:'left', fontSize:11, fontWeight:700, color:'#888', textTransform:'uppercase' }}>{h}</th>
+                ))}
+              </tr></thead>
+              <tbody>
+                {(s.lines||[]).map((l,i)=>(
+                  <tr key={l.id} style={{ borderBottom:'1px solid #F0ECE5' }}>
+                    <td style={{ padding:'4px 4px' }}>
+                      <select value={l.itemId||''} onChange={e=>{
+                        const it = items.find(x=>x.id===e.target.value);
+                        setLine(i,'itemId',e.target.value);
+                        if(it){setLine(i,'itemName',it.name);setLine(i,'unit',it.unit||'pcs');setLine(i,'rate',it.purchaseRate||it.saleRate||0);}
+                      }} style={{ ...styles.input, margin:0, minWidth:160, fontSize:12 }}>
+                        <option value=''>Select item</option>
+                        {items.map(it=><option key={it.id} value={it.id}>{it.name}</option>)}
+                      </select>
+                    </td>
+                    <td style={{ padding:'4px 4px', width:70 }}><input value={l.unit||'pcs'} onChange={e=>setLine(i,'unit',e.target.value)} style={{ ...styles.input, margin:0, fontSize:12 }}/></td>
+                    <td style={{ padding:'4px 4px', width:90 }}><input type="number" value={l.qtyRequested||1} onChange={e=>setLine(i,'qtyRequested',e.target.value)} style={{ ...styles.input, margin:0, fontSize:12, textAlign:'right' }}/></td>
+                    <td style={{ padding:'4px 4px', width:90 }}><input type="number" value={l.qty||1} onChange={e=>setLine(i,'qty',e.target.value)} style={{ ...styles.input, margin:0, fontSize:12, textAlign:'right', background:'#FFFBE6' }}/></td>
+                    <td style={{ padding:'4px 4px', width:90 }}><input type="number" value={l.rate||0} onChange={e=>setLine(i,'rate',e.target.value)} style={{ ...styles.input, margin:0, fontSize:12, textAlign:'right' }}/></td>
+                    <td style={{ padding:'4px 4px' }}><input value={l.remarks||''} onChange={e=>setLine(i,'remarks',e.target.value)} style={{ ...styles.input, margin:0, fontSize:12 }} placeholder="Remarks"/></td>
+                    <td style={{ padding:'4px 4px', width:28 }}><button onClick={()=>set('lines',s.lines.filter((_,j)=>j!==i))} style={{ ...styles.iconBtn, color:'#B5453A' }}><Trash2 size={13}/></button></td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+            <button onClick={()=>set('lines',[...(s.lines||[]),blankLine()])} style={{ ...styles.ghostBtn, marginTop:8, fontSize:12 }}><Plus size={13}/> Add Item</button>
+          </div>
+          <div style={styles.formGroup}><label style={styles.label}>Notes</label><textarea value={s.notes||''} onChange={e=>set('notes',e.target.value)} style={{ ...styles.input, height:56 }}/></div>
+          <div style={{ display:'flex', gap:8, justifyContent:'flex-end', borderTop:'1px solid #EAE6DB', paddingTop:14 }}>
+            <button onClick={()=>setEditing(null)} style={styles.ghostBtn}>Cancel</button>
+            <button onClick={()=>saveSIV(s)} style={styles.primaryBtn} disabled={!s.lines?.some(l=>l.itemId&&l.qty>0)}>Save SIV</button>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  // ── LIST ────────────────────────────────────────────────────────
+  return (
+    <div style={styles.page}>
+      <div style={{ display:'flex', justifyContent:'space-between', alignItems:'flex-start', marginBottom:24 }}>
+        <div>
+          <h1 className="serif" style={styles.h1}>Stores Issue Vouchers</h1>
+          <p style={styles.muted}>Track material outflows from stores. Each SIV auto-creates OUT entries in the stock ledger and bin card.</p>
+        </div>
+        {canEdit && <button onClick={()=>setEditing(blank())} style={styles.primaryBtn}><Plus size={15}/> New SIV</button>}
+      </div>
+      {storeIssues.length === 0 ? (
+        <div style={{ textAlign:'center', padding:60, color:'#888', background:'#fff', borderRadius:10, border:'1px solid #EAE6DB' }}>
+          <FileMinus size={36} style={{ color:'#DDD', marginBottom:12 }}/><br/>No issue vouchers yet.<br/>
+          <span style={{ fontSize:12 }}>Create one to issue materials from stores — it will automatically update the bin card with OUT entries.</span>
+        </div>
+      ) : (
+        <div style={{ background:'#fff', borderRadius:10, border:'1px solid #EAE6DB', overflow:'hidden' }}>
+          <table style={{ width:'100%', borderCollapse:'collapse', fontSize:13 }}>
+            <thead><tr style={{ background:'#F8F7F4' }}>
+              {['SIV No.','Date','Issued To','Purpose','Items','Approval',''].map(h=>(
+                <th key={h} style={{ padding:'10px 12px', textAlign:'left', fontSize:11, fontWeight:700, color:'#888', textTransform:'uppercase' }}>{h}</th>
+              ))}
+            </tr></thead>
+            <tbody>
+              {[...storeIssues].sort((a,b)=>b.date>a.date?1:-1).map(s=>(
+                <tr key={s.id} style={{ borderBottom:'1px solid #F0ECE5' }}>
+                  <td style={{ padding:'10px 12px', fontWeight:700, color:'#1E2A4A' }}>{s.sivNumber}</td>
+                  <td style={{ padding:'10px 12px', color:'#555' }}>{s.date}</td>
+                  <td style={{ padding:'10px 12px', color:'#333' }}>{s.issuedTo||'—'}</td>
+                  <td style={{ padding:'10px 12px', color:'#555', fontSize:12 }}>{s.purpose||s.projectRef||s.productionRef||'—'}</td>
+                  <td style={{ padding:'10px 12px', color:'#555' }}>
+                    {(s.lines||[]).length} item{(s.lines||[]).length!==1?'s':''}
+                    {(s.lines||[]).length>0 && <div style={{ fontSize:11, color:'#888' }}>{(s.lines||[]).slice(0,2).map(l=>l.itemName).filter(Boolean).join(', ')}{(s.lines||[]).length>2?' …':''}</div>}
+                  </td>
+                  <td style={{ padding:'10px 12px' }}>
+                    <div style={{ display:'flex', gap:5, flexWrap:'wrap', alignItems:'center' }}>
+                      <StatusBadge status={s.approvalStatus||'draft'} />
+                      <ApprovalActions item={{ status:s.approvalStatus||'draft', rejectionNote:s.approvalNote||'' }} onUpdate={(patch)=>updateApproval(s.id,patch)} userRole={userRole} compact />
+                    </div>
+                    {s.approvalStatus==='rejected' && s.approvalNote && <div style={{ fontSize:11, color:'#B5453A', marginTop:3, fontStyle:'italic' }}>"{s.approvalNote}"</div>}
+                  </td>
+                  <td style={{ padding:'10px 12px' }}>
+                    <div style={{ display:'flex', gap:6 }}>
+                      <button onClick={()=>setPrintSiv(s)} style={styles.iconBtn} title="Print"><Printer size={14}/></button>
+                      {canEdit && s.approvalStatus!=='submitted' && <><button onClick={()=>setEditing(s)} style={styles.iconBtn}><Pencil size={14}/></button>
+                      <button onClick={()=>deleteSIV(s.id)} style={{ ...styles.iconBtn, color:'#B5453A' }}><Trash2 size={14}/></button></>}
+                    </div>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+      {printSiv && <StoreIssuePrint siv={printSiv} businessInfo={businessInfo} onClose={()=>setPrintSiv(null)} />}
+    </div>
+  );
+}
+
 // ─── GRN ───────────────────────────────────────────────────────
 
 function GRNList({ grns, setGrns, documents, vendors, items, setStockLedger, userRole, businessInfo }) {
   const [showForm, setShowForm] = useState(false);
   const [editing, setEditing] = useState(null);
+  const [printGrn, setPrintGrn] = useState(null);
   const canEdit = userRole === 'admin' || userRole === 'manager' || userRole === 'inventory' || userRole === 'purchase';
 
   const poList = (documents || []).filter(d => d.type === 'purchase');
@@ -5977,6 +6279,7 @@ function GRNList({ grns, setGrns, documents, vendors, items, setStockLedger, use
                   </td>
                   <td style={styles.td}>
                     <div style={{ display: 'flex', gap: 6 }}>
+                      <button style={styles.iconBtn} onClick={() => setPrintGrn(g)} title="Print GRN"><Printer size={14} /></button>
                       {canEdit && g.status !== 'submitted' && <button style={styles.iconBtn} onClick={() => { setEditing(g); setShowForm(true); }}>✏️</button>}
                       {canEdit && g.status !== 'submitted' && <button style={{ ...styles.iconBtn, color: '#E08A7D' }} onClick={() => deleteGRN(g.id)}><Trash2 size={14} /></button>}
                     </div>
@@ -5991,6 +6294,7 @@ function GRNList({ grns, setGrns, documents, vendors, items, setStockLedger, use
       {showForm && (
         <GRNForm grn={editing} poList={poList} vendors={vendors} items={items} onSave={saveGRN} onClose={() => { setShowForm(false); setEditing(null); }} />
       )}
+      {printGrn && <GRNPrint grn={printGrn} businessInfo={businessInfo} onClose={() => setPrintGrn(null)} />}
     </div>
   );
 }
@@ -8786,9 +9090,75 @@ const PO_STATUS = {
   failed:      { label: 'QC Failed',   bg: '#FBEAE7', color: '#B5453A' },
 };
 
-function ProductionOrdersList({ productionOrders, setProductionOrders, boms, rawMaterials, setRawMaterials, userRole, ownerUid, setStockLedger, items = [] }) {
+function ProductionOrderPrint({ order, bom, businessInfo, onClose }) {
+  const useLH = !!(businessInfo?.letterhead);
+  const rmLines = bom?.materials || [];
+  return (
+    <div style={{ position:'fixed',inset:0,background:'#fff',zIndex:9999,overflowY:'auto' }}>
+      <div className="no-print" style={{ display:'flex',gap:8,padding:'12px 20px',borderBottom:'1px solid #EEE',background:'#F8F6F2' }}>
+        <button onClick={onClose} style={styles.ghostBtn}>← Back</button>
+        <button onClick={() => window.print()} style={styles.primaryBtn}><Printer size={14}/> Print / PDF</button>
+      </div>
+      <div className="print-area" style={{ maxWidth:800,margin:'0 auto',padding:'32px 40px',fontFamily:'Arial,sans-serif',fontSize:12 }}>
+        {useLH && (businessInfo?.letterhead || businessInfo?.letterheadFooter) && <LetterpadPrintStyle />}
+        {useLH && businessInfo?.letterhead && <img src={businessInfo.letterhead} alt="letterhead" style={{width:'100%',display:'block',marginBottom:8}} />}
+        {!useLH && (
+          <div style={{textAlign:'center',marginBottom:16}}>
+            <div style={{fontSize:16,fontWeight:700}}>{businessInfo?.name}</div>
+            <div style={{fontSize:11,color:'#555'}}>{businessInfo?.address}</div>
+          </div>
+        )}
+        <div style={{textAlign:'center',fontSize:16,fontWeight:700,letterSpacing:1,borderTop:'2px solid #1E2A4A',borderBottom:'2px solid #1E2A4A',padding:'6px 0',marginBottom:16}}>PRODUCTION ORDER</div>
+        <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:'8px 24px',marginBottom:16,padding:'12px 16px',background:'#F8F6F2',borderRadius:8}}>
+          <div><strong>Order No:</strong> {order.number}</div>
+          <div><strong>Date:</strong> {order.startDate || order.plannedDate || '—'}</div>
+          <div><strong>BOM / Product:</strong> {bom?.name || order.bomId}</div>
+          <div><strong>Quantity:</strong> {order.quantity} units</div>
+          {order.batchNumber && <div><strong>Batch No:</strong> {order.batchNumber}</div>}
+          <div><strong>Status:</strong> {(order.status || 'planned').replace(/_/g,' ')}</div>
+          {order.dueDate && <div><strong>Due Date:</strong> {order.dueDate}</div>}
+        </div>
+        {rmLines.length > 0 && (
+          <>
+            <div style={{fontWeight:700,marginBottom:8,color:'#1E2A4A'}}>Raw Material Requirements</div>
+            <table style={{width:'100%',borderCollapse:'collapse',marginBottom:16}}>
+              <thead>
+                <tr style={{background:'#1E2A4A',color:'#fff'}}>
+                  {['#','Material','Required Qty','Unit','Remarks'].map(h => (
+                    <th key={h} style={{padding:'6px 8px',textAlign:'left',fontSize:11}}>{h}</th>
+                  ))}
+                </tr>
+              </thead>
+              <tbody>
+                {rmLines.map((m, i) => (
+                  <tr key={i} style={{borderBottom:'1px solid #EEE',background:i%2===0?'#fff':'#F9F8F5'}}>
+                    <td style={{padding:'5px 8px'}}>{i+1}</td>
+                    <td style={{padding:'5px 8px'}}>{m.name || m.materialId}</td>
+                    <td style={{padding:'5px 8px',textAlign:'center'}}>{((m.qty||0)*(order.quantity||1)).toFixed(2)}</td>
+                    <td style={{padding:'5px 8px'}}>{m.unit || 'pcs'}</td>
+                    <td style={{padding:'5px 8px'}}>{m.remarks || ''}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </>
+        )}
+        {order.notes && <div style={{marginBottom:12}}><strong>Notes:</strong> {order.notes}</div>}
+        <div style={{display:'flex',justifyContent:'space-between',marginTop:40,paddingTop:16,borderTop:'1px solid #CCC'}}>
+          <div style={{textAlign:'center',minWidth:130}}><div style={{borderTop:'1px solid #333',paddingTop:4,fontSize:11}}>Prepared By</div></div>
+          <div style={{textAlign:'center',minWidth:130}}><div style={{borderTop:'1px solid #333',paddingTop:4,fontSize:11}}>Production Manager</div></div>
+          <div style={{textAlign:'center',minWidth:130}}><div style={{borderTop:'1px solid #333',paddingTop:4,fontSize:11}}>Authorised By</div></div>
+        </div>
+        {useLH && businessInfo?.letterheadFooter && <img src={businessInfo.letterheadFooter} alt="footer" style={{width:'100%',display:'block',marginTop:16}} />}
+      </div>
+    </div>
+  );
+}
+
+function ProductionOrdersList({ productionOrders, setProductionOrders, boms, rawMaterials, setRawMaterials, userRole, ownerUid, setStockLedger, items = [], businessInfo }) {
   const [creating, setCreating] = useState(false);
   const [editing, setEditing] = useState(null);
+  const [printOrder, setPrintOrder] = useState(null);
   const canCreate = userRole === 'admin' || userRole === 'manager' || userRole === 'sales' || userRole === 'purchase';
   const canApprove = userRole === 'admin';
 
@@ -8923,6 +9293,7 @@ function ProductionOrdersList({ productionOrders, setProductionOrders, boms, raw
                     → QA
                   </button>
                 )}
+                <button onClick={() => setPrintOrder(o)} style={styles.iconBtn} title="Print"><Printer size={14} /></button>
                 {o.approvalStatus !== 'submitted' && <button onClick={() => setEditing(o)} style={styles.iconBtn}><Pencil size={14} /></button>}
                 {o.approvalStatus !== 'submitted' && <button onClick={() => deleteOrder(o.id)} style={{ ...styles.iconBtn, color: '#B5453A' }}><Trash2 size={14} /></button>}
               </div>
@@ -8935,6 +9306,7 @@ function ProductionOrdersList({ productionOrders, setProductionOrders, boms, raw
           <ProductionOrderForm order={editing} boms={boms} items={items} onSave={(o) => { saveOrder(o); setCreating(false); setEditing(null); }} onClose={() => { setCreating(false); setEditing(null); }} />
         </Modal>
       )}
+      {printOrder && <ProductionOrderPrint order={printOrder} bom={boms.find(b => b.id === printOrder.bomId)} businessInfo={businessInfo} onClose={() => setPrintOrder(null)} />}
     </div>
   );
 }
@@ -13362,9 +13734,12 @@ function FMWorkOrderView({ fmWorkOrders, setFmWorkOrders, assets, fmSpareParts, 
     return { id:'', woNumber:`WO-${String(fmWorkOrders.length+1).padStart(4,'0')}`, type:'corrective', assetId:'', title:'', description:'', priority:'medium', raisedDate:today, dueDate:'', assignedTo:'', status:'open', completedDate:'', cost:0, sparesUsed:[], notes:'' };
   }
   function save(wo) {
-    const rec = { ...wo, id:wo.id||crypto.randomUUID(), updatedAt:Date.now() };
+    const rec = { ...wo, id:wo.id||crypto.randomUUID(), approvalStatus:wo.approvalStatus||'draft', approvalNote:wo.approvalNote||'', updatedAt:Date.now() };
     setFmWorkOrders(prev=>prev.find(x=>x.id===rec.id)?prev.map(x=>x.id===rec.id?rec:x):[...prev,rec]);
     setEditing(null);
+  }
+  function updateApproval(id, patch) {
+    setFmWorkOrders(prev=>prev.map(x=>x.id===id?{...x,approvalStatus:patch.status,approvalNote:patch.rejectionNote||''}:x));
   }
 
   if (editing) {
@@ -13467,8 +13842,10 @@ function FMWorkOrderView({ fmWorkOrders, setFmWorkOrders, assets, fmSpareParts, 
                     <td style={{ padding:'10px 12px' }}><span style={{ background:ST_BG[wo.status], color:ST_COLOR[wo.status], borderRadius:6, padding:'2px 8px', fontSize:11, fontWeight:700 }}>{wo.status.replace('_',' ').replace(/\b\w/g,c=>c.toUpperCase())}</span></td>
                     <td style={{ padding:'10px 12px' }}>
                       {canEdit && <div style={{ display:'flex', gap:6 }}>
-                        <button onClick={()=>setEditing(wo)} style={styles.iconBtn}><Pencil size={14}/></button>
-                        <button onClick={()=>{if(window.confirm('Delete?'))setFmWorkOrders(prev=>prev.filter(x=>x.id!==wo.id))}} style={{ ...styles.iconBtn, color:'#B5453A' }}><Trash2 size={14}/></button>
+                        <StatusBadge status={wo.approvalStatus||'draft'} />
+                        <ApprovalActions item={{ status:wo.approvalStatus||'draft', rejectionNote:wo.approvalNote||'' }} onUpdate={(patch)=>updateApproval(wo.id,patch)} userRole={userRole} compact />
+                        {wo.approvalStatus!=='submitted' && <button onClick={()=>setEditing(wo)} style={styles.iconBtn}><Pencil size={14}/></button>}
+                        {wo.approvalStatus!=='submitted' && <button onClick={()=>{if(window.confirm('Delete?'))setFmWorkOrders(prev=>prev.filter(x=>x.id!==wo.id))}} style={{ ...styles.iconBtn, color:'#B5453A' }}><Trash2 size={14}/></button>}
                       </div>}
                     </td>
                   </tr>
@@ -13499,9 +13876,12 @@ function AMCContractView({ amcContracts, setAmcContracts, customers, assets, use
     return { id:'', contractNo:n, customerId:'', title:'', startDate:'', endDate:'', value:0, taxRate:cc.defaultTaxRate||0, placeOfSupply:'', slaResponse:'4', slaPriority:'P2', coveredAssets:[], scope:'', billingCycle:'Annual', status:'active', notes:'' };
   }
   function save(c) {
-    const rec = { ...c, id:c.id||crypto.randomUUID(), updatedAt:Date.now() };
+    const rec = { ...c, id:c.id||crypto.randomUUID(), approvalStatus:c.approvalStatus||'draft', approvalNote:c.approvalNote||'', updatedAt:Date.now() };
     setAmcContracts(prev=>prev.find(x=>x.id===rec.id)?prev.map(x=>x.id===rec.id?rec:x):[...prev,rec]);
     setEditing(null);
+  }
+  function updateApproval(id, patch) {
+    setAmcContracts(prev=>prev.map(x=>x.id===id?{...x,approvalStatus:patch.status,approvalNote:patch.rejectionNote||''}:x));
   }
   function daysLeft(endDate) {
     if(!endDate) return null;
@@ -13628,8 +14008,10 @@ function AMCContractView({ amcContracts, setAmcContracts, customers, assets, use
                     <td style={{ padding:'10px 12px' }}><span style={{ background:ST_BG[c.status], color:ST_COLOR[c.status], borderRadius:6, padding:'2px 8px', fontSize:11, fontWeight:700 }}>{c.status.toUpperCase()}</span></td>
                     <td style={{ padding:'10px 12px' }}>
                       <div style={{ display:'flex', gap:6 }}>
+                        <StatusBadge status={c.approvalStatus||'draft'} />
+                        <ApprovalActions item={{ status:c.approvalStatus||'draft', rejectionNote:c.approvalNote||'' }} onUpdate={(patch)=>updateApproval(c.id,patch)} userRole={userRole} compact />
                         <button onClick={()=>setPrintDoc(c)} style={styles.iconBtn} title="Print"><Printer size={14}/></button>
-                        {canEdit && <><button onClick={()=>setEditing(c)} style={styles.iconBtn}><Pencil size={14}/></button>
+                        {canEdit && c.approvalStatus!=='submitted' && <><button onClick={()=>setEditing(c)} style={styles.iconBtn}><Pencil size={14}/></button>
                         <button onClick={()=>{if(window.confirm('Delete?'))setAmcContracts(prev=>prev.filter(x=>x.id!==c.id))}} style={{ ...styles.iconBtn, color:'#B5453A' }}><Trash2 size={14}/></button></>}
                       </div>
                     </td>
@@ -13931,9 +14313,12 @@ function TenderView({ tenders, setTenders, customers, siteProjects, userRole, bu
     return calcModuleTax(sub, t.taxRate||0, cc, t.placeOfSupply, sellerState).grandTotal;
   }
   function save(t) {
-    const rec = { ...t, id:t.id||crypto.randomUUID(), updatedAt:Date.now() };
+    const rec = { ...t, id:t.id||crypto.randomUUID(), approvalStatus: t.approvalStatus||'draft', approvalNote: t.approvalNote||'', updatedAt:Date.now() };
     setTenders(prev => prev.find(x=>x.id===rec.id)?prev.map(x=>x.id===rec.id?rec:x):[...prev,rec]);
     setEditing(null);
+  }
+  function updateApproval(id, patch) {
+    setTenders(prev => prev.map(x => x.id===id ? { ...x, approvalStatus: patch.status, approvalNote: patch.rejectionNote||'' } : x));
   }
 
   if (editing) {
@@ -14046,9 +14431,11 @@ function TenderView({ tenders, setTenders, customers, siteProjects, userRole, bu
                     {cc.hasTax && <td style={{ padding:'10px 12px', fontWeight:700, color:'#1E2A4A' }}>{(cc.currency||'')+gt.toLocaleString(undefined,{maximumFractionDigits:0})}</td>}
                     <td style={{ padding:'10px 12px' }}><span style={{ background:STATUS_BG[t.status], color:STATUS_COLOR[t.status], borderRadius:6, padding:'2px 8px', fontSize:11, fontWeight:700 }}>{t.status.toUpperCase()}</span></td>
                     <td style={{ padding:'10px 12px' }}>
-                      <div style={{ display:'flex', gap:6 }}>
+                      <div style={{ display:'flex', gap:6, flexWrap:'wrap', alignItems:'center', justifyContent:'flex-end' }}>
+                        <StatusBadge status={t.approvalStatus||'draft'} />
+                        <ApprovalActions item={{ status:t.approvalStatus||'draft', rejectionNote:t.approvalNote||'' }} onUpdate={(patch)=>updateApproval(t.id,patch)} userRole={userRole} compact />
                         <button onClick={()=>setPrintDoc(t)} style={styles.iconBtn} title="Print"><Printer size={14}/></button>
-                        {canEdit && <><button onClick={()=>setEditing(t)} style={styles.iconBtn}><Pencil size={14}/></button>
+                        {canEdit && t.approvalStatus!=='submitted' && <><button onClick={()=>setEditing(t)} style={styles.iconBtn}><Pencil size={14}/></button>
                         <button onClick={()=>{if(window.confirm('Delete?'))setTenders(prev=>prev.filter(x=>x.id!==t.id))}} style={{ ...styles.iconBtn, color:'#B5453A' }}><Trash2 size={14}/></button></>}
                       </div>
                     </td>
@@ -14152,12 +14539,19 @@ function SubcontractorView({ subcontractors, setSubcontractors, siteProjects, us
     setEditing(null);
   }
   function saveWO(wo) {
+    const rec = { ...wo, approvalStatus: wo.approvalStatus||'draft', approvalNote: wo.approvalNote||'' };
     setSubcontractors(prev=>prev.map(s=>{
-      if(s.id!==wo.subId) return s;
+      if(s.id!==rec.subId) return s;
       const wos = s.workOrders||[];
-      return { ...s, workOrders: wos.find(w=>w.id===wo.id)?wos.map(w=>w.id===wo.id?wo:w):[...wos,wo] };
+      return { ...s, workOrders: wos.find(w=>w.id===rec.id)?wos.map(w=>w.id===rec.id?rec:w):[...wos,rec] };
     }));
     setEditingWO(null);
+  }
+  function updateWOApproval(woId, subId, patch) {
+    setSubcontractors(prev=>prev.map(s=>{
+      if(s.id!==subId) return s;
+      return { ...s, workOrders:(s.workOrders||[]).map(w=>w.id===woId?{...w,approvalStatus:patch.status,approvalNote:patch.rejectionNote||''}:w) };
+    }));
   }
   function balance(wo) {
     return (parseFloat(wo.value)||0) - (parseFloat(wo.advancePaid)||0) - (parseFloat(wo.progressPaid)||0) - (parseFloat(wo.retentionHeld)||0) - (parseFloat(wo.finalPaid)||0);
@@ -14305,9 +14699,11 @@ function SubcontractorView({ subcontractors, setSubcontractors, siteProjects, us
                       <td style={{ padding:'10px 12px', color:bal<0?'#B5453A':'#1a6b30', fontWeight:600 }}>{bal.toLocaleString(undefined,{maximumFractionDigits:0})}</td>
                       <td style={{ padding:'10px 12px' }}><span style={{ background:wo.status==='active'?'#cfe2ff':wo.status==='completed'?'#d4edda':'#f0ece5', color:wo.status==='active'?'#0a58ca':wo.status==='completed'?'#1a6b30':'#555', borderRadius:6, padding:'2px 8px', fontSize:11, fontWeight:700 }}>{wo.status.replace('_',' ').replace(/\b\w/g,c=>c.toUpperCase())}</span></td>
                       <td style={{ padding:'10px 12px' }}>
-                        <div style={{ display:'flex', gap:6 }}>
+                        <div style={{ display:'flex', gap:6, flexWrap:'wrap', alignItems:'center', justifyContent:'flex-end' }}>
+                          <StatusBadge status={wo.approvalStatus||'draft'} />
+                          <ApprovalActions item={{ status:wo.approvalStatus||'draft', rejectionNote:wo.approvalNote||'' }} onUpdate={(patch)=>updateWOApproval(wo.id,wo.subId,patch)} userRole={userRole} compact />
                           <button onClick={()=>setPrintWO(wo)} style={styles.iconBtn} title="Print"><Printer size={14}/></button>
-                          {canEdit && <button onClick={()=>setEditingWO(wo)} style={styles.iconBtn}><Pencil size={14}/></button>}
+                          {canEdit && wo.approvalStatus!=='submitted' && <button onClick={()=>setEditingWO(wo)} style={styles.iconBtn}><Pencil size={14}/></button>}
                         </div>
                       </td>
                     </tr>
@@ -14419,9 +14815,12 @@ function HSEView({ hseRecords, setHseRecords, siteProjects, userRole, businessIn
   function blankPermit()   { return { id:'', number:`PTW-${String(permits.length+1).padStart(3,'0')}`, date:new Date().toISOString().slice(0,10), projectId:'', type:'Hot Work', location:'', description:'', validFrom:'', validUntil:'', issuedBy:'', receiver:'', status:'active' }; }
 
   function saveRecord(section, key, rec) {
-    const data = { ...rec, id:rec.id||crypto.randomUUID(), updatedAt:Date.now() };
+    const data = { ...rec, id:rec.id||crypto.randomUUID(), approvalStatus: rec.approvalStatus||'draft', approvalNote: rec.approvalNote||'', updatedAt:Date.now() };
     updateSection(section, prev=>prev.find(x=>x.id===data.id)?prev.map(x=>x.id===data.id?data:x):[...prev,data]);
     setEditing(null);
+  }
+  function updatePermitApproval(id, patch) {
+    updateSection('permits', prev=>prev.map(x=>x.id===id?{...x,approvalStatus:patch.status,approvalNote:patch.rejectionNote||''}:x));
   }
 
   const INC_COLOR = { open:'#842029', investigating:'#856404', closed:'#1a6b30' };
@@ -14624,8 +15023,10 @@ function HSEView({ hseRecords, setHseRecords, siteProjects, userRole, businessIn
                       <td style={{ padding:'10px 12px' }}><span style={{ background:pt.status==='active'?'#d4edda':pt.status==='suspended'?'#fff3cd':'#f0ece5', color:pt.status==='active'?'#1a6b30':pt.status==='suspended'?'#856404':'#555', borderRadius:6, padding:'2px 8px', fontSize:11, fontWeight:700 }}>{pt.status.toUpperCase()}</span></td>
                       <td style={{ padding:'10px 12px' }}>
                         <div style={{ display:'flex', gap:6 }}>
+                          <StatusBadge status={pt.approvalStatus||'draft'} />
+                          <ApprovalActions item={{ status:pt.approvalStatus||'draft', rejectionNote:pt.approvalNote||'' }} onUpdate={(patch)=>updatePermitApproval(pt.id,patch)} userRole={userRole} compact />
                           <button onClick={()=>setPrintPermit(pt)} style={styles.iconBtn} title="Print PTW"><Printer size={14}/></button>
-                          {canEdit && <><button onClick={()=>setEditing({ section:'permits', data:pt })} style={styles.iconBtn}><Pencil size={14}/></button>
+                          {canEdit && pt.approvalStatus!=='submitted' && <><button onClick={()=>setEditing({ section:'permits', data:pt })} style={styles.iconBtn}><Pencil size={14}/></button>
                           <button onClick={()=>{if(window.confirm('Delete?'))updateSection('permits',prev=>prev.filter(x=>x.id!==pt.id))}} style={{ ...styles.iconBtn, color:'#B5453A' }}><Trash2 size={14}/></button></>}
                         </div>
                       </td>
@@ -14722,9 +15123,12 @@ function RABillingView({ raBillings, setRaBillings, siteProjects, customers, ten
   }
   function billTotal(bill) { return (bill.items||[]).reduce((s,i)=>s+itemAmount(i),0); }
   function save(bill) {
-    const rec = { ...bill, id:bill.id||crypto.randomUUID(), updatedAt:Date.now() };
+    const rec = { ...bill, id:bill.id||crypto.randomUUID(), approvalStatus:bill.approvalStatus||'draft', approvalNote:bill.approvalNote||'', updatedAt:Date.now() };
     setRaBillings(prev=>prev.find(x=>x.id===rec.id)?prev.map(x=>x.id===rec.id?rec:x):[...prev,rec]);
     setEditing(null);
+  }
+  function updateApproval(id, patch) {
+    setRaBillings(prev=>prev.map(x=>x.id===id?{...x,approvalStatus:patch.status,approvalNote:patch.rejectionNote||''}:x));
   }
 
   if (editing) {
@@ -14852,8 +15256,10 @@ function RABillingView({ raBillings, setRaBillings, siteProjects, customers, ten
                     <td style={{ padding:'10px 12px' }}><span style={{ background:ST_BG[b.status], color:ST_COLOR[b.status], borderRadius:6, padding:'2px 8px', fontSize:11, fontWeight:700 }}>{b.status.toUpperCase()}</span></td>
                     <td style={{ padding:'10px 12px' }}>
                       <div style={{ display:'flex', gap:6 }}>
+                        <StatusBadge status={b.approvalStatus||'draft'} />
+                        <ApprovalActions item={{ status:b.approvalStatus||'draft', rejectionNote:b.approvalNote||'' }} onUpdate={(patch)=>updateApproval(b.id,patch)} userRole={userRole} compact />
                         <button onClick={()=>setPrintDoc(b)} style={styles.iconBtn} title="Print"><Printer size={14}/></button>
-                        {canEdit && <><button onClick={()=>setEditing(b)} style={styles.iconBtn}><Pencil size={14}/></button>
+                        {canEdit && b.approvalStatus!=='submitted' && <><button onClick={()=>setEditing(b)} style={styles.iconBtn}><Pencil size={14}/></button>
                         <button onClick={()=>{if(window.confirm('Delete?'))setRaBillings(prev=>prev.filter(x=>x.id!==b.id))}} style={{ ...styles.iconBtn, color:'#B5453A' }}><Trash2 size={14}/></button></>}
                       </div>
                     </td>
@@ -14932,9 +15338,103 @@ function RABillingView({ raBillings, setRaBillings, siteProjects, customers, ten
 }
 
 // ─── Testing & Commissioning ──────────────────────────────────────────────────
-function TCView({ tcChecklists, setTcChecklists, siteProjects, userRole }) {
+function TCPrint({ checklist, project, businessInfo, onClose }) {
+  const useLH = !!(businessInfo?.letterhead);
+  const tests = checklist.tests || [];
+  const punch = checklist.punchList || [];
+  const fails = tests.filter(t => t.result === 'fail').length;
+  return (
+    <div style={{ position:'fixed',inset:0,background:'#fff',zIndex:9999,overflowY:'auto' }}>
+      <div className="no-print" style={{ display:'flex',gap:8,padding:'12px 20px',borderBottom:'1px solid #EEE',background:'#F8F6F2' }}>
+        <button onClick={onClose} style={styles.ghostBtn}>← Back</button>
+        <button onClick={() => window.print()} style={styles.primaryBtn}><Printer size={14}/> Print / PDF</button>
+      </div>
+      <div className="print-area" style={{ maxWidth:800,margin:'0 auto',padding:'32px 40px',fontFamily:'Arial,sans-serif',fontSize:12 }}>
+        {useLH && businessInfo?.letterhead && <img src={businessInfo.letterhead} alt="letterhead" style={{width:'100%',display:'block',marginBottom:8}} />}
+        {!useLH && (
+          <div style={{textAlign:'center',marginBottom:12}}>
+            <div style={{fontSize:16,fontWeight:700}}>{businessInfo?.name}</div>
+            <div style={{fontSize:11,color:'#555'}}>{businessInfo?.address}</div>
+          </div>
+        )}
+        <div style={{textAlign:'center',fontSize:15,fontWeight:700,letterSpacing:1,borderTop:'2px solid #1E2A4A',borderBottom:'2px solid #1E2A4A',padding:'6px 0',marginBottom:16}}>TESTING & COMMISSIONING CHECKLIST</div>
+        <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:'6px 24px',marginBottom:16,padding:'12px 16px',background:'#F8F6F2',borderRadius:8}}>
+          <div><strong>Project:</strong> {project?.name || '—'}</div>
+          <div><strong>System:</strong> {checklist.system}</div>
+          <div><strong>Date:</strong> {checklist.date}</div>
+          <div><strong>Status:</strong> {(checklist.status||'').replace(/_/g,' ').replace(/\b\w/g,c=>c.toUpperCase())}</div>
+          <div><strong>Prepared By:</strong> {checklist.preparedBy || '—'}</div>
+          <div><strong>Witnessed By:</strong> {checklist.witnessedBy || '—'}</div>
+        </div>
+        {tests.length > 0 && (
+          <>
+            <div style={{fontWeight:700,marginBottom:8,color:'#1E2A4A'}}>Test Records {fails > 0 && <span style={{color:'#B5453A',fontWeight:400}}>({fails} failure{fails>1?'s':''})</span>}</div>
+            <table style={{width:'100%',borderCollapse:'collapse',marginBottom:16,fontSize:11}}>
+              <thead>
+                <tr style={{background:'#1E2A4A',color:'#fff'}}>
+                  {['#','Test Type','Equipment / Circuit','Location','Standard','Result','Remarks'].map(h => (
+                    <th key={h} style={{padding:'6px 8px',textAlign:'left'}}>{h}</th>
+                  ))}
+                </tr>
+              </thead>
+              <tbody>
+                {tests.map((t, i) => (
+                  <tr key={i} style={{borderBottom:'1px solid #EEE',background:t.result==='fail'?'#FFF8F7':i%2===0?'#fff':'#F9F8F5'}}>
+                    <td style={{padding:'5px 8px'}}>{i+1}</td>
+                    <td style={{padding:'5px 8px'}}>{t.testType}</td>
+                    <td style={{padding:'5px 8px'}}>{t.equipment}</td>
+                    <td style={{padding:'5px 8px'}}>{t.location}</td>
+                    <td style={{padding:'5px 8px'}}>{t.standard}</td>
+                    <td style={{padding:'5px 8px',fontWeight:700,color:t.result==='pass'?'#1a6b30':t.result==='fail'?'#842029':'#555'}}>{(t.result||'').toUpperCase()}</td>
+                    <td style={{padding:'5px 8px'}}>{t.remarks}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </>
+        )}
+        {punch.length > 0 && (
+          <>
+            <div style={{fontWeight:700,marginBottom:8,color:'#1E2A4A'}}>Punch List</div>
+            <table style={{width:'100%',borderCollapse:'collapse',marginBottom:16,fontSize:11}}>
+              <thead>
+                <tr style={{background:'#555',color:'#fff'}}>
+                  {['#','Description','Location','Raised By','Raised Date','Closed Date','Status'].map(h => (
+                    <th key={h} style={{padding:'6px 8px',textAlign:'left'}}>{h}</th>
+                  ))}
+                </tr>
+              </thead>
+              <tbody>
+                {punch.map((p, i) => (
+                  <tr key={i} style={{borderBottom:'1px solid #EEE',background:p.status==='open'?'#FFF8F7':i%2===0?'#fff':'#F9F8F5'}}>
+                    <td style={{padding:'5px 8px'}}>{i+1}</td>
+                    <td style={{padding:'5px 8px'}}>{p.description}</td>
+                    <td style={{padding:'5px 8px'}}>{p.location}</td>
+                    <td style={{padding:'5px 8px'}}>{p.raisedBy}</td>
+                    <td style={{padding:'5px 8px'}}>{p.raisedDate}</td>
+                    <td style={{padding:'5px 8px'}}>{p.closedDate || '—'}</td>
+                    <td style={{padding:'5px 8px',fontWeight:600,color:p.status==='open'?'#842029':'#1a6b30'}}>{(p.status||'').replace(/_/g,' ').replace(/\b\w/g,c=>c.toUpperCase())}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </>
+        )}
+        <div style={{display:'flex',justifyContent:'space-between',marginTop:40,paddingTop:16,borderTop:'1px solid #CCC'}}>
+          <div style={{textAlign:'center',minWidth:140}}><div style={{borderTop:'1px solid #333',paddingTop:4,fontSize:11}}>Prepared By<br/><strong>{checklist.preparedBy || ''}</strong></div></div>
+          <div style={{textAlign:'center',minWidth:140}}><div style={{borderTop:'1px solid #333',paddingTop:4,fontSize:11}}>Client / Witness<br/><strong>{checklist.witnessedBy || ''}</strong></div></div>
+          <div style={{textAlign:'center',minWidth:140}}><div style={{borderTop:'1px solid #333',paddingTop:4,fontSize:11}}>Authorised Signatory</div></div>
+        </div>
+        {useLH && businessInfo?.letterheadFooter && <img src={businessInfo.letterheadFooter} alt="footer" style={{width:'100%',display:'block',marginTop:16}} />}
+      </div>
+    </div>
+  );
+}
+
+function TCView({ tcChecklists, setTcChecklists, siteProjects, userRole, businessInfo }) {
   const [editing, setEditing] = useState(null);
   const [viewId, setViewId] = useState(null);
+  const [printDoc, setPrintDoc] = useState(null);
   const canEdit = ['admin','manager'].includes(userRole);
 
   const SYSTEMS = ['Electrical LV','Electrical MV','Plumbing','HVAC','Fire Fighting','Fire Alarm','BMS','Earthing','Lighting','CCTV','Access Control','Lifts','Other'];
@@ -14946,9 +15446,12 @@ function TCView({ tcChecklists, setTcChecklists, siteProjects, userRole }) {
   function blankTest()  { return { id:crypto.randomUUID(), testType:'Functional Test', equipment:'', location:'', standard:'', result:'pass', remarks:'' }; }
   function blankPunch() { return { id:crypto.randomUUID(), description:'', location:'', raisedBy:'', raisedDate:new Date().toISOString().slice(0,10), closedDate:'', status:'open' }; }
   function save(rec) {
-    const data = { ...rec, id:rec.id||crypto.randomUUID(), updatedAt:Date.now() };
+    const data = { ...rec, id:rec.id||crypto.randomUUID(), approvalStatus:rec.approvalStatus||'draft', approvalNote:rec.approvalNote||'', updatedAt:Date.now() };
     setTcChecklists(prev=>prev.find(x=>x.id===data.id)?prev.map(x=>x.id===data.id?data:x):[...prev,data]);
     setEditing(null); setViewId(null);
+  }
+  function updateApproval(id, patch) {
+    setTcChecklists(prev=>prev.map(x=>x.id===id?{...x,approvalStatus:patch.status,approvalNote:patch.rejectionNote||''}:x));
   }
 
   if (editing) {
@@ -15065,10 +15568,13 @@ function TCView({ tcChecklists, setTcChecklists, siteProjects, userRole }) {
                     <td style={{ padding:'10px 12px', color:'#555' }}>{r.witnessedBy||'—'}</td>
                     <td style={{ padding:'10px 12px' }}><span style={{ background:ST_BG[r.status], color:ST_COLOR[r.status], borderRadius:6, padding:'2px 8px', fontSize:11, fontWeight:700 }}>{(r.status||'').replace('_',' ').replace(/\b\w/g,c=>c.toUpperCase())}</span></td>
                     <td style={{ padding:'10px 12px' }}>
-                      {canEdit && <div style={{ display:'flex', gap:6 }}>
-                        <button onClick={()=>setEditing(r)} style={styles.iconBtn}><Pencil size={14}/></button>
-                        <button onClick={()=>{if(window.confirm('Delete?'))setTcChecklists(prev=>prev.filter(x=>x.id!==r.id))}} style={{ ...styles.iconBtn, color:'#B5453A' }}><Trash2 size={14}/></button>
-                      </div>}
+                      <div style={{ display:'flex', gap:6, flexWrap:'wrap', alignItems:'center', justifyContent:'flex-end' }}>
+                        <StatusBadge status={r.approvalStatus||'draft'} />
+                        <ApprovalActions item={{ status:r.approvalStatus||'draft', rejectionNote:r.approvalNote||'' }} onUpdate={(patch)=>updateApproval(r.id,patch)} userRole={userRole} compact />
+                        <button onClick={()=>setPrintDoc(r)} style={styles.iconBtn} title="Print"><Printer size={14}/></button>
+                        {canEdit && r.approvalStatus!=='submitted' && <><button onClick={()=>setEditing(r)} style={styles.iconBtn}><Pencil size={14}/></button>
+                        <button onClick={()=>{if(window.confirm('Delete?'))setTcChecklists(prev=>prev.filter(x=>x.id!==r.id))}} style={{ ...styles.iconBtn, color:'#B5453A' }}><Trash2 size={14}/></button></>}
+                      </div>
                     </td>
                   </tr>
                 );
@@ -15077,6 +15583,7 @@ function TCView({ tcChecklists, setTcChecklists, siteProjects, userRole }) {
           </table>
         </div>
       )}
+      {printDoc && <TCPrint checklist={printDoc} project={siteProjects.find(p=>p.id===printDoc.projectId)} businessInfo={businessInfo} onClose={()=>setPrintDoc(null)} />}
     </div>
   );
 }
@@ -15103,9 +15610,12 @@ function HandoverView({ handoverDocs, setHandoverDocs, siteProjects, customers, 
   }
   function blankDefect() { return { id:crypto.randomUUID(), description:'', raisedDate:new Date().toISOString().slice(0,10), closedDate:'', status:'open' }; }
   function save(rec) {
-    const data = { ...rec, id:rec.id||crypto.randomUUID(), updatedAt:Date.now() };
+    const data = { ...rec, id:rec.id||crypto.randomUUID(), approvalStatus:rec.approvalStatus||'draft', approvalNote:rec.approvalNote||'', updatedAt:Date.now() };
     setHandoverDocs(prev=>prev.find(x=>x.id===data.id)?prev.map(x=>x.id===data.id?data:x):[...prev,data]);
     setEditing(null);
+  }
+  function updateApproval(id, patch) {
+    setHandoverDocs(prev=>prev.map(x=>x.id===id?{...x,approvalStatus:patch.status,approvalNote:patch.rejectionNote||''}:x));
   }
 
   if (editing) {
@@ -15220,9 +15730,11 @@ function HandoverView({ handoverDocs, setHandoverDocs, siteProjects, customers, 
                     <td style={{ padding:'10px 12px' }}>{openDefects>0?<span style={{ background:'#f8d7da', color:'#842029', borderRadius:5, padding:'1px 8px', fontSize:11, fontWeight:700 }}>{openDefects} open</span>:'—'}</td>
                     <td style={{ padding:'10px 12px' }}><span style={{ background:ST_BG[r.status]||'#f0ece5', color:ST_COLOR[r.status]||'#555', borderRadius:6, padding:'2px 8px', fontSize:11, fontWeight:700 }}>{(r.status||'').replace(/_/g,' ').replace(/\b\w/g,c=>c.toUpperCase())}</span></td>
                     <td style={{ padding:'10px 12px' }}>
-                      <div style={{ display:'flex', gap:6 }}>
+                      <div style={{ display:'flex', gap:6, flexWrap:'wrap', alignItems:'center', justifyContent:'flex-end' }}>
+                        <StatusBadge status={r.approvalStatus||'draft'} />
+                        <ApprovalActions item={{ status:r.approvalStatus||'draft', rejectionNote:r.approvalNote||'' }} onUpdate={(patch)=>updateApproval(r.id,patch)} userRole={userRole} compact />
                         <button onClick={()=>setPrintDoc(r)} style={styles.iconBtn} title="Print Certificate"><Printer size={14}/></button>
-                        {canEdit && <><button onClick={()=>setEditing(r)} style={styles.iconBtn}><Pencil size={14}/></button>
+                        {canEdit && r.approvalStatus!=='submitted' && <><button onClick={()=>setEditing(r)} style={styles.iconBtn}><Pencil size={14}/></button>
                         <button onClick={()=>{if(window.confirm('Delete?'))setHandoverDocs(prev=>prev.filter(x=>x.id!==r.id))}} style={{ ...styles.iconBtn, color:'#B5453A' }}><Trash2 size={14}/></button></>}
                       </div>
                     </td>
@@ -15507,9 +16019,12 @@ function VendorEvalView({ vendorEvals, setVendorEvals, vendors, userRole }) {
   }
   function save(ev) {
     const status = getStatus(parseFloat(avgRating(ev.ratings)));
-    const rec = { ...ev, status, updatedAt: Date.now(), id: ev.id || crypto.randomUUID() };
+    const rec = { ...ev, status, approvalStatus:ev.approvalStatus||'draft', approvalNote:ev.approvalNote||'', updatedAt: Date.now(), id: ev.id || crypto.randomUUID() };
     setVendorEvals(prev => prev.find(x=>x.id===rec.id) ? prev.map(x=>x.id===rec.id?rec:x) : [...prev, rec]);
     setEditing(null);
+  }
+  function updateApproval(id, patch) {
+    setVendorEvals(prev=>prev.map(x=>x.id===id?{...x,approvalStatus:patch.status,approvalNote:patch.rejectionNote||''}:x));
   }
 
   if (editing) {
@@ -15587,10 +16102,12 @@ function VendorEvalView({ vendorEvals, setVendorEvals, vendors, userRole }) {
                     <td style={{ padding:'10px 14px', color:'#555' }}>{ev.nextReviewDate||'—'}</td>
                     <td style={{ padding:'10px 14px', color:'#555' }}>{ev.evaluator||'—'}</td>
                     <td style={{ padding:'10px 14px' }}>
-                      {canEdit && <div style={{ display:'flex', gap:6 }}>
-                        <button onClick={()=>setEditing(ev)} style={styles.iconBtn}><Pencil size={14}/></button>
-                        <button onClick={()=>{if(window.confirm('Delete?'))setVendorEvals(prev=>prev.filter(x=>x.id!==ev.id))}} style={{ ...styles.iconBtn, color:'#B5453A' }}><Trash2 size={14}/></button>
-                      </div>}
+                      <div style={{ display:'flex', gap:6, flexWrap:'wrap', alignItems:'center', justifyContent:'flex-end' }}>
+                        <StatusBadge status={ev.approvalStatus||'draft'} />
+                        <ApprovalActions item={{ status:ev.approvalStatus||'draft', rejectionNote:ev.approvalNote||'' }} onUpdate={(patch)=>updateApproval(ev.id,patch)} userRole={userRole} compact />
+                        {canEdit && ev.approvalStatus!=='submitted' && <><button onClick={()=>setEditing(ev)} style={styles.iconBtn}><Pencil size={14}/></button>
+                        <button onClick={()=>{if(window.confirm('Delete?'))setVendorEvals(prev=>prev.filter(x=>x.id!==ev.id))}} style={{ ...styles.iconBtn, color:'#B5453A' }}><Trash2 size={14}/></button></>}
+                      </div>
                     </td>
                   </tr>
                 );
@@ -15620,9 +16137,12 @@ function CAPAView({ capaRecords, setCapaRecords, vendors, customers, userRole })
     return { id:'', number:num, date: new Date().toISOString().slice(0,10), source:'NCR', sourceRef:'', description:'', rootCause:'', actionPlan:'', responsibility:'', targetDate:'', effectivenessCheck:'', closedDate:'', status:'open' };
   }
   function save(rec) {
-    const data = { ...rec, id: rec.id||crypto.randomUUID(), updatedAt: Date.now() };
+    const data = { ...rec, id: rec.id||crypto.randomUUID(), approvalStatus:rec.approvalStatus||'draft', approvalNote:rec.approvalNote||'', updatedAt: Date.now() };
     setCapaRecords(prev => prev.find(x=>x.id===data.id) ? prev.map(x=>x.id===data.id?data:x) : [...prev, data]);
     setEditing(null);
+  }
+  function updateApproval(id, patch) {
+    setCapaRecords(prev=>prev.map(x=>x.id===id?{...x,approvalStatus:patch.status,approvalNote:patch.rejectionNote||''}:x));
   }
 
   const list = capaRecords.filter(r => filterStatus==='all' || r.status===filterStatus).sort((a,b)=>b.date>a.date?1:-1);
@@ -15711,10 +16231,12 @@ function CAPAView({ capaRecords, setCapaRecords, vendors, customers, userRole })
                   <td style={{ padding:'10px 12px', color:'#555' }}>{r.targetDate||'—'}</td>
                   <td style={{ padding:'10px 12px' }}><span style={{ background:STATUS_BG[r.status], color:STATUS_COLOR[r.status], borderRadius:6, padding:'2px 8px', fontSize:11, fontWeight:700 }}>{STATUS_LABEL[r.status]}</span></td>
                   <td style={{ padding:'10px 12px' }}>
-                    {canEdit && <div style={{ display:'flex', gap:6 }}>
-                      <button onClick={()=>setEditing(r)} style={styles.iconBtn}><Pencil size={14}/></button>
-                      <button onClick={()=>{if(window.confirm('Delete?'))setCapaRecords(prev=>prev.filter(x=>x.id!==r.id))}} style={{ ...styles.iconBtn, color:'#B5453A' }}><Trash2 size={14}/></button>
-                    </div>}
+                    <div style={{ display:'flex', gap:6, flexWrap:'wrap', alignItems:'center', justifyContent:'flex-end' }}>
+                      <StatusBadge status={r.approvalStatus||'draft'} />
+                      <ApprovalActions item={{ status:r.approvalStatus||'draft', rejectionNote:r.approvalNote||'' }} onUpdate={(patch)=>updateApproval(r.id,patch)} userRole={userRole} compact />
+                      {canEdit && r.approvalStatus!=='submitted' && <><button onClick={()=>setEditing(r)} style={styles.iconBtn}><Pencil size={14}/></button>
+                      <button onClick={()=>{if(window.confirm('Delete?'))setCapaRecords(prev=>prev.filter(x=>x.id!==r.id))}} style={{ ...styles.iconBtn, color:'#B5453A' }}><Trash2 size={14}/></button></>}
+                    </div>
                   </td>
                 </tr>
               ))}
@@ -15742,9 +16264,12 @@ function InternalAuditView({ internalAudits, setInternalAudits, capaRecords, set
     return { id: crypto.randomUUID(), clause:'', type:'observation', description:'', requirement:'', evidence:'', capaRaised:false };
   }
   function save(audit) {
-    const data = { ...audit, id: audit.id||crypto.randomUUID(), updatedAt: Date.now() };
+    const data = { ...audit, id: audit.id||crypto.randomUUID(), approvalStatus:audit.approvalStatus||'draft', approvalNote:audit.approvalNote||'', updatedAt: Date.now() };
     setInternalAudits(prev => prev.find(x=>x.id===data.id) ? prev.map(x=>x.id===data.id?data:x) : [...prev, data]);
     setEditing(null);
+  }
+  function updateApproval(id, patch) {
+    setInternalAudits(prev=>prev.map(x=>x.id===id?{...x,approvalStatus:patch.status,approvalNote:patch.rejectionNote||''}:x));
   }
   function raiseCAPAFromFinding(audit, finding) {
     const num = `CAR-${String(capaRecords.length+1).padStart(3,'0')}`;
@@ -15869,10 +16394,12 @@ function InternalAuditView({ internalAudits, setInternalAudits, capaRecords, set
                     </td>
                     <td style={{ padding:'10px 12px' }}><span style={{ background:STATUS_BG[a.status], color:STATUS_COLOR[a.status], borderRadius:6, padding:'2px 8px', fontSize:11, fontWeight:700 }}>{(a.status||'').replace('_',' ').replace(/\b\w/g,c=>c.toUpperCase())}</span></td>
                     <td style={{ padding:'10px 12px' }}>
-                      <div style={{ display:'flex', gap:6 }}>
+                      <div style={{ display:'flex', gap:6, flexWrap:'wrap', alignItems:'center', justifyContent:'flex-end' }}>
+                        <StatusBadge status={a.approvalStatus||'draft'} />
+                        <ApprovalActions item={{ status:a.approvalStatus||'draft', rejectionNote:a.approvalNote||'' }} onUpdate={(patch)=>updateApproval(a.id,patch)} userRole={userRole} compact />
                         <button onClick={()=>setViewFindings(a.id)} style={{ ...styles.ghostBtn, fontSize:11 }}>Findings</button>
-                        {canEdit && <button onClick={()=>setEditing(a)} style={styles.iconBtn}><Pencil size={14}/></button>}
-                        {canEdit && <button onClick={()=>{if(window.confirm('Delete?'))setInternalAudits(prev=>prev.filter(x=>x.id!==a.id))}} style={{ ...styles.iconBtn, color:'#B5453A' }}><Trash2 size={14}/></button>}
+                        {canEdit && a.approvalStatus!=='submitted' && <button onClick={()=>setEditing(a)} style={styles.iconBtn}><Pencil size={14}/></button>}
+                        {canEdit && a.approvalStatus!=='submitted' && <button onClick={()=>{if(window.confirm('Delete?'))setInternalAudits(prev=>prev.filter(x=>x.id!==a.id))}} style={{ ...styles.iconBtn, color:'#B5453A' }}><Trash2 size={14}/></button>}
                       </div>
                     </td>
                   </tr>
@@ -15911,6 +16438,7 @@ export default function App() {
   const [payrollRuns,      _setPR]     = useState([]);
   const [pettyCash,        _setPC]     = useState({ openingBalance: 0, entries: [] });
   const [vouchers,         _setVouch]  = useState([]);
+  const [storeIssues,      _setSIV]    = useState([]);
   const [grns,             _setGrns]   = useState([]);
   const [serviceOrders,    _setSO]     = useState([]);
   const [productionOrders, _setPO]     = useState([]);
@@ -16004,6 +16532,7 @@ export default function App() {
       _setPR(data.payrollRuns || []);
       _setPC(data.pettyCash || { openingBalance: 0, entries: [] });
       _setVouch(data.vouchers || []);
+      _setSIV(data.storeIssues || []);
       _setGrns(data.grns || []);
       _setSO(data.serviceOrders || []);
       _setPO(data.productionOrders || []);
@@ -16077,6 +16606,7 @@ export default function App() {
   const setPayrollRuns      = mkSet(_setPR,    'payrollRuns');
   const setPettyCash        = mkSet(_setPC,    'pettyCash');
   const setVouchers         = mkSet(_setVouch, 'vouchers');
+  const setStoreIssues      = mkSet(_setSIV,   'storeIssues');
   const setGrns             = mkSet(_setGrns,  'grns');
   const setServiceOrders    = mkSet(_setSO,    'serviceOrders');
   const setProductionOrders = mkSet(_setPO,    'productionOrders');
@@ -16431,7 +16961,7 @@ export default function App() {
       case 'staff':
         return <StaffPage ownerUid={ownerUid} employees={employees} />;
       case 'settings':
-        return <SettingsView businessInfo={businessInfo} setBusinessInfo={setBusinessInfo} onExportData={exportAllData} onSaved={() => setView('dashboard')} userRole={userRole} userEmail={user?.email || ''} onRequestDelete={() => setShowDeleteModal(true)} />;
+        return <SettingsView businessInfo={businessInfo} setBusinessInfo={setBusinessInfo} onExportData={exportAllData} onSaved={() => setView('dashboard')} userRole={userRole} isOwner={user?.uid === ownerUid} userEmail={user?.email || ''} onRequestDelete={() => setShowDeleteModal(true)} />;
       case 'pettycash':
         return (
           <PettyCashList
@@ -16465,7 +16995,20 @@ export default function App() {
             businessInfo={businessInfo}
           />
         );
+      case 'storeissue':
+        return (
+          <StoreIssueList
+            storeIssues={storeIssues}
+            setStoreIssues={setStoreIssues}
+            items={items}
+            setStockLedger={setStockLedger}
+            productionOrders={productionOrders}
+            userRole={userRole}
+            businessInfo={businessInfo}
+          />
+        );
       case 'stock':
+      case 'stockledger':
         return (
           <StockView
             items={items}
@@ -16475,13 +17018,14 @@ export default function App() {
         );
       case 'bincard':
         return (
-          <BinCardView
+          <BinCard
             items={items}
             stockLedger={stockLedger}
             businessInfo={businessInfo}
           />
         );
       case 'hr':
+      case 'employees':
         return (
           <HRView
             employees={employees}
@@ -16510,6 +17054,144 @@ export default function App() {
             userRole={userRole}
           />
         );
+      // ── MEP / Service Suite ─────────────────────────────────────────────────
+      case 'siteprojects':
+        return (
+          <MEPProjectsView
+            siteProjects={siteProjects}
+            setSiteProjects={setSiteProjects}
+            employees={employees}
+            siteActivities={siteActivities}
+            progressUpdates={progressUpdates}
+            userRole={userRole}
+          />
+        );
+      case 'activityplanner':
+        return (
+          <ActivityPlannerView
+            siteActivities={siteActivities}
+            setSiteActivities={setSiteActivities}
+            siteProjects={siteProjects}
+            progressUpdates={progressUpdates}
+            setProgressUpdates={setProgressUpdates}
+            userRole={userRole}
+          />
+        );
+      case 'dailyupdates':
+        return (
+          <DailyUpdateView
+            progressUpdates={progressUpdates}
+            setProgressUpdates={setProgressUpdates}
+            siteActivities={siteActivities}
+            siteProjects={siteProjects}
+            employees={employees}
+            userRole={userRole}
+          />
+        );
+      case 'progressboard':
+        return (
+          <ProgressBoardView
+            siteProjects={siteProjects}
+            siteActivities={siteActivities}
+            progressUpdates={progressUpdates}
+          />
+        );
+      case 'clientmaterials':
+        return (
+          <ClientMaterialView
+            clientMaterials={clientMaterials}
+            setClientMaterials={setClientMaterials}
+            siteProjects={siteProjects}
+            employees={employees}
+            userRole={userRole}
+          />
+        );
+      case 'siteattendance':
+        return (
+          <SiteAttendanceView
+            siteAttendance={siteAttendance}
+            setSiteAttendance={setSiteAttendance}
+            siteProjects={siteProjects}
+            employees={employees}
+            userRole={userRole}
+          />
+        );
+      case 'evaluation':
+        return (
+          <QuarterlyEvalView
+            evaluations={evaluations}
+            setEvaluations={setEvaluations}
+            employees={employees}
+            siteAttendance={siteAttendance}
+            progressUpdates={progressUpdates}
+            siteProjects={siteProjects}
+            userRole={userRole}
+          />
+        );
+      case 'tender':
+        return (
+          <TenderView
+            tenders={tenders}
+            setTenders={setTenders}
+            customers={customers}
+            siteProjects={siteProjects}
+            userRole={userRole}
+            businessInfo={businessInfo}
+          />
+        );
+      case 'rabilling':
+        return (
+          <RABillingView
+            raBillings={raBillings}
+            setRaBillings={setRaBillings}
+            siteProjects={siteProjects}
+            customers={customers}
+            tenders={tenders}
+            userRole={userRole}
+            businessInfo={businessInfo}
+          />
+        );
+      case 'subcontractors':
+        return (
+          <SubcontractorView
+            subcontractors={subcontractors}
+            setSubcontractors={setSubcontractors}
+            siteProjects={siteProjects}
+            userRole={userRole}
+            businessInfo={businessInfo}
+          />
+        );
+      case 'hse':
+        return (
+          <HSEView
+            hseRecords={hseRecords}
+            setHseRecords={setHseRecords}
+            siteProjects={siteProjects}
+            userRole={userRole}
+            businessInfo={businessInfo}
+          />
+        );
+      case 'handover':
+        return (
+          <HandoverView
+            handoverDocs={handoverDocs}
+            setHandoverDocs={setHandoverDocs}
+            siteProjects={siteProjects}
+            customers={customers}
+            userRole={userRole}
+            businessInfo={businessInfo}
+          />
+        );
+      case 'tc':
+        return (
+          <TCView
+            tcChecklists={tcChecklists}
+            setTcChecklists={setTcChecklists}
+            siteProjects={siteProjects}
+            userRole={userRole}
+            businessInfo={businessInfo}
+          />
+        );
       case 'rawmaterials':
         return (
           <RawMaterialsList
@@ -16532,6 +17214,7 @@ export default function App() {
           />
         );
       case 'production':
+      case 'productionorders':
         return (
           <ProductionOrdersList
             productionOrders={productionOrders}
@@ -16543,6 +17226,7 @@ export default function App() {
             ownerUid={ownerUid}
             setStockLedger={setStockLedger}
             items={items}
+            businessInfo={businessInfo}
           />
         );
       case 'qualitycheck':
@@ -16678,6 +17362,7 @@ export default function App() {
           />
         );
       case 'parts':
+      case 'partsmaster':
         return (
           <PartsMasterList
             parts={parts}
@@ -17164,12 +17849,11 @@ export default function App() {
           onExportData={exportAllData}
           onClose={() => setShowDeleteModal(false)}
           onDeleted={(result) => {
+            setShowDeleteModal(false);
             if (result === 'deleted') {
               handleLogout();
-            } else {
-              // 'scheduled' — grace period set; close modal
-              setShowDeleteModal(false);
             }
+            // 'scheduled' — grace period set; modal already closed above
           }}
         />
       )}
